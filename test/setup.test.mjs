@@ -186,6 +186,39 @@ assert.deepEqual(githubFailureMessages.at(-1), 'Setup stopped because the GitHub
 assert(!githubFailureCalls.some(call => call.args.at(-1) === 'doctor' || call.args.includes('schedule')));
 await assert.rejects(stat(join(state, 'projects/owner/failing-github/registration.json')));
 
+for (const failure of [
+  {
+    repository: 'owner/failing-download', command: 'git', argument: 'fetch',
+    message: 'Setup stopped because the required files could not be downloaded from GitHub. Restore this server\'s access to GitHub before trying setup again.'
+  },
+  {
+    repository: 'owner/failing-initialization', command: 'python3', argument: 'init',
+    message: 'Setup stopped because the downloaded files could not prepare the project. Fix the problem reported during project preparation before trying setup again.'
+  }
+]) {
+  const failureMessages = [];
+  const failureCalls = [];
+  await assert.rejects(setupRepository(failure.repository, {
+    config: { projectsRoot, costMessage: 'Cost notice.' }, paths: { state }, commands: {
+      run: async (command, args) => {
+        failureCalls.push({ command, args });
+        if (command === 'claude') return { stdout: 'signed in' };
+        if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+        if (command === failure.command && args.includes(failure.argument)) throw new Error('private setup detail');
+        if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+        return { stdout: '' };
+      }
+    },
+    github: { begin: async () => { throw new Error('must not begin GitHub setup'); } },
+    prompt: async () => { throw new Error('must not prompt'); },
+    output: value => failureMessages.push(value)
+  }), /setup is incomplete/);
+  assert.deepEqual(failureMessages.at(-1), failure.message);
+  assert(!failureMessages.some(message => message.includes('private setup detail')));
+  assert(!failureCalls.some(call => call.args.at(-1) === 'doctor' || call.args.includes('schedule')));
+  await assert.rejects(stat(join(state, `projects/${failure.repository}/registration.json`)));
+}
+
 for (const refusedKind of ['builder', 'release']) {
   const refusedState = join(root, `refused-${refusedKind}`);
   await assert.rejects(createApps({
