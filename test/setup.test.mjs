@@ -10,6 +10,7 @@ import {
 } from '../lib/github-apps.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
+import { projectStatePath } from '../lib/config.mjs';
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -76,10 +77,10 @@ for (const manifest of manifests) {
   }
 }
 for (const kind of ['builder', 'release']) {
-  const path = join(state, 'projects/owner--repo', `${kind}-app.json`);
+  const path = join(state, 'projects/owner/repo', `${kind}-app.json`);
   assert.equal((await stat(path)).mode & 0o777, 0o600);
   assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), credentials);
-  assert.deepEqual(JSON.parse(await readFile(join(state, 'projects/owner--repo', `${kind}-installation.json`), 'utf8')), {
+  assert.deepEqual(JSON.parse(await readFile(join(state, 'projects/owner/repo', `${kind}-installation.json`), 'utf8')), {
     repository: 'owner/repo', confirmed: true
   });
 }
@@ -115,6 +116,8 @@ assert.equal(repositoryFromRemote('https://github.com/Owner/Repo.git'), 'owner/r
 assert.equal(repositoryFromRemote('git@github.com:owner/repo.git'), 'owner/repo');
 assert.equal(repositoryFromRemote('ssh://git@github.com/owner/repo.git'), 'owner/repo');
 assert.equal(repositoryFromRemote('https://github.com/not-owner/repo.git'), 'not-owner/repo');
+assert.equal(projectStatePath(state, 'owner/repo'), join(state, 'projects/owner/repo'));
+assert.notEqual(projectStatePath(state, 'owner--repo/name'), projectStatePath(state, 'owner/repo--name'));
 const existing = join(root, 'existing', 'owner', 'repo');
 await mkdir(join(existing, '.git'), { recursive: true });
 await prepareCheckout('owner/repo', join(root, 'existing'), {
@@ -156,7 +159,7 @@ await assert.rejects(setupRepository('owner/failing-doctor', {
   prompt: async () => ['Purpose.', 'Users.'][failedAnswer++], output: value => failedMessages.push(value)
 }), /setup is incomplete/);
 assert(failedMessages.includes('The factory doctor found a problem, so setup did not complete.'));
-await assert.rejects(stat(join(state, 'projects/owner--failing-doctor/registration.json')));
+await assert.rejects(stat(join(state, 'projects/owner/failing-doctor/registration.json')));
 
 for (const refusedKind of ['builder', 'release']) {
   const refusedState = join(root, `refused-${refusedKind}`);
