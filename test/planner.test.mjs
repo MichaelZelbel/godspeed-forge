@@ -44,6 +44,7 @@ const proposal = {
   deferred: [{ title: 'A useful improvement', reason: 'The two repairs come first.' }]
 };
 assert.deepEqual(validateProposal(proposal, evidence), proposal);
+assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], key: '../../outside' }] }, evidence), /incomplete item/);
 assert.throws(() => validateProposal({ ...proposal, items: [item('large', 'Large', 'A large change works.', 'large'), item('more', 'More', 'More works.')] }, evidence), /too large/);
 assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], problem: evidence.issues[0].body }] }, evidence), /copied/);
 const message = renderOwnerMessage(proposal);
