@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
@@ -276,6 +276,26 @@ assert.deepEqual(JSON.parse(await readFile(join(malformedState, 'builder-app.jso
   id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG'
 });
 await assert.rejects(stat(join(malformedCredentials, 'builder-app.json')));
+
+const inaccessibleState = join(root, 'inaccessible-state');
+const inaccessibleCredentials = join(root, 'inaccessible-credentials');
+await writePrivateJson(join(inaccessibleState, 'builder-installation.json'), {
+  repository: 'owner/repo', confirmed: true
+});
+await writePrivateJson(join(inaccessibleCredentials, 'builder-app.json'), credentials);
+await chmod(inaccessibleCredentials, 0o000);
+try {
+  await assert.rejects(createApps({
+    repository: 'owner/repo', stateDirectory: inaccessibleState,
+    credentialDirectory: inaccessibleCredentials, output: () => {},
+    github: {
+      begin: async () => { throw new Error('must not recreate inaccessible credentials'); },
+      install: async () => { throw new Error('must not install inaccessible credentials'); }
+    }
+  }), error => error.code === 'EACCES');
+} finally {
+  await chmod(inaccessibleCredentials, 0o700);
+}
 
 const emptyRoot = join(root, 'no-agent');
 const stopped = [];

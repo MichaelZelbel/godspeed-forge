@@ -18,3 +18,6 @@ the requested repository, and confirm the installation. Let the owner answer the
 questions. Do not request or repeat a key, token, App id, or private key, and do not report setup
 complete before both repository installations and the setup checks succeed. App credentials stay in
 the private credentials subtree; project state contains only non-secret setup records.
+
+After the Forge is upgraded, run setup again for each repository that was set up by an earlier release.
+That setup run moves its existing App credentials from project state into the private credentials subtree.

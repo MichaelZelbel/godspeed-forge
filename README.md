@@ -40,6 +40,10 @@ contains only non-secret setup records. The defaults are the projects directory,
 and the `git`, `gh`, and `python3` command names. The config, project checkout, and setup output never
 contain App credentials or ids.
 
+After upgrading a server that set up repositories with an earlier release, run setup again for each
+repository. That setup run moves its existing App credentials out of project state and into the private
+credentials subtree.
+
 The builder App has repository permissions for Contents, Pull requests, Issues, and Actions read/write, plus Checks, Commit statuses, and Metadata read. The release App has repository permissions for Contents and Pull requests read/write, plus Checks, Actions, and Metadata read. Neither App receives organization,
 Administration, Secrets, Members, Workflows, environment-secret, or Deployment permission.
 
