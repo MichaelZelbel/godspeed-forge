@@ -67,6 +67,7 @@ def emit(value, fields=None):
 def initialize(argv):
     parser = argparse.ArgumentParser(prog="stand-in-github control init")
     parser.add_argument("--remote", required=True)
+    parser.add_argument("--runtime-remote")
     args = parser.parse_args(argv)
     remote = local_remote(args.remote).resolve()
     if not remote.is_dir():
@@ -76,7 +77,8 @@ def initialize(argv):
         die("STANDIN_GITHUB_STATE is required")
     root = pathlib.Path(root_value)
     root.mkdir(parents=True, exist_ok=True)
-    write_state(root, {"remote": str(remote), "issues": [], "pullRequests": [], "releases": []})
+    runtime_remote = local_remote(args.runtime_remote) if args.runtime_remote else remote
+    write_state(root, {"remote": str(runtime_remote), "issues": [], "pullRequests": [], "releases": []})
 
 
 def issue(argv):

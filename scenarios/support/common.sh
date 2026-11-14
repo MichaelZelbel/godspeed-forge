@@ -20,7 +20,7 @@ assert_count() {
 }
 
 assert_no_secrets() {
-  if grep -Eri '(api[_-]?key|token|secret)[[:space:]]*[:=][[:space:]]*[^[:space:]]+' "$@" >/dev/null; then
+  if grep -Eri '(api[_-]?key|token|secret)["'\''[:space:]]*[:=][[:space:]]*["'\'']?[^"'\''[:space:]}]+' "$@" >/dev/null; then
     scenario_fail "A key or token was written to scenario state"
   fi
 }
@@ -53,8 +53,10 @@ scenario_start() {
   git -C "$SCENARIO_ROOT/sample" branch -M main
   git -C "$SCENARIO_ROOT/sample" remote add origin "$SCENARIO_ROOT/remote.git"
   git -C "$SCENARIO_ROOT/sample" push -q origin main
+  git --git-dir="$SCENARIO_ROOT/remote.git" symbolic-ref HEAD refs/heads/main
   STANDIN_GITHUB_STATE="$SCENARIO_ROOT/github" \
-    "$repository_root/test/stand-in-github/control" init --remote "$SCENARIO_ROOT/remote.git"
+    "$repository_root/test/stand-in-github/control" init \
+      --remote "$SCENARIO_ROOT/remote.git" --runtime-remote /scenario/remote.git
 
   if ! docker build -q \
     --build-arg GODSPEED_REVISION=candidate/2.0.0-beta.24 \

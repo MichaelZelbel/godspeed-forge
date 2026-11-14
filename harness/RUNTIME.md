@@ -9,13 +9,14 @@ For every agent of the factory. The journeys to check are in `harness/END-TO-END
 
 ## The proving scenarios
 
-Once they exist (the 0.1.0 tickets add them), each scenario is one script under `scenarios/`, named
-after its journey, and `bash scenarios/run.sh` runs all of them and ends with `N of N pass`. They run
+Each scenario is one script under `scenarios/`, named after its journey, and `bash scenarios/run.sh`
+runs all of them and ends with `N of N pass`. They run
 in a throwaway container with a fresh Godspeed, a tiny sample repository and the stand-in coding
 agent. Several checkouts may run at once: never a fixed port, container name or folder outside the
 checkout's own temporary folder.
 
-Until a ticket adds them, there is no app to start: the tests are the whole check.
+They currently fail at the named missing setup, release-planning and question-relay steps. Those
+failures are the expected evidence until the product tickets connect the real owner actions.
 
 ## What never to do on this machine
 

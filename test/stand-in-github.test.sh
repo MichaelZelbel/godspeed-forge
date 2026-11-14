@@ -24,7 +24,8 @@ git -C "$work" commit -qam release
 git -C "$work" push -q origin feature
 
 export STANDIN_GITHUB_STATE="$root/state-one"
-"$control" init --remote "$remote"
+ln -s "$remote" "$root/container-remote.git"
+"$control" init --remote "$remote" --runtime-remote "$root/container-remote.git"
 issue=$("$gh" issue create --title "Owner question" --body "Choose one")
 "$gh" issue comment "$issue" --body "The owner chose one"
 "$gh" issue view "$issue" --json title,comments >"$root/issue.json"
@@ -41,8 +42,16 @@ grep -F '"state": "MERGED"' "$root/pr.json" >/dev/null
 [ -n "$(git --git-dir="$remote" rev-parse refs/tags/v1)" ]
 [ -n "$(git --git-dir="$remote" rev-parse refs/tags/v2)" ]
 "$gh" release edit v2 --prerelease false --latest true
+release_v1=$("$gh" release view v1 --json isPrerelease,isLatest)
+release_v2=$("$gh" release view v2 --json isPrerelease,isLatest)
+[ "$release_v1" = '{"isLatest": false, "isPrerelease": false}' ]
+[ "$release_v2" = '{"isLatest": true, "isPrerelease": false}' ]
 "$gh" release edit v1 --latest true
 "$gh" release edit v2 --prerelease true --latest false
+release_v1=$("$gh" release view v1 --json isPrerelease,isLatest)
+release_v2=$("$gh" release view v2 --json isPrerelease,isLatest)
+[ "$release_v1" = '{"isLatest": true, "isPrerelease": false}' ]
+[ "$release_v2" = '{"isLatest": false, "isPrerelease": true}' ]
 "$gh" release list --json tagName,isLatest,isPrerelease >"$root/releases.json"
 grep -F '"tagName": "v1"' "$root/releases.json" >/dev/null
 grep -F '"tagName": "v2"' "$root/releases.json" >/dev/null
