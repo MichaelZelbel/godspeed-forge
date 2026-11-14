@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
 import { findSignedInAgent } from '../lib/agent.mjs';
-import { APP_PERMISSIONS, APP_PERMISSION_DOCUMENTATION, createApps, registrationAction } from '../lib/github-apps.mjs';
+import {
+  APP_PERMISSIONS, APP_PERMISSION_DOCUMENTATION, builderManifest, createApps,
+  registrationAction, releaseManifest
+} from '../lib/github-apps.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 
@@ -90,14 +93,22 @@ assert(readme.includes(APP_PERMISSION_DOCUMENTATION));
 assert.equal(registrationAction('owner', false), 'https://github.com/settings/apps/new');
 assert.equal(registrationAction('owner', true), 'https://github.com/organizations/owner/settings/apps/new');
 
-for (const [answer, action] of [
-  ['yes', 'https://github.com/organizations/owner/settings/apps/new'],
-  ['no', 'https://github.com/settings/apps/new']
+for (const [manifest, answer, action, permissions] of [
+  [builderManifest('owner/repo'), 'yes', 'https://github.com/organizations/owner/settings/apps/new', {
+    contents: 'write', pull_requests: 'write', issues: 'write', actions: 'write',
+    checks: 'read', statuses: 'read', metadata: 'read'
+  }],
+  [releaseManifest('owner/repo'), 'no', 'https://github.com/settings/apps/new', {
+    contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read'
+  }]
 ]) {
   const github = createGithubAdapter({ input: { question: async () => answer } });
-  const flow = await github.begin({ name: 'Forge test', url: 'https://github.com/owner/repo' });
+  const flow = await github.begin(manifest);
   const page = Buffer.from(flow.url.split(',')[1], 'base64').toString('utf8');
   assert.match(page, new RegExp(`action="${action}"`));
+  const encodedManifest = page.match(/name="manifest" value="([^"]+)"/)[1];
+  const submittedManifest = JSON.parse(encodedManifest.replaceAll('&quot;', '"').replaceAll('&amp;', '&'));
+  assert.deepEqual(submittedManifest.default_permissions, permissions);
 }
 
 assert.equal(repositoryFromRemote('https://github.com/Owner/Repo.git'), 'owner/repo');
@@ -159,6 +170,17 @@ for (const refusedKind of ['builder', 'release']) {
   }), new RegExp(`Install the ${refusedKind} App`));
   await assert.rejects(stat(join(refusedState, `${refusedKind}-installation.json`)));
 }
+
+const incompleteCredentialsState = join(root, 'incomplete-credentials');
+await assert.rejects(createApps({
+  repository: 'owner/repo', stateDirectory: incompleteCredentialsState, output: () => {},
+  github: {
+    begin: async () => ({ url: 'https://example.test/create' }),
+    complete: async () => ({ id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' }),
+    install: async () => { throw new Error('must not install incomplete credentials'); }
+  }
+}), /did not return the builder App credentials/);
+await assert.rejects(stat(join(incompleteCredentialsState, 'builder-app.json')));
 
 const emptyRoot = join(root, 'no-agent');
 const stopped = [];
