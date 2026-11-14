@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -eu
+
+if [ "${1-}" = "login" ] && [ "${2-}" = "status" ] && [ "$#" -eq 2 ]; then
+  echo "Logged in using the scenario stand-in"
+  exit 0
+fi
+
+if [ "${1-}" != "exec" ] || [ "$#" -ne 2 ]; then
+  echo "stand-in codex: unsupported command" >&2
+  exit 64
+fi
+
+: "${STANDIN_AGENT_FIXTURE:?STANDIN_AGENT_FIXTURE is required}"
+: "${STANDIN_AGENT_TRANSCRIPT:?STANDIN_AGENT_TRANSCRIPT is required}"
+if [ ! -d "$STANDIN_AGENT_FIXTURE" ]; then
+  echo "stand-in codex: fixture directory does not exist" >&2
+  exit 66
+fi
+if [ ! -f "$2" ]; then
+  echo "stand-in codex: request file does not exist" >&2
+  exit 66
+fi
+
+mkdir -p "$STANDIN_AGENT_TRANSCRIPT"
+printf '%s\n' "$@" >"$STANDIN_AGENT_TRANSCRIPT/argv"
+cp "$2" "$STANDIN_AGENT_TRANSCRIPT/request"
+
+if [ -f "$STANDIN_AGENT_FIXTURE/change.patch" ]; then
+  git apply "$STANDIN_AGENT_FIXTURE/change.patch"
+fi
+if [ -f "$STANDIN_AGENT_FIXTURE/response" ]; then
+  cat "$STANDIN_AGENT_FIXTURE/response"
+fi
+
+status=0
+if [ -f "$STANDIN_AGENT_FIXTURE/exit-status" ]; then
+  status=$(cat "$STANDIN_AGENT_FIXTURE/exit-status")
+  case "$status" in
+    ''|*[!0-9]*) echo "stand-in codex: invalid exit-status fixture" >&2; exit 65 ;;
+  esac
+  if [ "$status" -gt 255 ]; then
+    echo "stand-in codex: invalid exit-status fixture" >&2
+    exit 65
+  fi
+fi
+exit "$status"
