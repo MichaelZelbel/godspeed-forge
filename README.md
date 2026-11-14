@@ -46,8 +46,9 @@ Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 0700 and credential files are mode 0600. The defaults are the projects directory, a plain cost
 notice, and the `git`, `gh`, and `python3` command names. The config,
 project checkout, and setup output never contain App credentials or ids.
-The defaults also name the Godspeed root and its model command. Relay receipts and chat cursors are
-kept privately in each project's `questions.json` beside its registration.
+The defaults also name the Godspeed root and its model command. Relay receipts are kept privately in
+each project's `questions.json` beside its registration; reviewed owner-message identities share one
+private relay record so a reply is resolved only once across all repositories.
 
 The builder App has repository permissions for Contents, Pull requests, Issues, and Actions read/write, plus Checks, Commit statuses, and Metadata read. The release App has repository permissions for Contents and Pull requests read/write, plus Checks, Actions, and Metadata read. Neither App receives organization,
 Administration, Secrets, Members, Workflows, environment-secret, or Deployment permission.

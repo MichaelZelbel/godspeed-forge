@@ -21,7 +21,7 @@ const godspeed = {
     ? { owner: true, example: 'A new visitor opens the welcome page.', choices: ['Friendly says “Welcome!”', 'Formal says “Good day.”'], default: 'Friendly', applies: 'to new visitors' }
     : { owner: false },
   notice: async notice => { if (!notices.some(item => item.id === notice.id)) notices.push(notice); },
-  messages: async cursors => messages.filter(message => String(message.id) > String(cursors[message.source] ?? '')),
+  messages: async ({ reviewed }) => messages.filter(message => !reviewed.includes(String(message.id))),
   match: async () => null
 };
 const github = {
@@ -92,7 +92,7 @@ let attempts = 0;
 const uncertainGodspeed = {
   ...godspeed,
   notice: async value => { uncertainHandle = value.text.match(/Q-[A-F0-9]{6}/)?.[0]; },
-  messages: async cursors => cursors.browser ? [] : [{ id: 3, source: 'browser', content: `${uncertainHandle}: Friendly.` }]
+  messages: async ({ reviewed }) => reviewed.includes('3') ? [] : [{ id: 3, source: 'browser', content: `${uncertainHandle}: Friendly.` }]
 };
 await assert.rejects(runQuestionRelay({
   stateRoot: uncertainRoot,
@@ -109,3 +109,75 @@ assert.equal(Object.values(JSON.parse(await readFile(join(uncertainProject, 'que
 
 const saved = JSON.parse(await readFile(join(project, 'questions.json'), 'utf8'));
 assert.equal(saved.told[Object.keys(saved.told)[0]].status, 'posted');
+
+// One owner message is resolved against all repositories, never once per repository.
+const manyRoot = await mkdtemp(join(tmpdir(), 'forge-questions-many-'));
+for (const repository of ['one', 'two']) {
+  const directory = join(manyRoot, `projects/owner/${repository}`);
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, 'registration.json'), JSON.stringify({ repository: `owner/${repository}`, completed: true }));
+}
+const manyNotices = [];
+const manyComments = [];
+let manyMessages = [];
+let matchCandidates = [];
+const manyGodspeed = {
+  ...godspeed,
+  notice: async value => manyNotices.push(value),
+  messages: async ({ reviewed }) => manyMessages.filter(message => !reviewed.includes(String(message.id))),
+  match: async (message, candidates) => { matchCandidates = candidates; return null; }
+};
+const manyGithub = {
+  find: async repository => ({ ...issue, number: repository === 'owner/one' ? 11 : 12, comments: [] }),
+  comment: async (...args) => manyComments.push(args)
+};
+await runQuestionRelay({ stateRoot: manyRoot, github: manyGithub, godspeed: manyGodspeed });
+manyMessages = [{ id: 'ambiguous', source: 'browser-chat', content: 'Use Friendly.' }];
+await runQuestionRelay({ stateRoot: manyRoot, github: manyGithub, godspeed: manyGodspeed });
+assert.equal(matchCandidates.length, 2);
+assert.equal(manyComments.length, 0, 'an unclear cross-repository reply must post nowhere');
+const firstHandle = manyNotices[0].text.match(/Q-[A-F0-9]{6}/)[0];
+manyMessages.push({ id: 'empty', source: 'browser-chat', content: `${firstHandle}:   ` });
+await runQuestionRelay({ stateRoot: manyRoot, github: manyGithub, godspeed: manyGodspeed });
+assert.equal(manyComments.length, 0, 'a handle without an answer must post nowhere');
+
+// A failed free-form match does not prevent a later explicit reply in the same lap.
+const progressRoot = await mkdtemp(join(tmpdir(), 'forge-questions-progress-'));
+const progressProject = join(progressRoot, 'projects/owner/progress');
+await mkdir(progressProject, { recursive: true });
+await writeFile(join(progressProject, 'registration.json'), JSON.stringify({ repository: 'owner/progress', completed: true }));
+let progressHandle;
+let progressMessages = [];
+const progressComments = [];
+const progressGodspeed = {
+  ...godspeed,
+  notice: async value => { progressHandle = value.text.match(/Q-[A-F0-9]{6}/)[0]; },
+  messages: async ({ reviewed }) => progressMessages.filter(message => !reviewed.includes(String(message.id))),
+  match: async () => { throw new Error('model unavailable'); }
+};
+await runQuestionRelay({ stateRoot: progressRoot, github: { ...github, find: async () => ({ ...issue, comments: [] }) }, godspeed: progressGodspeed });
+progressMessages = [
+  { id: 'failed', source: 'browser-chat', content: 'I prefer Friendly.' },
+  { id: 'explicit', source: 'browser-chat', content: `${progressHandle}: Use Friendly.` }
+];
+await assert.rejects(runQuestionRelay({
+  stateRoot: progressRoot,
+  github: { find: async () => ({ ...issue, comments: [] }), comment: async (...args) => progressComments.push(args) },
+  godspeed: progressGodspeed
+}), /could not finish/);
+assert.equal(progressComments.length, 1);
+
+// The lock rejects an overlapping timer lap.
+const lockRoot = await mkdtemp(join(tmpdir(), 'forge-questions-lock-'));
+const lockProject = join(lockRoot, 'projects/owner/lock');
+await mkdir(lockProject, { recursive: true });
+await writeFile(join(lockProject, 'registration.json'), JSON.stringify({ repository: 'owner/lock', completed: true }));
+let entered;
+const held = new Promise(resolve => { entered = resolve; });
+let releaseClassification;
+const classification = new Promise(resolve => { releaseClassification = resolve; });
+const firstLap = runQuestionRelay({ stateRoot: lockRoot, github, godspeed: { ...godspeed, classify: async question => { entered(); await classification; return godspeed.classify(question); } } });
+await held;
+await assert.rejects(runQuestionRelay({ stateRoot: lockRoot, github, godspeed }), /already running/);
+releaseClassification();
+await firstLap;
