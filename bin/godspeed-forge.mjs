@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
+import { join } from 'node:path';
 import { defaultPaths, installDefaults, readConfig } from '../lib/config.mjs';
 import { run } from '../lib/process.mjs';
 import { setupRepository } from '../lib/setup.mjs';
@@ -19,7 +20,7 @@ async function main() {
   const config = await readConfig(paths.config);
   if (command === 'questions') {
     const github = createQuestionsGithub({ run, command: config.commands?.gh ?? 'gh' });
-    const godspeed = createGodspeedAdapter({ root: config.godspeedRoot, modelCommand: config.modelCommand, run });
+    const godspeed = createGodspeedAdapter({ root: config.godspeedRoot, modelCommand: join(config.godspeedRoot, '.godspeed/model.mjs'), run });
     await runQuestionRelay({ stateRoot: paths.state, github, godspeed, output: message => console.error(message) });
     return;
   }

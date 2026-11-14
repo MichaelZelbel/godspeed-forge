@@ -22,7 +22,7 @@ assert.match(timer, /OnUnitInactiveSec=15min/);
 assert.equal(config.projectsRoot, '/kept');
 assert.equal(config.ownerValue, true);
 assert.equal(config.godspeedRoot, workspace);
-assert.equal(config.modelCommand, join(workspace, '.godspeed/model.mjs'));
+assert.equal(config.modelCommand, undefined);
 assert.deepEqual(calls, [
   ['systemctl', ['--user', 'daemon-reload']],
   ['systemctl', ['--user', 'enable', '--now', 'godspeed-forge-questions.timer']]

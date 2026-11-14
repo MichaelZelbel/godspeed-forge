@@ -46,7 +46,7 @@ Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 0700 and credential files are mode 0600. The defaults are the projects directory, a plain cost
 notice, and the `git`, `gh`, and `python3` command names. The config,
 project checkout, and setup output never contain App credentials or ids.
-The defaults also name the Godspeed root and its model command. Relay receipts are kept privately in
+The defaults also name the Godspeed root. Relay receipts are kept privately in
 each project's `questions.json` beside its registration; reviewed owner-message identities share one
 private relay record so a reply is resolved only once across all repositories.
 
