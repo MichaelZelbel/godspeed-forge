@@ -158,8 +158,33 @@ await assert.rejects(setupRepository('owner/failing-doctor', {
   },
   prompt: async () => ['Purpose.', 'Users.'][failedAnswer++], output: value => failedMessages.push(value)
 }), /setup is incomplete/);
-assert(failedMessages.includes('The factory doctor found a problem, so setup did not complete.'));
+assert.deepEqual(failedMessages.at(-1), 'Setup stopped because the final check found a problem. Fix the problem reported by the check before trying setup again.');
 await assert.rejects(stat(join(state, 'projects/owner/failing-doctor/registration.json')));
+assert(!failedMessages.some(message => message.includes('schedule')));
+
+const githubFailureMessages = [];
+const githubFailureCalls = [];
+await assert.rejects(setupRepository('owner/failing-github', {
+  config: { projectsRoot, costMessage: 'Cost notice.' }, paths: { state }, commands: {
+    run: async (command, args, options = {}) => {
+      githubFailureCalls.push({ command, args });
+      if (command === 'claude') return { stdout: 'signed in' };
+      if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+      if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+      if (command === 'python3' && args.at(-1) === 'init') {
+        await mkdir(join(options.cwd, 'factory'), { recursive: true });
+        await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
+      }
+      return { stdout: '' };
+    }
+  },
+  github: { begin: async () => { throw new Error('private GitHub detail'); } },
+  prompt: async () => { throw new Error('must not prompt'); },
+  output: value => githubFailureMessages.push(value)
+}), /setup is incomplete/);
+assert.deepEqual(githubFailureMessages.at(-1), 'Setup stopped because the GitHub connection was not completed. Complete the GitHub page before trying setup again.');
+assert(!githubFailureCalls.some(call => call.args.at(-1) === 'doctor' || call.args.includes('schedule')));
+await assert.rejects(stat(join(state, 'projects/owner/failing-github/registration.json')));
 
 for (const refusedKind of ['builder', 'release']) {
   const refusedState = join(root, `refused-${refusedKind}`);
@@ -193,5 +218,5 @@ const result = await setupRepository('owner/other', {
   github: { begin: async () => { throw new Error('must not run'); } }, prompt: async () => '', output: value => stopped.push(value)
 });
 assert.equal(result.completed, false);
-assert.deepEqual(stopped, ['Sign in to Claude Code or Codex, then ask me to set up the Forge again.']);
+assert.deepEqual(stopped, ['Setup stopped because neither Claude Code nor Codex is signed in. Sign in to one of them before trying setup again.']);
 await assert.rejects(stat(emptyRoot));
