@@ -19,7 +19,7 @@ main() {
   source_directory="${FORGE_SOURCE:-}"
   if [ -z "$source_directory" ]; then
     archive="$temporary/forge.tar.gz"
-    curl -fsSL "${FORGE_ARCHIVE_URL:-https://github.com/MichaelZelbel/godspeed-forge/archive/refs/heads/main.tar.gz}" -o "$archive"
+    curl -fsSL "${FORGE_ARCHIVE_URL:-https://github.com/MichaelZelbel/godspeed-forge/archive/refs/pull/18/head.tar.gz}" -o "$archive"
     tar -xzf "$archive" -C "$temporary"
     source_directory="$(find "$temporary" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
   fi
