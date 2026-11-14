@@ -125,11 +125,15 @@ against it, and record what it assumed; the merge is then held for a human.
 
 **Except these, which do stop the factory:**
 
-- Which GitHub permissions the two Apps ask for.
 - Anything that deletes a release, a tag or a branch on the owner's repository.
 
 ## Decisions
 
+- 2026-11-14 **Which GitHub permissions do the two Apps ask for?** A question of how, not the
+  owner's: Mission Control decides it, on minimum privilege for each App (the build App only what
+  building and opening pull requests in that one repository needs, the release App only what
+  making an approved release public needs). The owner decides only what the software does for its
+  users.
 - 2026-11-14 **Which coding agent does the Forge use?** Whichever of Claude Code or Codex the owner
   already has signed in on that server; the setup says which one it found.
 
