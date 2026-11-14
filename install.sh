@@ -27,9 +27,9 @@ main() {
   SOURCE_DIRECTORY="$source_directory" WORKSPACE="$workspace" node --input-type=module <<'NODE'
 const { installAddon } = await import(`file://${process.env.SOURCE_DIRECTORY}/lib/install/install.mjs`);
 const paths = process.env.FORGE_INSTALL_ROOT
-  ? { addon: `${process.env.FORGE_INSTALL_ROOT}/addon`, executable: `${process.env.FORGE_INSTALL_ROOT}/bin/godspeed-forge`, config: `${process.env.FORGE_INSTALL_ROOT}/config.json`, state: `${process.env.FORGE_INSTALL_ROOT}/state` }
+  ? { addon: `${process.env.FORGE_INSTALL_ROOT}/addon`, executable: `${process.env.FORGE_INSTALL_ROOT}/bin/godspeed-forge`, config: `${process.env.FORGE_INSTALL_ROOT}/config.json`, state: `${process.env.FORGE_INSTALL_ROOT}/state`, units: `${process.env.FORGE_INSTALL_ROOT}/systemd` }
   : undefined;
-await installAddon({ source: process.env.SOURCE_DIRECTORY, workspace: process.env.WORKSPACE, paths });
+await installAddon({ source: process.env.SOURCE_DIRECTORY, workspace: process.env.WORKSPACE, paths, scheduler: paths ? null : undefined });
 NODE
   echo "The Forge is installed."
 }
