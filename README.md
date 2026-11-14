@@ -32,7 +32,8 @@ GitHub Apps in the repository owner's personal or organization account, then gui
 questions and reports the factory doctor. It completes only after both installations are confirmed
 and doctor succeeds, and it leaves the schedule off until you explicitly start it.
 
-After setup, ask “plan release `repository`”, “plan a release”, or “plan the next release”. The Forge
+After setup, ask “plan release `project`”, “plan the next `project` release”, or “what should go into
+the next `project` version?”. The project name is optional. The Forge
 selects one completed project, considers its latest public release, subsequent work, open issues and
 pull requests, default-branch checks, and deferred work, then proposes a one-sitting release. Its
 plain-language proposal includes outcomes, deferred work, an approximate share of the signed-in

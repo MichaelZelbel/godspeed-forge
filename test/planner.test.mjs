@@ -36,7 +36,7 @@ const evidence = {
 const item = (key, title, outcome, size = 'light') => ({
   key, title, problem: `${title} causes a visible problem.`, why: 'People cannot complete their work.', whyNow: 'It blocks a dependable release.', outcome,
   invariants: 'Existing successful behavior remains available.', acceptance: 'A focused check proves the user outcome.', doneMeans: 'The outcome works and its focused check passes.',
-  size, dependencies: [], reason: 'This is the next most useful improvement.'
+  size, dependencies: [], reason: 'This is the next most useful improvement.', sources: [`issue:${key === 'bug-two' ? 2 : 1}`]
 });
 const proposal = {
   summary: 'This release makes everyday work more dependable.', version: '1.1.0',
@@ -47,17 +47,27 @@ assert.deepEqual(validateProposal(proposal, evidence), proposal);
 assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], key: '../../outside' }] }, evidence), /incomplete item/);
 assert.throws(() => validateProposal({ ...proposal, items: [item('large', 'Large', 'A large change works.', 'large'), item('more', 'More', 'More works.')] }, evidence), /too large/);
 assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], problem: evidence.issues[0].body }] }, evidence), /copied/);
+assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], reason: evidence.issues[0].body }] }, evidence), /copied/);
+const shortEvidence = structuredClone(evidence);
+shortEvidence.issues[0].body = 'Short copied words';
+assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], reason: 'Short copied words' }] }, shortEvidence), /copied/);
+const featureFirst = { ...proposal, items: [{ ...item('feature', 'Feature', 'A feature works.'), sources: ['issue:3'] }, proposal.items[0], proposal.items[1]] };
+assert.throws(() => validateProposal(featureFirst, evidence), /urgent work first/);
+const bugsBeforeFeature = { ...proposal, items: [proposal.items[0], proposal.items[1], { ...item('feature', 'Feature', 'A feature works.'), sources: ['issue:3'] }] };
+assert.deepEqual(validateProposal(bugsBeforeFeature, evidence).items.map(value => value.key), ['bug-one', 'bug-two', 'feature']);
 const message = renderOwnerMessage(proposal);
 assert(message.endsWith('Shall I start it?'));
 assert.match(message, /Cost: about half/);
 assert.match(message, /Version: 1\.1\.0/);
 for (const forbidden of ['#1', '.mjs', 'script', 'ticket']) assert(!message.toLowerCase().includes(forbidden));
 assert.throws(() => renderOwnerMessage({ ...proposal, summary: 'Run a script.' }), /internal details/);
+assert.throws(() => renderOwnerMessage({ ...proposal, summary: 'This fixes issue 123.' }), /internal details/);
 
 const created = [];
 const outputs = [];
 const repository = {
   collect: async () => structuredClone(evidence),
+  findIssueByMarker: async () => null,
   createIssue: async value => { created.push(value); return { number: created.length + 10, url: `https://example.test/${created.length + 10}` }; }
 };
 let selected;
@@ -95,6 +105,13 @@ assert.equal((await planRelease('one/no', { stateRoot: state, prompt: async () =
 assert.equal(created.length, beforeNo);
 await assert.rejects(stat(releaseStatePath(state, 'one/no', '2.0.0')));
 
+await register('one/revised-no');
+answers = ['change the wording', 'no'];
+const beforeRevisedNo = created.length;
+assert.equal((await planRelease('one/revised-no', { stateRoot: state, prompt: async () => answers.shift(), output: () => {}, createRepository: () => repository, planWithAgent: async () => ({ ...proposal, version: '2.1.0' }) })).approved, false);
+assert.equal(created.length, beforeRevisedNo);
+await assert.rejects(stat(releaseStatePath(state, 'one/revised-no', '2.1.0')));
+
 await register('one/agent-failure');
 const failureMessages = [];
 const failed = await planRelease('one/agent-failure', { stateRoot: state, prompt: async () => { throw new Error('must not prompt'); }, output: value => failureMessages.push(value), createRepository: () => repository, planWithAgent: async () => { throw new Error('private agent detail'); } });
@@ -104,12 +121,24 @@ assert.deepEqual(failureMessages, ['I could not prepare a safe release plan. Not
 await register('one/resume');
 const resumable = { ...proposal, version: '3.0.0' };
 let attempts = 0;
-const flaky = { collect: repository.collect, createIssue: async value => { attempts++; if (attempts === 2) throw new Error('temporary failure'); return { number: 30, url: 'https://example.test/30', value }; } };
+const flaky = { collect: repository.collect, findIssueByMarker: async () => null, createIssue: async value => { attempts++; if (attempts === 2) throw new Error('temporary failure'); return { number: 30, url: 'https://example.test/30', value }; } };
 await assert.rejects(planRelease('one/resume', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => flaky, planWithAgent: async () => resumable }), /temporary/);
 assert.equal(JSON.parse(await readFile(join(releaseStatePath(state, 'one/resume', '3.0.0'), 'plan.json'), 'utf8')).status, 'filing');
 await planRelease('one/resume', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => flaky, planWithAgent: async () => resumable });
 assert.equal(attempts, 3);
 await assert.rejects(planRelease('one/resume', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => flaky, planWithAgent: async () => resumable }), /already approved/);
+
+await register('one/ambiguous');
+const ambiguousProposal = { ...proposal, version: '3.1.0', items: [proposal.items[0]] };
+let remoteIssue;
+const ambiguous = {
+  collect: repository.collect,
+  findIssueByMarker: async marker => remoteIssue?.body.includes(marker) ? { number: 41, url: 'https://example.test/41' } : null,
+  createIssue: async value => { remoteIssue = value; throw new Error('response lost'); }
+};
+await assert.rejects(planRelease('one/ambiguous', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => ambiguous, planWithAgent: async () => ambiguousProposal }), /response lost/);
+await planRelease('one/ambiguous', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => ambiguous, planWithAgent: async () => ambiguousProposal });
+assert.equal(JSON.parse(await readFile(join(releaseStatePath(state, 'one/ambiguous', '3.1.0'), 'plan.json'), 'utf8')).issues['bug-one'].number, 41);
 
 const apiCalls = [];
 const responses = new Map([
@@ -119,13 +148,25 @@ const responses = new Map([
   ['/repos/acme/app/actions/workflows?per_page=100', { workflows: [{ name: 'old', state: 'disabled_manually' }] }], ['/repos/acme/app/commits?sha=main&since=2026-01-01', []],
   ['/repos/acme/app/actions/runs?branch=main&per_page=100', { workflow_runs: [{ name: 'required', status: 'completed', conclusion: 'failure' }] }]
 ]);
-const adapter = createGithubRepository({ repository: 'acme/app', runCommand: async (_command, args) => { apiCalls.push(args); const path = args.find(value => value.startsWith('/')); return { stdout: JSON.stringify([responses.get(path)]) }; } });
+const adapter = createGithubRepository({ repository: 'acme/app', runCommand: async (_command, args) => {
+  apiCalls.push(args);
+  if (args.includes('POST')) return { stdout: JSON.stringify({ number: 73, html_url: 'https://example.test/73' }) };
+  const path = args.find(value => value.startsWith('/'));
+  return { stdout: JSON.stringify([responses.get(path)]) };
+} });
 const collected = await adapter.collect();
 assert.equal(collected.issues[0].labels[0], 'bug');
 assert.equal(collected.checks[0].conclusion, 'failure');
 assert.equal(collected.checks[1].conclusion, 'disabled');
 assert.equal(collected.mergedPullRequests[0].id, 5);
 assert(apiCalls.some(args => args.some(value => value.includes('/commits?'))));
+const createdByAdapter = await adapter.createIssue({ title: 'A title', body: 'A body' });
+const createCall = apiCalls.at(-1);
+assert(createCall.includes('/repos/acme/app/issues'));
+assert(createCall.includes('POST'));
+assert(createCall.includes('title=A title'));
+assert(createCall.includes('body=A body'));
+assert.deepEqual(createdByAdapter, { number: 73, url: 'https://example.test/73' });
 
 let schemaWasReadable = false;
 const codexPlanner = createPlanningAgent({ agent: 'codex', runCommand: async (_command, args) => {
@@ -139,6 +180,7 @@ assert.deepEqual(await codexPlanner({ schema: { type: 'object' }, prompt: 'Plan.
 assert(schemaWasReadable);
 const claudePlanner = createPlanningAgent({ agent: 'claude', runCommand: async (_command, args) => {
   assert(args.includes('--no-session-persistence'));
+  assert.equal(args[args.indexOf('--tools') + 1], '');
   return { stdout: JSON.stringify({ structured_output: proposal }) };
 } });
 assert.deepEqual(await claudePlanner({ schema: { type: 'object' }, prompt: 'Plan.' }), proposal);
