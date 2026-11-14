@@ -39,7 +39,7 @@ Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 notice, and the `git`, `gh`, and `python3` command names. The config,
 project checkout, and setup output never contain App credentials or ids.
 
-The builder App has repository permissions for Contents, Pull requests, Issues, and Actions read/write, plus Checks, Commit statuses, and Metadata read. The release App has Contents and Pull requests read/write, plus Checks, Actions, and Metadata read. Neither App receives organization,
+The builder App has repository permissions for Contents, Pull requests, Issues, and Actions read/write, plus Checks, Commit statuses, and Metadata read. The release App has repository permissions for Contents and Pull requests read/write, plus Checks, Actions, and Metadata read. Neither App receives organization,
 Administration, Secrets, Members, Workflows, environment-secret, or Deployment permission.
 
 ## License

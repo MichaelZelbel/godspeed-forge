@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
 import { findSignedInAgent } from '../lib/agent.mjs';
 import { APP_PERMISSIONS, APP_PERMISSION_DOCUMENTATION, createApps, registrationAction } from '../lib/github-apps.mjs';
+import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
@@ -88,6 +89,16 @@ const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
 assert(readme.includes(APP_PERMISSION_DOCUMENTATION));
 assert.equal(registrationAction('owner', false), 'https://github.com/settings/apps/new');
 assert.equal(registrationAction('owner', true), 'https://github.com/organizations/owner/settings/apps/new');
+
+for (const [answer, action] of [
+  ['yes', 'https://github.com/organizations/owner/settings/apps/new'],
+  ['no', 'https://github.com/settings/apps/new']
+]) {
+  const github = createGithubAdapter({ input: { question: async () => answer } });
+  const flow = await github.begin({ name: 'Forge test', url: 'https://github.com/owner/repo' });
+  const page = Buffer.from(flow.url.split(',')[1], 'base64').toString('utf8');
+  assert.match(page, new RegExp(`action="${action}"`));
+}
 
 assert.equal(repositoryFromRemote('https://github.com/Owner/Repo.git'), 'owner/repo');
 assert.equal(repositoryFromRemote('git@github.com:owner/repo.git'), 'owner/repo');
