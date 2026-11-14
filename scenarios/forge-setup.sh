@@ -8,11 +8,19 @@ owner_requests_setup() {
 }
 
 assert_setup_result() {
+  assert_contains /scenario/notices.txt "Codex"
+  assert_contains /scenario/notices.txt "cost"
+  assert_count /scenario/questions.txt "What is the software for?" 1
+  assert_count /scenario/questions.txt "Who uses it?" 1
+  [ "$(wc -l </scenario/questions.txt)" -eq 2 ] || \
+    scenario_fail "Setup asked questions beyond the required two"
   assert_file /scenario/sample/MISSION.md
-  assert_contains /scenario/sample/MISSION.md "what the software is for"
-  assert_contains /scenario/sample/MISSION.md "who uses it"
+  assert_contains /scenario/sample/MISSION.md "Keeps a sample result"
+  assert_contains /scenario/sample/MISSION.md "Sample maintainers"
   assert_file /scenario/config.json
   assert_no_secrets /scenario/sample /scenario/config.json
+  diff -qr /scenario/expected-factory /scenario/sample/factory >/dev/null || \
+    scenario_fail "Installed factory differs from its pinned source"
   python3 /scenario/sample/factory/consumer.py doctor
 }
 

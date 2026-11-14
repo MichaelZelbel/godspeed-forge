@@ -14,12 +14,15 @@ assert_release_planned() {
 
 assert_release_staged_once() {
   assert_count /scenario/notices.txt "on staging" 1
-  assert_contains /scenario/public-version.txt "previous"
+  cmp /scenario/public-before.txt /scenario/public-after-staging.txt || \
+    scenario_fail "The public version changed before the owner's go"
 }
 
 assert_release_published_and_taken_back() {
-  assert_contains /scenario/artifacts/after-go.txt "release"
-  assert_contains /scenario/public-version.txt "previous"
+  cmp /scenario/release-version.txt /scenario/public-after-go.txt || \
+    scenario_fail "The owner's go did not publish the release"
+  cmp /scenario/public-before.txt /scenario/public-after-take-back.txt || \
+    scenario_fail "Take-back did not restore the previous public version"
   gh release view v2 --json isPrerelease,isLatest > /scenario/artifacts/release.json
   assert_contains /scenario/artifacts/release.json '"isPrerelease": true'
 }
