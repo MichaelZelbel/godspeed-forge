@@ -1,0 +1,6 @@
+[Unit]
+Description=Relay Forge questions to the owner
+
+[Service]
+Type=oneshot
+ExecStart={{EXECUTABLE}} questions

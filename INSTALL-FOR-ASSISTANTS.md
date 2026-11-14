@@ -9,6 +9,14 @@ curl -fsSL https://github.com/MichaelZelbel/godspeed-forge/raw/main/install.sh |
 The installer requires Godspeed 2.0.0-beta.24 or newer. It installs the add-on and its setup skill;
 it does not start a factory schedule.
 
+It does enable `godspeed-forge-questions.timer` for the installing user. Every 15 minutes that timer
+checks completed repository registrations for owner decisions. The command uses the configured
+`godspeedRoot` notice and authenticated conversation records and its model launcher; it
+does not contact a separate chat service. Question status is stored privately as `questions.json` per
+project, and reviewed owner-message ids are stored in the private shared `question-messages.json`.
+An owner answers with the notice's `Q-XXXXXX: answer` form. Invalid or unclear input fails closed and
+does not create a GitHub comment.
+
 # Set up a repository
 
 When the owner says “set up the Forge for `owner/repository`”, use the installed `forge-setup`

@@ -32,6 +32,14 @@ GitHub Apps in the repository owner's personal or organization account, then gui
 questions and reports the setup checks. It completes only after both installations are confirmed
 and the checks succeed, and it leaves the schedule off until you explicitly start it.
 
+The installer also enables a user timer that checks every 15 minutes for an open
+`Owner decisions needed` issue in each completed setup. The relay uses Godspeed's selected model to
+separate product decisions from implementation questions, writes only to Godspeed's owner notice
+queue, and reads only authenticated owner conversation records. A notice gives a short `Q-XXXXXX`
+handle; reply with that handle followed by a colon and your answer. The answer is posted verbatim
+under `Owner decision`. Malformed or ambiguous model, issue, or chat data produces no message or
+GitHub comment.
+
 Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 `~/.godspeed/forge/state/` for private state. Root Linux installs use
 `/etc/godspeed-forge/config.json` and `/var/lib/godspeed/forge/`. The state directories are mode
@@ -39,6 +47,10 @@ Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 contains only non-secret setup records. The defaults are the projects directory, a plain cost notice,
 and the `git`, `gh`, and `python3` command names. The config, project checkout, and setup output never
 contain App credentials or ids.
+
+The defaults also name the Godspeed root. Relay receipts are kept privately in each project's
+`questions.json` beside its registration; reviewed owner-message identities share one private relay
+record so a reply is resolved only once across all repositories.
 
 After upgrading a server that set up repositories with an earlier release, run setup again for each
 repository. That setup run moves its existing App credentials out of project state and into the private

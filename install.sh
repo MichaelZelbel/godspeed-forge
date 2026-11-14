@@ -19,7 +19,7 @@ main() {
   source_directory="${FORGE_SOURCE:-}"
   if [ -z "$source_directory" ]; then
     archive="$temporary/forge.tar.gz"
-    curl -fsSL "${FORGE_ARCHIVE_URL:-https://github.com/MichaelZelbel/godspeed-forge/archive/refs/heads/main.tar.gz}" -o "$archive"
+    curl -fsSL "${FORGE_ARCHIVE_URL:-https://github.com/MichaelZelbel/godspeed-forge/archive/refs/pull/18/head.tar.gz}" -o "$archive"
     tar -xzf "$archive" -C "$temporary"
     source_directory="$(find "$temporary" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
   fi
@@ -27,9 +27,9 @@ main() {
   SOURCE_DIRECTORY="$source_directory" WORKSPACE="$workspace" node --input-type=module <<'NODE'
 const { installAddon } = await import(`file://${process.env.SOURCE_DIRECTORY}/lib/install/install.mjs`);
 const paths = process.env.FORGE_INSTALL_ROOT
-  ? { addon: `${process.env.FORGE_INSTALL_ROOT}/addon`, executable: `${process.env.FORGE_INSTALL_ROOT}/bin/godspeed-forge`, config: `${process.env.FORGE_INSTALL_ROOT}/config.json`, state: `${process.env.FORGE_INSTALL_ROOT}/state` }
+  ? { addon: `${process.env.FORGE_INSTALL_ROOT}/addon`, executable: `${process.env.FORGE_INSTALL_ROOT}/bin/godspeed-forge`, config: `${process.env.FORGE_INSTALL_ROOT}/config.json`, state: `${process.env.FORGE_INSTALL_ROOT}/state`, units: `${process.env.FORGE_INSTALL_ROOT}/systemd` }
   : undefined;
-await installAddon({ source: process.env.SOURCE_DIRECTORY, workspace: process.env.WORKSPACE, paths });
+await installAddon({ source: process.env.SOURCE_DIRECTORY, workspace: process.env.WORKSPACE, paths, scheduler: paths ? null : undefined });
 NODE
   echo "The Forge is installed."
 }
