@@ -30,10 +30,11 @@ async function main() {
     } else {
       const agent = await findSignedInAgent(run);
       if (!agent) { output(SIGN_IN_MESSAGE.replace('set up the Forge again', 'plan the release again')); return; }
+      const planningAgent = createPlanningAgent({ agent, runCommand: run });
       await planRelease(repository, {
         stateRoot: paths.state, prompt, output,
         createRepository: name => createGithubRepository({ repository: name, runCommand: run, command: config.commands?.gh }),
-        planWithAgent: createPlanningAgent({ agent, runCommand: run })
+        planWithAgent: planningAgent, verifyWithAgent: planningAgent
       });
     }
   } finally {

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discoverProjects, releaseStatePath, writePrivateJson } from '../lib/config.mjs';
-import { planRelease, renderOwnerMessage, validateProposal } from '../lib/planner.mjs';
+import { associationSchema, planRelease, renderOwnerMessage, validateAssociations, validateProposal } from '../lib/planner.mjs';
 import { createGithubRepository } from '../lib/github-repository.mjs';
 import { createPlanningAgent } from '../lib/agent.mjs';
 import { parseArguments } from '../bin/godspeed-forge.mjs';
@@ -43,6 +43,8 @@ const proposal = {
   items: [item('issue-1', 'Repair first failure', 'The first failure no longer interrupts work.'), item('issue-2', 'Repair second failure', 'The second failure no longer interrupts work.')],
   deferred: [{ title: 'A useful improvement', reason: 'The two repairs come first.' }]
 };
+const verified = value => ({ items: value.items.map(entry => ({ key: entry.key, primarySource: entry.sources[0], associated: true })) });
+const planningOptions = value => ({ planWithAgent: async () => value, verifyWithAgent: async () => verified(value) });
 assert.deepEqual(validateProposal(proposal, evidence), proposal);
 assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], key: '../../outside' }] }, evidence), /incomplete item/);
 assert.throws(() => validateProposal({ ...proposal, items: [item('issue-1', 'Large', 'A large change works.', 'large'), item('issue-2', 'More', 'More works.')] }, evidence), /too large/);
@@ -58,10 +60,16 @@ shortEvidence.issues[0].body = 'Freeze';
 assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], problem: 'Freeze' }] }, shortEvidence), /copied/);
 const featureFirst = { ...proposal, items: [item('issue-3', 'Add requested capability', 'A requested capability works.'), proposal.items[0], proposal.items[1]] };
 assert.throws(() => validateProposal(featureFirst, evidence), /urgent work first/);
+const supportingBug = { ...proposal, items: [{ ...item('issue-3', 'Add requested capability', 'A requested capability works.'), sources: ['issue:3', 'issue:1'] }, proposal.items[0]] };
+assert.throws(() => validateProposal(supportingBug, evidence), /urgent work first/);
 const swappedSources = { ...proposal, items: [{ ...item('issue-3', 'Add requested capability', 'A requested capability works.'), sources: ['issue:1'] }, { ...item('issue-1', 'Repair failure', 'The failure is repaired.'), sources: ['issue:3'] }] };
 assert.throws(() => validateProposal(swappedSources, evidence), /incomplete item/);
 const bugsBeforeFeature = { ...proposal, items: [proposal.items[0], proposal.items[1], item('issue-3', 'Add requested capability', 'A requested capability works.')] };
 assert.deepEqual(validateProposal(bugsBeforeFeature, evidence).items.map(value => value.key), ['issue-1', 'issue-2', 'issue-3']);
+for (const primarySource of ['issue:1', 'pr:4', 'check:required', 'deferred:0']) {
+  const claimed = { ...proposal, items: [{ ...proposal.items[0], key: primarySource.replace(/[^a-z0-9]+/g, '-'), sources: [primarySource] }] };
+  assert.throws(() => validateAssociations({ items: [{ key: claimed.items[0].key, primarySource, associated: false }] }, claimed), /not supported/);
+}
 const message = renderOwnerMessage(proposal);
 assert(message.endsWith('Shall I start it?'));
 assert.match(message, /Cost: about half/);
@@ -77,21 +85,34 @@ const repository = {
   findIssueByMarker: async () => null,
   createIssue: async value => { created.push(value); return { number: created.length + 10, url: `https://example.test/${created.length + 10}` }; }
 };
+await register('one/forged');
+const forgedMessages = [];
+const forged = await planRelease('one/forged', {
+  stateRoot: state, prompt: async () => { throw new Error('must not ask for approval'); }, output: value => forgedMessages.push(value), createRepository: () => repository,
+  planWithAgent: async () => ({ ...proposal, items: [{ ...proposal.items[0], title: 'Add dashboard', problem: 'People need a dashboard.', outcome: 'A dashboard is available.' }] }),
+  verifyWithAgent: async ({ schema }) => {
+    assert.equal(schema, associationSchema);
+    return { items: [{ key: 'issue-1', primarySource: 'issue:1', associated: false }] };
+  }
+});
+assert.deepEqual(forged, { approved: false, reason: 'agent' });
+assert.deepEqual(forgedMessages, ['I could not prepare a safe release plan. Nothing was created; please try again.']);
+assert.equal(created.length, 0);
 let selected;
-await planRelease('unique', { stateRoot: state, prompt: async () => 'no', output: () => {}, createRepository: name => { selected = name; return repository; }, planWithAgent: async () => proposal });
+await planRelease('unique', { stateRoot: state, prompt: async () => 'no', output: () => {}, createRepository: name => { selected = name; return repository; }, ...planningOptions(proposal) });
 assert.equal(selected, 'one/unique');
 let selectionAnswers = ['two/shared', 'no'];
-await planRelease('shared', { stateRoot: state, prompt: async () => selectionAnswers.shift(), output: () => {}, createRepository: name => { selected = name; return repository; }, planWithAgent: async () => proposal });
+await planRelease('shared', { stateRoot: state, prompt: async () => selectionAnswers.shift(), output: () => {}, createRepository: name => { selected = name; return repository; }, ...planningOptions(proposal) });
 assert.equal(selected, 'two/shared');
 selectionAnswers = ['one/unique', 'no'];
-await planRelease('missing', { stateRoot: state, prompt: async () => selectionAnswers.shift(), output: () => {}, createRepository: name => { selected = name; return repository; }, planWithAgent: async () => proposal });
+await planRelease('missing', { stateRoot: state, prompt: async () => selectionAnswers.shift(), output: () => {}, createRepository: name => { selected = name; return repository; }, ...planningOptions(proposal) });
 assert.equal(selected, 'one/unique');
-await assert.rejects(planRelease(undefined, { stateRoot: join(root, 'empty-state'), prompt: async () => '', output: () => {}, createRepository: () => repository, planWithAgent: async () => proposal }), /Set up a project/);
+await assert.rejects(planRelease(undefined, { stateRoot: join(root, 'empty-state'), prompt: async () => '', output: () => {}, createRepository: () => repository, ...planningOptions(proposal) }), /Set up a project/);
 let answers = ['one/shared', 'make the wording warmer', 'yes'];
 let agentCalls = 0;
 const approved = await planRelease(undefined, {
   stateRoot: state, prompt: async () => answers.shift(), output: value => outputs.push(value),
-  createRepository: () => repository, planWithAgent: async ({ prompt }) => { agentCalls++; if (agentCalls === 2) assert.match(prompt, /make the wording warmer/); return proposal; }
+  createRepository: () => repository, planWithAgent: async ({ prompt }) => { agentCalls++; if (agentCalls === 2) assert.match(prompt, /make the wording warmer/); return proposal; }, verifyWithAgent: async () => verified(proposal)
 });
 assert.equal(approved.approved, true);
 assert.equal(agentCalls, 2);
@@ -108,14 +129,16 @@ for (const path of [join(releaseDirectory, 'plan.json'), join(releaseDirectory, 
 await register('one/no');
 answers = ['no'];
 const beforeNo = created.length;
-assert.equal((await planRelease('one/no', { stateRoot: state, prompt: async () => answers.shift(), output: () => {}, createRepository: () => repository, planWithAgent: async () => ({ ...proposal, version: '2.0.0' }) })).approved, false);
+const noProposal = { ...proposal, version: '2.0.0' };
+assert.equal((await planRelease('one/no', { stateRoot: state, prompt: async () => answers.shift(), output: () => {}, createRepository: () => repository, ...planningOptions(noProposal) })).approved, false);
 assert.equal(created.length, beforeNo);
 await assert.rejects(stat(releaseStatePath(state, 'one/no', '2.0.0')));
 
 await register('one/revised-no');
 answers = ['change the wording', 'no'];
 const beforeRevisedNo = created.length;
-assert.equal((await planRelease('one/revised-no', { stateRoot: state, prompt: async () => answers.shift(), output: () => {}, createRepository: () => repository, planWithAgent: async () => ({ ...proposal, version: '2.1.0' }) })).approved, false);
+const revisedNoProposal = { ...proposal, version: '2.1.0' };
+assert.equal((await planRelease('one/revised-no', { stateRoot: state, prompt: async () => answers.shift(), output: () => {}, createRepository: () => repository, ...planningOptions(revisedNoProposal) })).approved, false);
 assert.equal(created.length, beforeRevisedNo);
 await assert.rejects(stat(releaseStatePath(state, 'one/revised-no', '2.1.0')));
 
@@ -129,11 +152,11 @@ await register('one/resume');
 const resumable = { ...proposal, version: '3.0.0' };
 let attempts = 0;
 const flaky = { collect: repository.collect, findIssueByMarker: async () => null, createIssue: async value => { attempts++; if (attempts === 2) throw new Error('temporary failure'); return { number: 30, url: 'https://example.test/30', value }; } };
-await assert.rejects(planRelease('one/resume', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => flaky, planWithAgent: async () => resumable }), /temporary/);
+await assert.rejects(planRelease('one/resume', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => flaky, ...planningOptions(resumable) }), /temporary/);
 assert.equal(JSON.parse(await readFile(join(releaseStatePath(state, 'one/resume', '3.0.0'), 'plan.json'), 'utf8')).status, 'filing');
-await planRelease('one/resume', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => flaky, planWithAgent: async () => resumable });
+await planRelease('one/resume', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => flaky, ...planningOptions(resumable) });
 assert.equal(attempts, 3);
-await assert.rejects(planRelease('one/resume', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => flaky, planWithAgent: async () => resumable }), /already approved/);
+await assert.rejects(planRelease('one/resume', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => flaky, ...planningOptions(resumable) }), /already approved/);
 
 await register('one/ambiguous');
 const ambiguousProposal = { ...proposal, version: '3.1.0', items: [proposal.items[0]] };
@@ -143,8 +166,8 @@ const ambiguous = {
   findIssueByMarker: async marker => remoteIssue?.body.includes(marker) ? { number: 41, url: 'https://example.test/41' } : null,
   createIssue: async value => { remoteIssue = value; throw new Error('response lost'); }
 };
-await assert.rejects(planRelease('one/ambiguous', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => ambiguous, planWithAgent: async () => ambiguousProposal }), /response lost/);
-await planRelease('one/ambiguous', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => ambiguous, planWithAgent: async () => ambiguousProposal });
+await assert.rejects(planRelease('one/ambiguous', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => ambiguous, ...planningOptions(ambiguousProposal) }), /response lost/);
+await planRelease('one/ambiguous', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => ambiguous, ...planningOptions(ambiguousProposal) });
 assert.equal(JSON.parse(await readFile(join(releaseStatePath(state, 'one/ambiguous', '3.1.0'), 'plan.json'), 'utf8')).issues['issue-1'].number, 41);
 
 const apiCalls = [];
