@@ -20,6 +20,5 @@ fresh-environment evidence and open integration limits here after testing.
 
 ## Open integration limits (2026-11-14, set up by hand)
 
-- The local coding-agent and GitHub stand-ins and all three proving scenario specifications exist.
-  `bash scenarios/run.sh` currently fails at each named missing product step because the installer,
-  release path and question relay have not landed yet.
+- Nothing runs yet: the repository holds the plan's tickets as issues, and the first ones add the
+  install script, the stand-in coding agent and the scenarios.
