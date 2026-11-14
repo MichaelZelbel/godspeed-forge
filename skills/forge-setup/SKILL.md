@@ -16,4 +16,5 @@ owner's personal or organization registration location, create it there, follow 
 installation link, choose the requested account, select “Only select repositories”, select only
 the requested repository, and confirm the installation. Let the owner answer the two mission
 questions. Do not request or repeat a key, token, App id, or private key, and do not report setup
-complete before both repository installations and doctor succeed.
+complete before both repository installations and the setup checks succeed. App credentials stay in
+the private credentials subtree; project state contains only non-secret setup records.

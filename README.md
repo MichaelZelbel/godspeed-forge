@@ -29,15 +29,16 @@ at one pinned revision, the way his README asks a coding agent to, and everythin
 Ask Godspeed to “set up the Forge for `owner/repository`”. Setup uses a signed-in Claude Code or
 Codex account, installs the pinned factory, guides you through creating separate builder and release
 GitHub Apps in the repository owner's personal or organization account, then guides you to install each App only on that repository. Setup asks the two mission
-questions and reports the factory doctor. It completes only after both installations are confirmed
-and doctor succeeds, and it leaves the schedule off until you explicitly start it.
+questions and reports the setup checks. It completes only after both installations are confirmed
+and the checks succeed, and it leaves the schedule off until you explicitly start it.
 
 Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 `~/.godspeed/forge/state/` for private state. Root Linux installs use
 `/etc/godspeed-forge/config.json` and `/var/lib/godspeed/forge/`. The state directories are mode
-0700 and credential files are mode 0600. The defaults are the projects directory, a plain cost
-notice, and the `git`, `gh`, and `python3` command names. The config,
-project checkout, and setup output never contain App credentials or ids.
+0700 and credential files under the private `credentials/` subtree are mode 0600. Project state
+contains only non-secret setup records. The defaults are the projects directory, a plain cost notice,
+and the `git`, `gh`, and `python3` command names. The config, project checkout, and setup output never
+contain App credentials or ids.
 
 The builder App has repository permissions for Contents, Pull requests, Issues, and Actions read/write, plus Checks, Commit statuses, and Metadata read. The release App has repository permissions for Contents and Pull requests read/write, plus Checks, Actions, and Metadata read. Neither App receives organization,
 Administration, Secrets, Members, Workflows, environment-secret, or Deployment permission.
