@@ -75,6 +75,17 @@ await dockerAdapter.notice({ id: 'docker-notice', text: 'Docker.' });
 assert.deepEqual((await dockerAdapter.messages({ startedAt: '2026-01-01T00:00:00Z' })).map(value => value.id), ['docker']);
 assert.deepEqual(dockerRequests.map(value => value.request.action), ['notice', 'records']);
 assert(dockerRequests.every(value => value.command === process.execPath && value.args.includes('exec') && value.args.includes('godspeed')));
+assert(dockerRequests.every(value => value.request.workspace === '/opt/data/full-candidate/workspace'));
+
+await writeFile(join(dockerRoot, '.godspeed/model-host.json'), JSON.stringify({ format: 1, kind: 'godspeed-docker', service: 'godspeed', workspace: '/opt/data/another-owner/workspace' }));
+const redirectedDockerAdapter = createGodspeedAdapter({
+  root: dockerRoot,
+  modelCommand: join(dockerRoot, '.godspeed/model.mjs'),
+  dockerCommand: process.execPath,
+  run: async () => assert.fail('An altered Docker descriptor must not reach the container boundary.')
+});
+await assert.rejects(redirectedDockerAdapter.notice({ id: 'redirected-notice', text: 'Wrong owner.' }), /does not expose a supported notebook boundary/);
+await assert.rejects(redirectedDockerAdapter.messages({ startedAt: '2026-01-01T00:00:00Z' }), /does not expose a supported notebook boundary/);
 
 const calls = [];
 const github = createQuestionsGithub({ run: async (command, args) => {
