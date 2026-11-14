@@ -36,25 +36,32 @@ const evidence = {
 const item = (key, title, outcome, size = 'light') => ({
   key, title, problem: `${title} causes a visible problem.`, why: 'People cannot complete their work.', whyNow: 'It blocks a dependable release.', outcome,
   invariants: 'Existing successful behavior remains available.', acceptance: 'A focused check proves the user outcome.', doneMeans: 'The outcome works and its focused check passes.',
-  size, dependencies: [], reason: 'This is the next most useful improvement.', sources: [`issue:${key === 'bug-two' ? 2 : 1}`]
+  size, dependencies: [], reason: 'This is the next most useful improvement.', sources: [`issue:${key === 'issue-2' ? 2 : key === 'issue-3' ? 3 : 1}`]
 });
 const proposal = {
   summary: 'This release makes everyday work more dependable.', version: '1.1.0',
-  items: [item('bug-one', 'Repair first failure', 'The first failure no longer interrupts work.'), item('bug-two', 'Repair second failure', 'The second failure no longer interrupts work.')],
+  items: [item('issue-1', 'Repair first failure', 'The first failure no longer interrupts work.'), item('issue-2', 'Repair second failure', 'The second failure no longer interrupts work.')],
   deferred: [{ title: 'A useful improvement', reason: 'The two repairs come first.' }]
 };
 assert.deepEqual(validateProposal(proposal, evidence), proposal);
 assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], key: '../../outside' }] }, evidence), /incomplete item/);
-assert.throws(() => validateProposal({ ...proposal, items: [item('large', 'Large', 'A large change works.', 'large'), item('more', 'More', 'More works.')] }, evidence), /too large/);
+assert.throws(() => validateProposal({ ...proposal, items: [item('issue-1', 'Large', 'A large change works.', 'large'), item('issue-2', 'More', 'More works.')] }, evidence), /too large/);
 assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], problem: evidence.issues[0].body }] }, evidence), /copied/);
 assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], reason: evidence.issues[0].body }] }, evidence), /copied/);
 const shortEvidence = structuredClone(evidence);
 shortEvidence.issues[0].body = 'Short copied words';
 assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], reason: 'Short copied words' }] }, shortEvidence), /copied/);
-const featureFirst = { ...proposal, items: [{ ...item('feature', 'Feature', 'A feature works.'), sources: ['issue:3'] }, proposal.items[0], proposal.items[1]] };
+shortEvidence.issues[0].title = 'Crash';
+assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], reason: 'Crash' }] }, shortEvidence), /copied/);
+shortEvidence.issues[0].title = '';
+shortEvidence.issues[0].body = 'Freeze';
+assert.throws(() => validateProposal({ ...proposal, items: [{ ...proposal.items[0], problem: 'Freeze' }] }, shortEvidence), /copied/);
+const featureFirst = { ...proposal, items: [item('issue-3', 'Add requested capability', 'A requested capability works.'), proposal.items[0], proposal.items[1]] };
 assert.throws(() => validateProposal(featureFirst, evidence), /urgent work first/);
-const bugsBeforeFeature = { ...proposal, items: [proposal.items[0], proposal.items[1], { ...item('feature', 'Feature', 'A feature works.'), sources: ['issue:3'] }] };
-assert.deepEqual(validateProposal(bugsBeforeFeature, evidence).items.map(value => value.key), ['bug-one', 'bug-two', 'feature']);
+const swappedSources = { ...proposal, items: [{ ...item('issue-3', 'Add requested capability', 'A requested capability works.'), sources: ['issue:1'] }, { ...item('issue-1', 'Repair failure', 'The failure is repaired.'), sources: ['issue:3'] }] };
+assert.throws(() => validateProposal(swappedSources, evidence), /incomplete item/);
+const bugsBeforeFeature = { ...proposal, items: [proposal.items[0], proposal.items[1], item('issue-3', 'Add requested capability', 'A requested capability works.')] };
+assert.deepEqual(validateProposal(bugsBeforeFeature, evidence).items.map(value => value.key), ['issue-1', 'issue-2', 'issue-3']);
 const message = renderOwnerMessage(proposal);
 assert(message.endsWith('Shall I start it?'));
 assert.match(message, /Cost: about half/);
@@ -94,9 +101,9 @@ for (const heading of ['Why', 'Why now', 'Outcome', 'Invariants', 'Acceptance', 
 const releaseDirectory = releaseStatePath(state, 'one/shared', '1.1.0');
 const plan = JSON.parse(await readFile(join(releaseDirectory, 'plan.json'), 'utf8'));
 assert.equal(plan.status, 'approved');
-assert.deepEqual(Object.keys(plan.issues), ['bug-one', 'bug-two']);
+assert.deepEqual(Object.keys(plan.issues), ['issue-1', 'issue-2']);
 assert.deepEqual(plan.evidence.issues, [1, 2, 3]);
-for (const path of [join(releaseDirectory, 'plan.json'), join(releaseDirectory, 'item-bug-one.json')]) assert.equal((await stat(path)).mode & 0o777, 0o600);
+for (const path of [join(releaseDirectory, 'plan.json'), join(releaseDirectory, 'item-issue-1.json')]) assert.equal((await stat(path)).mode & 0o777, 0o600);
 
 await register('one/no');
 answers = ['no'];
@@ -138,7 +145,7 @@ const ambiguous = {
 };
 await assert.rejects(planRelease('one/ambiguous', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => ambiguous, planWithAgent: async () => ambiguousProposal }), /response lost/);
 await planRelease('one/ambiguous', { stateRoot: state, prompt: async () => 'yes', output: () => {}, createRepository: () => ambiguous, planWithAgent: async () => ambiguousProposal });
-assert.equal(JSON.parse(await readFile(join(releaseStatePath(state, 'one/ambiguous', '3.1.0'), 'plan.json'), 'utf8')).issues['bug-one'].number, 41);
+assert.equal(JSON.parse(await readFile(join(releaseStatePath(state, 'one/ambiguous', '3.1.0'), 'plan.json'), 'utf8')).issues['issue-1'].number, 41);
 
 const apiCalls = [];
 const responses = new Map([
@@ -167,6 +174,10 @@ assert(createCall.includes('POST'));
 assert(createCall.includes('title=A title'));
 assert(createCall.includes('body=A body'));
 assert.deepEqual(createdByAdapter, { number: 73, url: 'https://example.test/73' });
+responses.set('/repos/acme/app/issues?state=all&per_page=100', [{ number: 74, html_url: 'https://example.test/74', body: 'Filed work\n\n<!-- durable-marker -->' }]);
+assert.deepEqual(await adapter.findIssueByMarker('durable-marker'), { number: 74, url: 'https://example.test/74' });
+const lookupCall = apiCalls.at(-1);
+assert(lookupCall.includes('/repos/acme/app/issues?state=all&per_page=100'));
 
 let schemaWasReadable = false;
 const codexPlanner = createPlanningAgent({ agent: 'codex', runCommand: async (_command, args) => {
