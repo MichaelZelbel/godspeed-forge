@@ -75,7 +75,7 @@ assert.equal(calls.find(call => call.args.at(-1) === 'init').cwd, checkout);
 assert(calls.some(call => call.args.includes(FACTORY_REVISION)));
 assert(!calls.some(call => call.args.includes('schedule')));
 assert(messages.includes('Setup checks found no problems.'));
-assert(messages.at(-1).includes('schedule remains off'));
+assert.equal(messages.at(-1), 'Automatic work is off. When you are ready to start it, ask me to turn it on.');
 assert.equal(manifests.length, 2);
 assert.deepEqual(manifests[0].default_permissions, APP_PERMISSIONS.builder);
 assert.deepEqual(manifests[1].default_permissions, APP_PERMISSIONS.release);
