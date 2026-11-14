@@ -1,0 +1,5 @@
+node_modules/
+.factory/consumer.json
+.factory/trigger.json
+.factory/*.lock
+.factory/schedule.log
