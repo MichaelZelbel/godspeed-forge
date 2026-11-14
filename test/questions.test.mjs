@@ -141,6 +141,67 @@ manyMessages.push({ id: 'empty', source: 'browser-chat', content: `${firstHandle
 await runQuestionRelay({ stateRoot: manyRoot, github: manyGithub, godspeed: manyGodspeed });
 assert.equal(manyComments.length, 0, 'a handle without an answer must post nowhere');
 
+// Explicit handles are deferred when any repository is unavailable, because handles can collide.
+const collisionRoot = await mkdtemp(join(tmpdir(), 'forge-questions-collision-'));
+for (const repository of ['available', 'failing']) {
+  const directory = join(collisionRoot, `projects/owner/${repository}`);
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, 'registration.json'), JSON.stringify({ repository: `owner/${repository}`, completed: true }));
+}
+const collisionIssues = {
+  'owner/available': { number: 1, body: '### 1. Choice 10047\nDetails 10047', comments: [] },
+  'owner/failing': { number: 1, body: '### 1. Choice 14782\nDetails 14782', comments: [] }
+};
+let collisionMessages = [];
+let failCollisionRepository = false;
+const collisionComments = [];
+const collisionGodspeed = {
+  ...godspeed,
+  classify: async () => ({ owner: true, example: 'Choose the visible result.', choices: ['First', 'Second'], default: 'First', applies: 'now' }),
+  notice: async () => {},
+  messages: async ({ reviewed }) => collisionMessages.filter(message => !reviewed.includes(String(message.id)))
+};
+const collisionGithub = {
+  find: async repository => {
+    if (failCollisionRepository && repository === 'owner/failing') throw new Error('unavailable');
+    return collisionIssues[repository];
+  },
+  comment: async (...args) => collisionComments.push(args)
+};
+await runQuestionRelay({ stateRoot: collisionRoot, github: collisionGithub, godspeed: collisionGodspeed });
+collisionMessages = [{ id: 'collision', source: 'browser-chat', content: 'Q-9D1460: Use the first choice.' }];
+failCollisionRepository = true;
+await assert.rejects(runQuestionRelay({ stateRoot: collisionRoot, github: collisionGithub, godspeed: collisionGodspeed }), /could not finish/);
+assert.equal(collisionComments.length, 0, 'a colliding handle must not route against a partial repository set');
+
+// A reviewed free-form message is globally persisted and cannot move to another repository later.
+const receiptRoot = await mkdtemp(join(tmpdir(), 'forge-questions-receipt-'));
+for (const repository of ['a', 'b']) {
+  const directory = join(receiptRoot, `projects/owner/${repository}`);
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, 'registration.json'), JSON.stringify({ repository: `owner/${repository}`, completed: true }));
+}
+const receiptIssues = new Map(['a', 'b'].map((name, index) => [`owner/${name}`, { ...issue, number: 20 + index, comments: [] }]));
+const receiptComments = [];
+let receiptMatchCalls = 0;
+const receiptGodspeed = {
+  ...godspeed,
+  notice: async () => {},
+  messages: async ({ reviewed }) => reviewed.includes('one-message') ? [] : [{ id: 'one-message', source: 'browser-chat', content: 'Use Friendly.' }],
+  match: async (message, candidates) => ({ key: candidates[receiptMatchCalls++ === 0 ? 0 : 1].key })
+};
+await runQuestionRelay({
+  stateRoot: receiptRoot,
+  github: {
+    find: async repository => receiptIssues.get(repository),
+    comment: async (repository, number, body) => { receiptComments.push({ repository, number, body }); receiptIssues.get(repository).comments.push({ body }); }
+  },
+  godspeed: receiptGodspeed
+});
+await runQuestionRelay({ stateRoot: receiptRoot, github: { find: async repository => receiptIssues.get(repository), comment: async (...args) => receiptComments.push(args) }, godspeed: receiptGodspeed });
+assert.equal(receiptComments.length, 1);
+assert.equal(receiptMatchCalls, 1, 'a reviewed message must not be offered to the matcher after restart');
+
 // A failed free-form match does not prevent a later explicit reply in the same lap.
 const progressRoot = await mkdtemp(join(tmpdir(), 'forge-questions-progress-'));
 const progressProject = join(progressRoot, 'projects/owner/progress');

@@ -12,7 +12,8 @@ it does not start a factory schedule.
 It does enable `godspeed-forge-questions.timer` for the installing user. Every 15 minutes that timer
 checks completed repository registrations for owner decisions. The command uses the configured
 `godspeedRoot` notice and authenticated conversation records and the configured `modelCommand`; it
-does not contact a separate chat service. State is stored privately as `questions.json` per project.
+does not contact a separate chat service. Question status is stored privately as `questions.json` per
+project, and reviewed owner-message ids are stored in the private shared `question-messages.json`.
 An owner answers with the notice's `Q-XXXXXX: answer` form. Invalid or unclear input fails closed and
 does not create a GitHub comment.
 
