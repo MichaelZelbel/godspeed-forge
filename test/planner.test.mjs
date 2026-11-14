@@ -70,6 +70,7 @@ for (const primarySource of ['issue:1', 'pr:4', 'check:required', 'deferred:0'])
   const claimed = { ...proposal, items: [{ ...proposal.items[0], key: primarySource.replace(/[^a-z0-9]+/g, '-'), sources: [primarySource] }] };
   assert.throws(() => validateAssociations({ items: [{ key: claimed.items[0].key, primarySource, associated: false }] }, claimed), /not supported/);
 }
+assert.throws(() => validateAssociations({ items: [{ key: 'issue-1', primarySource: 'issue:3', associated: true }] }, { ...proposal, items: [proposal.items[0]] }), /not supported/);
 const message = renderOwnerMessage(proposal);
 assert(message.endsWith('Shall I start it?'));
 assert.match(message, /Cost: about half/);
@@ -98,6 +99,19 @@ const forged = await planRelease('one/forged', {
 assert.deepEqual(forged, { approved: false, reason: 'agent' });
 assert.deepEqual(forgedMessages, ['I could not prepare a safe release plan. Nothing was created; please try again.']);
 assert.equal(created.length, 0);
+await register('one/mixed-work');
+const mixedWorkMessages = [];
+const mixedWork = await planRelease('one/mixed-work', {
+  stateRoot: state, prompt: async () => { throw new Error('must not ask for approval'); }, output: value => mixedWorkMessages.push(value), createRepository: () => repository,
+  planWithAgent: async () => ({ ...proposal, items: [{ ...proposal.items[0], title: 'Add dashboard', why: 'A dashboard would be useful.', whyNow: 'People want a dashboard now.', invariants: 'Existing pages remain available.', acceptance: 'A dashboard test passes.', doneMeans: 'The dashboard is ready.', reason: 'This adds the requested dashboard.' }] }),
+  verifyWithAgent: async ({ prompt }) => {
+    for (const field of ['Add dashboard', 'A dashboard would be useful.', 'A dashboard test passes.', 'The dashboard is ready.']) assert(prompt.includes(field));
+    return { items: [{ key: 'issue-1', primarySource: 'issue:1', associated: false }] };
+  }
+});
+assert.deepEqual(mixedWork, { approved: false, reason: 'agent' });
+assert.deepEqual(mixedWorkMessages, ['I could not prepare a safe release plan. Nothing was created; please try again.']);
+assert.equal(created.length, 0);
 let selected;
 await planRelease('unique', { stateRoot: state, prompt: async () => 'no', output: () => {}, createRepository: name => { selected = name; return repository; }, ...planningOptions(proposal) });
 assert.equal(selected, 'one/unique');
@@ -125,6 +139,28 @@ assert.equal(plan.status, 'approved');
 assert.deepEqual(Object.keys(plan.issues), ['issue-1', 'issue-2']);
 assert.deepEqual(plan.evidence.issues, [1, 2, 3]);
 for (const path of [join(releaseDirectory, 'plan.json'), join(releaseDirectory, 'item-issue-1.json')]) assert.equal((await stat(path)).mode & 0o777, 0o600);
+
+await register('one/rejected-revision');
+answers = ['change the outcome', 'yes'];
+let revisionPlans = 0;
+let revisionVerifications = 0;
+let revisionPrompts = 0;
+const beforeRejectedRevision = created.length;
+const rejectedRevision = await planRelease('one/rejected-revision', {
+  stateRoot: state,
+  prompt: async () => { revisionPrompts++; return answers.shift(); },
+  output: () => {}, createRepository: () => repository,
+  planWithAgent: async () => { revisionPlans++; return { ...proposal, version: '1.2.0' }; },
+  verifyWithAgent: async value => {
+    revisionVerifications++;
+    return revisionVerifications === 1 ? verified({ ...proposal, version: '1.2.0' }) : { items: [{ key: 'issue-1', primarySource: 'issue:1', associated: false }, { key: 'issue-2', primarySource: 'issue:2', associated: true }] };
+  }
+});
+assert.deepEqual(rejectedRevision, { approved: false, reason: 'agent' });
+assert.equal(revisionPlans, 2);
+assert.equal(revisionVerifications, 2);
+assert.equal(revisionPrompts, 1);
+assert.equal(created.length, beforeRejectedRevision);
 
 await register('one/no');
 answers = ['no'];
