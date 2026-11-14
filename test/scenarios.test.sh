@@ -33,6 +33,9 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$scenario_root" ]
 [ -n "$script" ]
+python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["remote"] == "/scenario/remote.git"' \
+  "$scenario_root/github/state.json"
+[ "$(git --git-dir="$scenario_root/remote.git" symbolic-ref HEAD)" = refs/heads/main ]
 printf '%s\n' "$scenario_root" >>"$FAKE_DOCKER_LOG"
 case "$script" in
   forge-setup.sh) echo "Forge setup command is missing" ;;

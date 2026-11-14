@@ -10,10 +10,10 @@ For every agent of the factory. The journeys to check are in `harness/END-TO-END
 ## The proving scenarios
 
 Each scenario is one script under `scenarios/`, named after its journey, and `bash scenarios/run.sh`
-runs all of them and ends with `N of N pass`. They run
-in a throwaway container with a fresh Godspeed, a tiny sample repository and the stand-in coding
-agent. Several checkouts may run at once: never a fixed port, container name or folder outside the
-checkout's own temporary folder.
+runs all of them and ends with `N of N pass`. Running them requires the Docker CLI and access to a
+running Docker daemon. They run in a throwaway container with a fresh Godspeed, a tiny sample
+repository and the stand-in coding agent. Several checkouts may run at once: never a fixed port,
+container name or folder outside the checkout's own temporary folder.
 
 They currently fail at the named missing setup, release-planning and question-relay steps. Those
 failures are the expected evidence until the product tickets connect the real owner actions.
