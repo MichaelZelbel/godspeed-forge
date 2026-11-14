@@ -5,6 +5,7 @@ import { access } from 'node:fs/promises';
 import { defaultPaths, installDefaults, readConfig } from '../lib/config.mjs';
 import { run } from '../lib/process.mjs';
 import { setupRepository } from '../lib/setup.mjs';
+import { registrationAction } from '../lib/github-apps.mjs';
 
 async function main() {
   const [command, repository] = process.argv.slice(2);
@@ -16,8 +17,11 @@ async function main() {
   const github = {
     async exists(path) { try { await access(path); return true; } catch { return false; } },
     async begin(manifest) {
+      const owner = new URL(manifest.url).pathname.split('/')[1];
+      const organization = await input.question(`Type yes if ${owner} is a GitHub organization, or no if it is your personal account: `);
+      const action = registrationAction(owner, organization.trim().toLowerCase() === 'yes');
       const value = JSON.stringify(manifest).replaceAll('&', '&amp;').replaceAll('"', '&quot;');
-      const page = `<form id="app" method="post" action="https://github.com/settings/apps/new"><input type="hidden" name="manifest" value="${value}"></form><script>document.getElementById('app').submit()</script>`;
+      const page = `<form id="app" method="post" action="${action}"><input type="hidden" name="manifest" value="${value}"></form><script>document.getElementById('app').submit()</script>`;
       const url = `data:text/html;base64,${Buffer.from(page).toString('base64')}`;
       return { url };
     },
@@ -31,6 +35,13 @@ async function main() {
       });
       if (!response.ok) throw new Error('GitHub could not create the App.');
       return response.json();
+    },
+    async install({ credentials, repository, kind }) {
+      if (!credentials.slug) throw new Error(`GitHub did not return the ${kind} App name needed for installation.`);
+      const url = `https://github.com/apps/${encodeURIComponent(credentials.slug)}/installations/new`;
+      console.log(`Install the ${kind} App and choose only ${repository}: ${url}`);
+      const answer = await input.question(`Type yes after the ${kind} App is installed only on ${repository}: `);
+      return answer.trim().toLowerCase() === 'yes';
     }
   };
   try {
