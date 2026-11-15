@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { defaultPaths, installDefaults, readConfig } from '../lib/config.mjs';
 import { run } from '../lib/process.mjs';
-import { setupRepository } from '../lib/setup.mjs';
+import { ReportedSetupError, setupRepository } from '../lib/setup.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 
 async function main() {
@@ -25,4 +25,7 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+main().catch(error => {
+  if (!(error instanceof ReportedSetupError)) console.error(error.message);
+  process.exitCode = 1;
+});
