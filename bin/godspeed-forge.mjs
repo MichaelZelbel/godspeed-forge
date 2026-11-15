@@ -4,7 +4,7 @@ import { stdin, stdout } from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { defaultPaths, installDefaults, readConfig } from '../lib/config.mjs';
 import { run } from '../lib/process.mjs';
-import { setupRepository } from '../lib/setup.mjs';
+import { ReportedSetupError, setupRepository } from '../lib/setup.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { createGithubRepository } from '../lib/github-repository.mjs';
 import { createPlanningAgent, findSignedInAgent, SIGN_IN_MESSAGE } from '../lib/agent.mjs';
@@ -43,5 +43,8 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(error => { console.error(error.message); process.exitCode = 1; });
+  main().catch(error => {
+    if (!(error instanceof ReportedSetupError)) console.error(error.message);
+    process.exitCode = 1;
+  });
 }
