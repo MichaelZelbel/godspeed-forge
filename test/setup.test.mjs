@@ -10,7 +10,7 @@ import {
 } from '../lib/github-apps.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
-import { credentialPath, projectStatePath, writePrivateJson } from '../lib/config.mjs';
+import { credentialPath, defaults, projectStatePath, writePrivateJson } from '../lib/config.mjs';
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -58,7 +58,7 @@ const run = async (command, args, options = {}) => {
 };
 let answer = 0;
 await setupRepository('owner/repo', {
-  config: { projectsRoot, costMessage: 'Cost notice.' }, paths: { state }, commands: { run },
+  config: { ...defaults(root), projectsRoot }, paths: { state }, commands: { run },
   github: {
     begin: async manifest => { manifests.push(manifest); return { url: `https://example.test/${manifest.name}` }; },
     complete: async () => credentials,
@@ -74,8 +74,12 @@ assert.match(mission, /Small software teams\./);
 assert.equal(calls.find(call => call.args.at(-1) === 'init').cwd, checkout);
 assert(calls.some(call => call.args.includes(FACTORY_REVISION)));
 assert(!calls.some(call => call.args.includes('schedule')));
-assert(messages.includes('Setup checks found no problems.'));
-assert.equal(messages.at(-1), 'Automatic work is off. When you are ready to start it, ask me to turn it on.');
+assert.deepEqual(messages, [
+  'Using Claude Code to set up the Forge.',
+  'Create the builder App in your browser: https://example.test/Forge builder',
+  'Create the release App in your browser: https://example.test/Forge release',
+  'Setup is complete for owner/repo. Automatic work is off. Each release uses your signed-in Claude Code account to plan and build the work. The Forge adds no separate charge; what you pay depends on your account plan, the size of the release, and your provider\'s usage limits. When you are ready to start automatic work, ask me to turn it on.'
+]);
 assert.equal(manifests.length, 2);
 assert.deepEqual(manifests[0].default_permissions, APP_PERMISSIONS.builder);
 assert.deepEqual(manifests[1].default_permissions, APP_PERMISSIONS.release);
@@ -96,7 +100,7 @@ for (const kind of ['builder', 'release']) {
   });
 }
 const serializedProjectState = JSON.stringify({
-  config: { projectsRoot, costMessage: 'Cost notice.' },
+  config: { projectsRoot, releaseCostMessage: 'Release cost.' },
   paths: { state },
   projectState: await readTree(join(state, 'projects/owner/repo'))
 });

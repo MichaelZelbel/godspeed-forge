@@ -36,7 +36,7 @@ Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 `~/.godspeed/forge/state/` for private state. Root Linux installs use
 `/etc/godspeed-forge/config.json` and `/var/lib/godspeed/forge/`. The state directories are mode
 0700 and credential files under the private `credentials/` subtree are mode 0600. Project state
-contains only non-secret setup records. The defaults are the projects directory, a plain cost notice,
+contains only non-secret setup records. The defaults are the projects directory, a plain release-cost estimate,
 and the `git`, `gh`, and `python3` command names. The config, project checkout, and setup output never
 contain App credentials or ids.
 
