@@ -898,7 +898,7 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   const standIn = standInGithub({ failExchangeOnce: 'builder' });
   const first = await setupAttempt('owner/transport', retryState, standIn.github);
   assert(first.error instanceof ReportedSetupError && first.error.message === 'github-pending');
-  assert.equal(first.messages.at(-1), 'Setup stopped because GitHub could not be reached to finish connecting the builder App. Try setup again; it will finish this App without creating another.');
+  assert.equal(first.messages.at(-1), 'Setup stopped because GitHub could not be reached to finish connecting the builder App. Try setup again; it will try to finish this App, and if GitHub no longer accepts it, setup will say what to do.');
   const pendingPath = join(credentialDirectory, 'builder-app-pending.json');
   assert.equal((await stat(pendingPath)).mode & 0o777, 0o600);
   assert.deepEqual(JSON.parse(await readFile(pendingPath, 'utf8')), { code: 'code-builder-1' });
@@ -906,6 +906,32 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   const second = await setupAttempt('owner/transport', retryState, standIn.github);
   assert(completedFor('owner/transport')(second.messages.at(-1)));
   assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(await pendingFiles(credentialDirectory), []);
+}
+
+{
+  // GitHub uses the builder code but its answer is lost on the way back, so the retry's code is refused.
+  // The first stop only says setup will try; the second names deleting the App, and the two agree.
+  const retryState = join(root, 'retry-answer-lost');
+  const credentialDirectory = credentialPath(retryState, 'owner/answer-lost');
+  const standIn = standInGithub();
+  let loseOnce = true;
+  const github = {
+    ...standIn.github,
+    exchange: async code => {
+      const result = await standIn.github.exchange(code);
+      if (loseOnce && code.startsWith('code-builder')) { loseOnce = false; throw new Error('network unreachable'); }
+      return result;
+    }
+  };
+  const first = await setupAttempt('owner/answer-lost', retryState, github);
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'github-pending');
+  assert.equal(first.messages.at(-1), 'Setup stopped because GitHub could not be reached to finish connecting the builder App. Try setup again; it will try to finish this App, and if GitHub no longer accepts it, setup will say what to do.');
+  assert(!first.messages.some(message => message.includes('without creating another')));
+  const second = await setupAttempt('owner/answer-lost', retryState, github);
+  assert(second.error instanceof ReportedSetupError && second.error.message === 'leftover-app');
+  assert.equal(second.messages.at(-1), 'Setup stopped because it could not finish connecting the builder App. If GitHub created a builder App for owner/answer-lost, delete it in your GitHub App settings, then try setup again.');
+  assert.deepEqual(standIn.counts, { builder: 1, release: 0 });
   assert.deepEqual(await pendingFiles(credentialDirectory), []);
 }
 
