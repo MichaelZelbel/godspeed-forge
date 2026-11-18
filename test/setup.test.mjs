@@ -360,9 +360,9 @@ const PYTHON_COMMAND = `${found} ${guard} does not work on this server, because 
 const GUARD_OPEN = `${found} ${guard} lets the coding agent read those scenarios on this server. Try setup again, which reinstalls the guard.`;
 const GUARD_MISSING = `${found} ${guard} is not fully installed in the project. Try setup again, which installs it.`;
 const SETTINGS = `${found} the project's record of which build tools to use is missing or damaged. Try setup again, which writes that record again.`;
-const SOURCE_DAMAGED = `${found} the copy of the build tools that setup downloaded to this server is incomplete or has been changed. Delete the folder ${buildToolsCache} on this server before trying setup again.`;
-const SOURCE_MISSING = `${found} the copy of the build tools that setup downloaded to this server is missing. Try setup again, which downloads it again.`;
-const TOOLS_FAIL = `${found} the build tools fail when they run on this server. Delete the folder ${buildToolsCache} on this server before trying setup again, which downloads and installs them again.`;
+const SOURCE_DAMAGED = `${found} the copy of the build tools that setup downloaded to this server is incomplete or has been changed. Try setup again, which replaces it with a fresh download.`;
+const SOURCE_MISSING = `${found} the copy of the build tools that setup downloaded to this server is missing or damaged. Try setup again, which downloads it again.`;
+const TOOLS_FAIL = `${found} the build tools fail when they run on this server. Try setup again, which replaces them with a fresh download.`;
 const PIN_INCOMPLETE = `${found} the version of the build tools this Forge installs is missing parts that automatic work needs. Install the latest version of the Forge on this server before trying setup again.`;
 const refusal = text => `Factory refused: ${text}\n`;
 const refusalCases = [
@@ -388,6 +388,7 @@ const refusalCases = [
   [refusal("[Errno 2] No such file or directory: 'bun'"), `${found} the bun program the build tools need is not installed on this server. Install bun before trying setup again.`],
   [refusal("Command '['/usr/bin/bun', 'cli.ts', 'workflow', '--help']' timed out after 180 seconds"), `${found} the build tools did not answer in time. Try setup again.`],
   [refusal(`[Errno 2] No such file or directory: PosixPath('${buildToolsCache}')`), SOURCE_MISSING],
+  [refusal(`[Errno 20] Not a directory: PosixPath('${buildToolsCache}')`), SOURCE_MISSING],
   [refusal(`Command exited 128: ['git', 'rev-parse', 'HEAD']\nfatal: not a git repository (or any of the parent directories): .git`), SOURCE_DAMAGED],
   [refusal(`Command exited 128: ['git', 'status', '--porcelain']\nfatal: not a git repository (or any of the parent directories): .git`), SOURCE_DAMAGED],
   [refusal(`Command exited 1: ['bun', '${buildToolsCache}/packages/cli/src/cli.ts', 'workflow']\nerror: Cannot find module '@archon/core'`), TOOLS_FAIL],
@@ -425,13 +426,126 @@ for (const [index, [report, expected]] of refusalCases.entries()) {
   }), error => error instanceof ReportedSetupError && error.message === 'final-check', repository);
   assert.equal(outputs.at(-1), expected, report);
   for (const hidden of ['Factory refused', 'Holdout fence', 'consumer', 'Traceback', 'ghs_report_secret', 'report', 'Archon', 'Errno',
-    'PosixPath', 'Command exited', 'fatal', 'rev-parse', 'cli.ts', 'Segmentation', 'archon/core', 'output']) {
+    'PosixPath', 'Command exited', 'fatal', 'rev-parse', 'cli.ts', 'Segmentation', 'archon', 'cache', 'output', 'Delete', root]) {
     assert(!outputs.at(-1).includes(hidden), `${hidden} in: ${outputs.at(-1)}`);
   }
-  // The only server path a message may name is the build tools folder the owner is told to delete.
-  assert.deepEqual(outputs.at(-1).match(/\/\S*/g) ?? [], outputs.at(-1).includes('Delete the folder') ? [buildToolsCache] : [], outputs.at(-1));
+  // No message names a server path.
+  assert.deepEqual(outputs.at(-1).match(/\/\S*/g) ?? [], [], outputs.at(-1));
 }
 assert.equal(new Set(refusalCases.map(([, expected]) => expected)).size, 12);
+
+// When the final check finds the downloaded build tools missing, damaged or failing, trying setup again
+// replaces that download with no step by hand. The stand-in install downloads the build tools only when their
+// folder is not there, as the pinned factory's install does, so a damaged copy is fixed only if setup deletes it.
+const replaceCases = [
+  ['deleted-folder', folder => rm(folder, { recursive: true, force: true }),
+    folder => `[Errno 2] No such file or directory: PosixPath('${folder}')`, SOURCE_MISSING],
+  ['folder-is-file', async folder => { await rm(folder, { recursive: true, force: true }); await writeFile(folder, 'not a folder'); },
+    folder => `[Errno 20] Not a directory: PosixPath('${folder}')`, SOURCE_MISSING],
+  ['git-in-download', folder => writeFile(join(folder, 'damaged'), ''),
+    () => "Command exited 128: ['git', 'rev-parse', 'HEAD']\nfatal: not a git repository (or any of the parent directories): .git", SOURCE_DAMAGED],
+  ['build-tools-fail', folder => writeFile(join(folder, 'damaged'), ''),
+    folder => `Command exited 1: ['bun', '${folder}/packages/cli/src/cli.ts', 'workflow']\nerror: Cannot find module '@archon/core'`, TOOLS_FAIL],
+  ['changed-download', folder => writeFile(join(folder, 'damaged'), ''),
+    folder => `Pinned source has changes (damaged). The pinned tree is verified byte for byte. Restore it with: rm -rf ${folder} && python3 bin/factory.py init from your repo.`, SOURCE_DAMAGED]
+];
+for (const [name, damage, report, expected] of replaceCases) {
+  const repository = `owner/replace-${name}`;
+  const caseRoot = join(root, `replace-${name}`);
+  const download = join(caseRoot, 'cache/factory/archon/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb');
+  let downloads = 0;
+  let checks = 0;
+  const options = outputs => {
+    let answer = 0;
+    return {
+      config: { ...defaults(root), projectsRoot: join(caseRoot, 'projects') }, paths: { state: join(caseRoot, 'state') },
+      commands: {
+        run: async (command, args, runOptions = {}) => {
+          if (command === 'git' && args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` };
+          if (command === 'python3' && args.at(-1) === 'init') {
+            await mkdir(join(runOptions.cwd, '.factory'), { recursive: true });
+            await writeFile(join(runOptions.cwd, '.factory', 'consumer.json'), JSON.stringify({ source: download }));
+            await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
+            const present = await stat(download).then(() => true, () => false);
+            if (!present) {
+              await mkdir(download, { recursive: true });
+              downloads += 1;
+            }
+            return { stdout: '' };
+          }
+          if (command === 'python3' && args.at(-1) === 'doctor') {
+            checks += 1;
+            if (checks === 1) await damage(download);
+            const whole = await stat(download).then(entry => entry.isDirectory(), () => false)
+              && !(await stat(join(download, 'damaged')).then(() => true, () => false));
+            if (whole) return { stdout: '{}' };
+            throw Object.assign(new Error('python3 failed.'), { stderr: `Factory refused: ${report(download)}\n` });
+          }
+          return retryRun(command, args, runOptions);
+        }
+      },
+      github: { begin: async () => ({ url: 'https://example.test/create' }), complete: async () => credentials, install: async () => true },
+      prompt: async () => ['Purpose.', 'Users.'][answer++],
+      output: value => outputs.push(value)
+    };
+  };
+  const first = [];
+  await assert.rejects(setupRepository(repository, options(first)),
+    error => error instanceof ReportedSetupError && error.message === 'final-check', name);
+  assert.equal(first.at(-1), expected, name);
+  assert.equal(downloads, 1, name);
+  const second = [];
+  await setupRepository(repository, options(second));
+  assert(second.at(-1).startsWith(`Setup is complete for ${repository}.`), `${name}: ${second.at(-1)}`);
+  assert.equal(downloads, 2, name);
+  assert.equal(checks, 2, name);
+  assert((await stat(download)).isDirectory(), name);
+  assert(!(await readdir(join(caseRoot, 'state'), { recursive: true })).some(entry => entry.endsWith('replace-build-tools.json')), name);
+}
+
+// A refusal that is not about the download leaves the download alone on retry, and a recorded folder that is
+// not a download folder named with its revision is never deleted.
+{
+  const caseRoot = join(root, 'replace-other');
+  const repository = 'owner/replace-other';
+  const download = join(caseRoot, 'cache/factory/archon/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb');
+  const keep = join(caseRoot, 'keep');
+  await mkdir(download, { recursive: true });
+  await mkdir(keep, { recursive: true });
+  let checks = 0;
+  const run = (source, report) => async (command, args, runOptions = {}) => {
+    if (command === 'git' && args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` };
+    if (command === 'python3' && args.at(-1) === 'init') {
+      await mkdir(join(runOptions.cwd, '.factory'), { recursive: true });
+      await writeFile(join(runOptions.cwd, '.factory', 'consumer.json'), JSON.stringify({ source }));
+      await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
+      return { stdout: '' };
+    }
+    if (command === 'python3' && args.at(-1) === 'doctor') {
+      checks += 1;
+      throw Object.assign(new Error('python3 failed.'), { stderr: `Factory refused: ${report}\n` });
+    }
+    return retryRun(command, args, runOptions);
+  };
+  for (const [source, report] of [
+    [download, 'No bash to run the holdout fence the way Claude Code runs hooks'],
+    [download, 'No bash to run the holdout fence the way Claude Code runs hooks'],
+    [keep, "Command exited 128: ['git', 'rev-parse', 'HEAD']"],
+    [keep, "Command exited 128: ['git', 'rev-parse', 'HEAD']"]
+  ]) {
+    let answer = 0;
+    await assert.rejects(setupRepository(repository, {
+      config: { ...defaults(root), projectsRoot: join(caseRoot, 'projects') }, paths: { state: join(caseRoot, 'state') },
+      commands: { run: run(source, report) },
+      github: { begin: async () => ({ url: 'https://example.test/create' }), complete: async () => credentials, install: async () => true },
+      prompt: async () => ['Purpose.', 'Users.'][answer++],
+      output: () => {}
+    }), error => error instanceof ReportedSetupError && error.message === 'final-check');
+  }
+  assert.equal(checks, 4);
+  assert((await stat(download)).isDirectory());
+  assert((await stat(keep)).isDirectory());
+}
 
 const githubFailureMessages = [];
 const githubFailureCalls = [];
