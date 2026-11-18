@@ -648,21 +648,89 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
 }
 
 {
+  // The credential folder stops accepting new files right after GitHub hands out the builder keys.
   const retryState = join(root, 'retry-write-after-exchange');
-  const credentialDirectory = credentialPath(retryState, 'owner/lost-keys');
+  const credentialDirectory = credentialPath(retryState, 'owner/write-fail');
+  const pendingPath = join(credentialDirectory, 'builder-app-pending.json');
+  let lockOnce = true;
+  const standIn = standInGithub({
+    onExchange: async () => { if (lockOnce) { lockOnce = false; await chmod(credentialDirectory, 0o500); } }
+  });
+  let first;
+  let stillLocked;
+  try {
+    first = await setupAttempt('owner/write-fail', retryState, standIn.github);
+    stillLocked = await setupAttempt('owner/write-fail', retryState, standIn.github);
+  } finally {
+    await chmod(credentialDirectory, 0o700);
+  }
+  for (const attempt of [first, stillLocked]) {
+    assert(attempt.error instanceof ReportedSetupError && attempt.error.message === 'credential-location');
+    assert.equal(attempt.messages.at(-1), 'Setup stopped because this server would not let it save the GitHub App keys in its private folder. Allow setup to write to that folder before trying setup again.');
+  }
+  assert.equal((await stat(pendingPath)).mode & 0o777, 0o600);
+  assert.equal(JSON.parse(await readFile(pendingPath, 'utf8')).credentials.slug, 'code-builder-1');
+  assert(!JSON.stringify(await readTree(projectStatePath(retryState, 'owner/write-fail'))).includes('SENTINEL'));
+  assert.deepEqual(standIn.counts, { builder: 1, release: 0 });
+  const second = await setupAttempt('owner/write-fail', retryState, standIn.github);
+  assert.equal(second.error, undefined);
+  assert(completedFor('owner/write-fail')(second.messages.at(-1)));
+  assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(standIn.live, { builder: 1, release: 1 });
+  assert.equal(JSON.parse(await readFile(join(credentialDirectory, 'builder-app.json'), 'utf8')).slug, 'code-builder-1');
+  assert.deepEqual(await pendingFiles(credentialDirectory), []);
+}
+
+{
+  // The keys file itself cannot be written (something else is in its place) while the folder can.
+  const retryState = join(root, 'retry-keys-blocked');
+  const credentialDirectory = credentialPath(retryState, 'owner/keys-blocked');
   const blockedPath = join(credentialDirectory, 'builder-app.json');
   let blockOnce = true;
   const standIn = standInGithub({
     onExchange: async () => { if (blockOnce) { blockOnce = false; await mkdir(join(blockedPath, 'blocked'), { recursive: true }); } }
   });
-  const first = await setupAttempt('owner/lost-keys', retryState, standIn.github);
-  assert(first.error instanceof ReportedSetupError && first.error.message === 'lost-app-keys');
-  assert.equal(first.messages.at(-1), 'Setup stopped because this server would not let it save the builder App keys in its private folder, and GitHub hands them out only once. Delete the builder App for owner/lost-keys in your GitHub App settings and allow setup to write to that folder, then try setup again.');
-  assert(!(await isPresent(join(credentialDirectory, 'builder-app-pending.json'))));
-  standIn.live.builder -= 1;
+  const first = await setupAttempt('owner/keys-blocked', retryState, standIn.github);
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'credential-location');
   await rm(blockedPath, { recursive: true });
+  const second = await setupAttempt('owner/keys-blocked', retryState, standIn.github);
+  assert(completedFor('owner/keys-blocked')(second.messages.at(-1)));
+  assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(await pendingFiles(credentialDirectory), []);
+}
+
+{
+  // Nothing in the credential folder can be written after the exchange, not even the pending record:
+  // the keys are lost. The owner is told to delete the App once, and following that finishes setup.
+  const retryState = join(root, 'retry-keys-lost');
+  const credentialDirectory = credentialPath(retryState, 'owner/lost-keys');
+  const pendingPath = join(credentialDirectory, 'builder-app-pending.json');
+  let lockOnce = true;
+  const standIn = standInGithub({
+    onExchange: async () => {
+      if (!lockOnce) return;
+      lockOnce = false;
+      await chmod(pendingPath, 0o400);
+      await chmod(credentialDirectory, 0o500);
+    }
+  });
+  let first;
+  try {
+    first = await setupAttempt('owner/lost-keys', retryState, standIn.github);
+  } finally {
+    await chmod(credentialDirectory, 0o700);
+    await chmod(pendingPath, 0o600);
+  }
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'credential-location');
+  assert(!first.messages.some(message => message.includes('delete')));
   const second = await setupAttempt('owner/lost-keys', retryState, standIn.github);
-  assert(completedFor('owner/lost-keys')(second.messages.at(-1)));
+  assert(second.error instanceof ReportedSetupError && second.error.message === 'leftover-app');
+  assert.equal(second.messages.at(-1), 'Setup stopped because it could not finish connecting the builder App. If GitHub created a builder App for owner/lost-keys, delete it in your GitHub App settings, then try setup again.');
+  assert.deepEqual(await pendingFiles(credentialDirectory), []);
+  standIn.live.builder -= 1;
+  const third = await setupAttempt('owner/lost-keys', retryState, standIn.github);
+  assert.equal(third.error, undefined);
+  assert(completedFor('owner/lost-keys')(third.messages.at(-1)));
   assert.deepEqual(standIn.live, { builder: 1, release: 1 });
   assert.deepEqual(await pendingFiles(credentialDirectory), []);
 }
