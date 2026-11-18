@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadSettings, ReportedSetupError, setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
@@ -1132,6 +1132,67 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   assert.deepEqual(third.messages, [`The Forge is already set up for ${repository}.`]);
 }
 
+// Stored App details that are a link whose target is gone are damaged, not finished: the run stops with the
+// damaged-App sentence instead of reporting setup as done, and once the owner deletes that App on GitHub the
+// next run creates it again, leaving one App per role.
+for (const [kind, finished] of [['builder', false], ['release', true]]) {
+  const repository = `owner/${kind}-broken-link-${finished ? 'finished' : 'unfinished'}`;
+  const retryState = join(root, `retry-broken-link-${kind}`);
+  const stateDirectory = projectStatePath(retryState, repository);
+  const linkPath = join(credentialPath(retryState, repository), `${kind}-app.json`);
+  const standIn = standInGithub();
+  assert.equal((await setupAttempt(repository, retryState, standIn.github)).error, undefined);
+  if (!finished) await rm(join(stateDirectory, 'registration.json'));
+  await rm(linkPath);
+  await symlink(join(retryState, 'gone', 'target.json'), linkPath);
+  const first = await setupAttempt(repository, retryState, standIn.github);
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'damaged-app', `${kind} ${finished}`);
+  assert.equal(first.messages.at(-1), `Setup stopped because the saved details of the ${kind} App on this server are damaged. Delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again.`);
+  assertNoInternalText(first.messages.at(-1), retryState);
+  assert(!first.messages.some(message => message.startsWith('Setup is complete') || message.startsWith('The Forge is already set up')));
+  await assert.rejects(lstat(linkPath));
+  assert(!(await isPresent(join(stateDirectory, `${kind}-installation.json`))));
+  standIn.live[kind] -= 1;
+  const second = await setupAttempt(repository, retryState, standIn.github);
+  assert.equal(second.error, undefined);
+  assert(second.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
+  assert(completedFor(repository)(second.messages.at(-1)));
+  assert.deepEqual(standIn.live, { builder: 1, release: 1 });
+}
+
+// An empty App details file is nothing saved: setup does exactly what it does when that file is missing,
+// on a fresh setup and after a finished one, and never calls it damaged.
+for (const [n, prepare] of [
+  [1, async (retryState, repository, empty) => {
+    if (!empty) return;
+    await mkdir(credentialPath(retryState, repository), { recursive: true, mode: 0o700 });
+    await writeFile(join(credentialPath(retryState, repository), 'builder-app.json'), '', { mode: 0o600 });
+  }],
+  [2, async (retryState, repository, empty, github) => {
+    assert.equal((await setupAttempt(repository, retryState, github)).error, undefined);
+    const path = join(credentialPath(retryState, repository), 'release-app.json');
+    if (empty) await writeFile(path, ''); else await rm(path);
+  }]
+]) {
+  const repository = `owner/empty-app-${n}`;
+  const runs = [];
+  for (const empty of [true, false]) {
+    const retryState = join(root, `${empty ? 'empty' : 'deleted'}-app-${n}`);
+    const standIn = standInGithub();
+    await prepare(retryState, repository, empty, standIn.github);
+    runs.push({ ...(await setupAttempt(repository, retryState, standIn.github)), counts: standIn.counts });
+  }
+  const [emptied, deleted] = runs;
+  assert.deepEqual(emptied.messages, deleted.messages);
+  assert.equal(emptied.error?.message, deleted.error?.message);
+  assert.deepEqual(emptied.counts, deleted.counts);
+  assert(!emptied.messages.some(message => message.includes('damaged')), JSON.stringify(emptied.messages));
+  if (n === 1) {
+    assert(completedFor(repository)(emptied.messages.at(-1)));
+    assert.deepEqual(emptied.counts, { builder: 1, release: 1 });
+  }
+}
+
 {
   // A damaged file setup cannot remove gives the existing stop for an unwritable private folder.
   const repository = 'owner/damaged-locked';
@@ -1433,10 +1494,6 @@ for (const [name, mission] of [
   ['mission-directory', {
     prepare: async ({ state }) => mkdir(missionPath(state, 'mission-directory'), { recursive: true }),
     undo: async ({ state }) => rm(missionPath(state, 'mission-directory'), { recursive: true })
-  }],
-  ['unwritable-mission', {
-    onPrompt: async ({ state }) => chmod(join(state, 'projects', 'owner', 'unwritable-mission'), 0o500),
-    undo: async ({ state }) => chmod(join(state, 'projects', 'owner', 'unwritable-mission'), 0o700)
   }]
 ]) {
   await stopThenRetry(name, {
@@ -1445,6 +1502,49 @@ for (const [name, mission] of [
     before: [...appPages, FORGE_APPS_KEPT],
     message: 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
   });
+}
+
+// Answers that cannot be saved are lost: the stop says so and that setup asks them again.
+const MISSION_NOT_SAVED = 'Setup stopped because it could not save your answers to the mission questions on this server, so they were not kept. Let setup write to the folder where the Forge keeps its settings, then try setup again; it asks those questions again.';
+await stopThenRetry('unwritable-mission', {
+  onPrompt: async ({ state }) => chmod(join(state, 'projects', 'owner', 'unwritable-mission'), 0o500),
+  undo: async ({ state }) => chmod(join(state, 'projects', 'owner', 'unwritable-mission'), 0o700),
+  reason: 'settings',
+  before: [...appPages, FORGE_APPS_KEPT],
+  message: MISSION_NOT_SAVED
+});
+
+// The run after that asks the mission questions once and saves the answers; the run after it asks nothing.
+{
+  const repository = 'owner/mission-not-saved';
+  const project = await retryProject(repository);
+  const stateDirectory = join(root, 'retry-state/projects/owner/mission-not-saved');
+  const options = project.options();
+  const ask = options.prompt;
+  let locked = false;
+  try {
+    await assert.rejects(setupRepository(repository, {
+      ...options,
+      prompt: async question => {
+        if (!locked) { locked = true; await chmod(stateDirectory, 0o500); }
+        return ask(question);
+      }
+    }), error => error instanceof ReportedSetupError && error.message === 'settings');
+  } finally {
+    await chmod(stateDirectory, 0o700);
+  }
+  assert.deepEqual(project.record.messages.slice(-2), [FORGE_APPS_KEPT, MISSION_NOT_SAVED]);
+  assert(!(await isPresent(join(stateDirectory, 'mission.json'))));
+  project.reset();
+  await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
+    error => error instanceof ReportedSetupError && error.message === 'final-check');
+  assert.deepEqual(project.record.prompts, ['What is this software for?', 'Who uses it?']);
+  assert(await isPresent(join(stateDirectory, 'mission.json')));
+  assert.equal(project.record.begins, 0);
+  project.reset();
+  assert.equal((await setupRepository(repository, project.options())).completed, true);
+  assert.deepEqual(project.record.prompts, []);
+  assert.equal(await project.missionSections(), 1);
 }
 
 // A mission question left empty, after the Apps exist: a plain stop that says the Apps are kept.
@@ -1506,6 +1606,26 @@ for (const [file, stopAt, damagedMessage] of [
   const result = await setupRepository(repository, project.options());
   assert.equal(result.completed, true);
   assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
+  assert.equal(project.record.begins, 0);
+  assert.deepEqual(project.record.prompts, file === 'mission.json' ? ['What is this software for?', 'Who uses it?'] : []);
+  assert.equal(await project.missionSections(), 1);
+}
+
+// An empty saved file is nothing saved: setup carries on as if it were missing, without calling it damaged.
+for (const [file, stopAt] of [['mission.json', 'final-check'], ['registration.json', undefined]]) {
+  const repository = `owner/empty-${file.replace('.json', '')}`;
+  const project = await retryProject(repository);
+  if (stopAt) {
+    await assert.rejects(setupRepository(repository, project.options({ failAt: stopAt })),
+      error => error instanceof ReportedSetupError && error.message === stopAt);
+  } else {
+    assert.equal((await setupRepository(repository, project.options())).completed, true);
+  }
+  await writeFile(join(root, 'retry-state', 'projects', repository, file), '');
+  project.reset();
+  assert.equal((await setupRepository(repository, project.options())).completed, true);
+  assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
+  assert(!project.record.messages.some(message => message.includes('damaged')), JSON.stringify(project.record.messages));
   assert.equal(project.record.begins, 0);
   assert.deepEqual(project.record.prompts, file === 'mission.json' ? ['What is this software for?', 'Who uses it?'] : []);
   assert.equal(await project.missionSections(), 1);
