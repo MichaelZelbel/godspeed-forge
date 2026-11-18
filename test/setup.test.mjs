@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { ReportedSetupError, setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
 import { findSignedInAgent } from '../lib/agent.mjs';
 import {
-  APP_PERMISSIONS, APP_PERMISSION_DOCUMENTATION, builderManifest, createApps,
+  APP_PERMISSIONS, APP_PERMISSION_DOCUMENTATION, AppSetupStop, builderManifest, createApps,
   registrationAction, releaseManifest
 } from '../lib/github-apps.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
@@ -61,7 +61,7 @@ await setupRepository('owner/repo', {
   config: { ...defaults(root), projectsRoot }, paths: { state }, commands: { run },
   github: {
     begin: async manifest => { manifests.push(manifest); return { url: `https://example.test/${manifest.name}` }; },
-    complete: async () => credentials,
+    callback: async () => 'code', exchange: async () => credentials,
     install: async details => { installations.push(details); return true; }
   },
   prompt: async () => ['Keep releases dependable.', 'Small software teams.'][answer++],
@@ -88,7 +88,7 @@ await setupRepository('owner/codex-repo', {
   commands: { run: async (command, args, options) => command === 'claude' ? Promise.reject(new Error('not signed in')) : run(command, args, options) },
   github: {
     begin: async manifest => ({ url: `https://example.test/${manifest.name}` }),
-    complete: async () => credentials,
+    callback: async () => 'code', exchange: async () => credentials,
     install: async () => true
   },
   prompt: async () => ['Keep releases dependable.', 'Small software teams.'][codexAnswer++],
@@ -132,11 +132,13 @@ for (const kind of ['builder', 'release']) {
     repository: 'owner/repo', confirmed: true
   });
 }
+assert.deepEqual((await readdir(join(state, 'credentials/owner/repo'))).sort(), ['builder-app.json', 'release-app.json']);
 const serializedProjectState = JSON.stringify({
   config: { projectsRoot, releaseCost: { message: 'Release cost.' } },
   paths: { state },
   projectState: await readTree(join(state, 'projects/owner/repo'))
 });
+assert(!serializedProjectState.includes('"code"'));
 for (const [field, secret] of Object.entries(credentials)) {
   assert(!serializedProjectState.includes(field));
   assert(!serializedProjectState.includes(String(secret)));
@@ -209,7 +211,7 @@ await assert.rejects(setupRepository('owner/failing-doctor', {
     }
   },
   github: {
-    begin: async () => ({ url: 'https://example.test/create' }), complete: async () => credentials,
+    begin: async () => ({ url: 'https://example.test/create' }), callback: async () => 'code', exchange: async () => credentials,
     install: async () => true
   },
   prompt: async () => ['Purpose.', 'Users.'][failedAnswer++], output: value => failedMessages.push(value)
@@ -282,7 +284,7 @@ for (const refusedKind of ['builder', 'release']) {
     credentialDirectory: join(refusedState, 'credentials'), output: () => {},
     github: {
       begin: async () => ({ url: 'https://example.test/create' }),
-      complete: async () => credentials,
+      callback: async () => 'code', exchange: async () => credentials,
       install: async ({ kind }) => kind !== refusedKind
     }
   }), new RegExp(`Install the ${refusedKind} App`));
@@ -295,7 +297,7 @@ await assert.rejects(createApps({
   credentialDirectory: join(incompleteCredentialsState, 'credentials'), output: () => {},
   github: {
     begin: async () => ({ url: 'https://example.test/create' }),
-    complete: async () => ({ id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' }),
+    callback: async () => 'code', exchange: async () => ({ id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' }),
     install: async () => { throw new Error('must not install incomplete credentials'); }
   }
 }), /did not return the builder App credentials/);
@@ -332,7 +334,7 @@ await createApps({
   github: {
     exists: async path => { try { await stat(path); return true; } catch { return false; } },
     begin: async manifest => ({ url: `https://example.test/${manifest.name}` }),
-    complete: async () => ({ ...credentials, slug: 'release-slug' }),
+    callback: async () => 'code', exchange: async () => ({ ...credentials, slug: 'release-slug' }),
     install: async ({ kind }) => { resumed.push(kind); return true; }
   }
 });
@@ -401,3 +403,207 @@ await assert.rejects(setupRepository('owner/other', {
 }), error => error instanceof ReportedSetupError && error.message === 'agent');
 assert.deepEqual(stopped, ['Setup stopped because neither Claude Code nor Codex is signed in. Sign in to one of them before trying setup again.']);
 await assert.rejects(stat(emptyRoot));
+
+const isPresent = async path => { try { await stat(path); return true; } catch { return false; } };
+
+function standInGithub(options = {}) {
+  const counts = { builder: 0, release: 0 };
+  const live = { builder: 0, release: 0 };
+  const pending = { ...options };
+  let current;
+  const github = {
+    exists: isPresent,
+    begin: async manifest => {
+      const kind = manifest.name === 'Forge builder' ? 'builder' : 'release';
+      if (pending.failBeginOnce === kind) { delete pending.failBeginOnce; throw new Error('GitHub page could not be prepared'); }
+      current = kind;
+      counts[kind] += 1;
+      live[kind] += 1;
+      return { url: `https://example.test/${manifest.name}` };
+    },
+    callback: async () => current === options.noCallback ? null : `code-${current}-${counts[current]}`,
+    exchange: async code => {
+      const kind = code.split('-')[1];
+      await options.onExchange?.(kind);
+      if (pending.failExchangeOnce === kind) { delete pending.failExchangeOnce; throw new Error('network unreachable'); }
+      if (pending.refuseExchangeOnce === kind) {
+        delete pending.refuseExchangeOnce;
+        throw Object.assign(new Error('GitHub refused the App code.'), { refused: true });
+      }
+      return { ...credentials, slug: code };
+    },
+    install: async () => true
+  };
+  return { counts, live, github };
+}
+
+async function setupAttempt(repository, stateDirectory, github) {
+  const attemptMessages = [];
+  let attemptAnswer = 0;
+  const retryRun = async (command, args, options) => command === 'git' && args[0] === 'remote'
+    ? { stdout: `https://github.com/${repository}.git\n` }
+    : run(command, args, options);
+  try {
+    await setupRepository(repository, {
+      config: { ...defaults(root), projectsRoot }, paths: { state: stateDirectory }, commands: { run: retryRun }, github,
+      prompt: async () => ['Purpose.', 'Users.'][attemptAnswer++], output: value => attemptMessages.push(value)
+    });
+    return { messages: attemptMessages };
+  } catch (error) {
+    return { messages: attemptMessages, error };
+  }
+}
+
+const pendingFiles = async directory => (await readdir(directory)).filter(name => name.endsWith('-app-pending.json'));
+const completedFor = repository => message => message.startsWith(`Setup is complete for ${repository}.`);
+
+{
+  const retryState = join(root, 'retry-unwritable');
+  const credentialDirectory = credentialPath(retryState, 'owner/unwritable');
+  await mkdir(credentialDirectory, { recursive: true, mode: 0o700 });
+  await chmod(credentialDirectory, 0o500);
+  const standIn = standInGithub();
+  let first;
+  try {
+    first = await setupAttempt('owner/unwritable', retryState, standIn.github);
+  } finally {
+    await chmod(credentialDirectory, 0o700);
+  }
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'credential-location');
+  assert.equal(first.messages.at(-1), 'Setup stopped because this server would not let it save the GitHub App keys in its private folder. Allow setup to write to that folder before trying setup again.');
+  assert(!first.messages.some(message => message.includes('Complete the GitHub page')));
+  assert.deepEqual(standIn.counts, { builder: 0, release: 0 });
+  const second = await setupAttempt('owner/unwritable', retryState, standIn.github);
+  assert.equal(second.error, undefined);
+  assert(completedFor('owner/unwritable')(second.messages.at(-1)));
+  assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
+}
+
+{
+  const retryState = join(root, 'retry-transport');
+  const credentialDirectory = credentialPath(retryState, 'owner/transport');
+  const standIn = standInGithub({ failExchangeOnce: 'builder' });
+  const first = await setupAttempt('owner/transport', retryState, standIn.github);
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'github-pending');
+  assert.equal(first.messages.at(-1), 'Setup stopped because GitHub could not be reached to finish connecting the builder App. Try setup again; it will finish this App without creating another.');
+  const pendingPath = join(credentialDirectory, 'builder-app-pending.json');
+  assert.equal((await stat(pendingPath)).mode & 0o777, 0o600);
+  assert.deepEqual(JSON.parse(await readFile(pendingPath, 'utf8')), { code: 'code-builder-1' });
+  assert(!JSON.stringify(await readTree(projectStatePath(retryState, 'owner/transport'))).includes('code-builder'));
+  const second = await setupAttempt('owner/transport', retryState, standIn.github);
+  assert(completedFor('owner/transport')(second.messages.at(-1)));
+  assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(await pendingFiles(credentialDirectory), []);
+}
+
+{
+  const retryState = join(root, 'retry-write-after-exchange');
+  const credentialDirectory = join(retryState, 'credentials');
+  let lockOnce = true;
+  const standIn = standInGithub({
+    onExchange: async () => { if (lockOnce) { lockOnce = false; await chmod(credentialDirectory, 0o500); } }
+  });
+  const options = { repository: 'owner/repo', stateDirectory: retryState, credentialDirectory, github: standIn.github, output: () => {} };
+  try {
+    await assert.rejects(createApps(options), error => error instanceof AppSetupStop && error.reason === 'not-writable' && error.kind === 'builder');
+  } finally {
+    await chmod(credentialDirectory, 0o700);
+  }
+  assert(await isPresent(join(credentialDirectory, 'builder-app-pending.json')));
+  await createApps(options);
+  assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
+  assert(await isPresent(join(credentialDirectory, 'builder-app.json')));
+  assert.deepEqual(await pendingFiles(credentialDirectory), []);
+}
+
+{
+  const retryState = join(root, 'retry-refused');
+  const standIn = standInGithub({ refuseExchangeOnce: 'builder' });
+  const first = await setupAttempt('owner/refused', retryState, standIn.github);
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'leftover-app');
+  assert.equal(first.messages.at(-1), 'Setup stopped because it could not finish connecting the builder App. If GitHub created a builder App for owner/refused, delete it in your GitHub App settings, then try setup again.');
+  assert.deepEqual(await pendingFiles(credentialPath(retryState, 'owner/refused')), []);
+  standIn.live.builder -= 1;
+  const second = await setupAttempt('owner/refused', retryState, standIn.github);
+  assert(completedFor('owner/refused')(second.messages.at(-1)));
+  assert.deepEqual(standIn.live, { builder: 1, release: 1 });
+  assert.equal(standIn.counts.release, 1);
+}
+
+{
+  const interruptedCredentialDirectory = join(root, 'retry-interrupted', 'credentials');
+  const pendingPath = join(interruptedCredentialDirectory, 'builder-app-pending.json');
+  await writePrivateJson(pendingPath, { code: null });
+  const standIn = standInGithub();
+  await assert.rejects(createApps({
+    repository: 'owner/repo', stateDirectory: join(root, 'retry-interrupted'),
+    credentialDirectory: interruptedCredentialDirectory, github: standIn.github, output: () => {}
+  }), error => error instanceof AppSetupStop && error.reason === 'leftover' && error.kind === 'builder');
+  assert.deepEqual(standIn.counts, { builder: 0, release: 0 });
+  assert(!(await isPresent(pendingPath)));
+
+  const noCallback = standInGithub({ noCallback: 'builder' });
+  const noCallbackCredentials = join(root, 'retry-no-callback', 'credentials');
+  await assert.rejects(createApps({
+    repository: 'owner/repo', stateDirectory: join(root, 'retry-no-callback'),
+    credentialDirectory: noCallbackCredentials, github: noCallback.github, output: () => {}
+  }), error => error instanceof AppSetupStop && error.reason === 'leftover' && error.kind === 'builder');
+  assert.deepEqual(noCallback.counts, { builder: 1, release: 0 });
+  assert.deepEqual(await pendingFiles(noCallbackCredentials), []);
+}
+
+{
+  const retryState = join(root, 'retry-builder-stored');
+  const credentialDirectory = join(retryState, 'credentials');
+  await writePrivateJson(join(credentialDirectory, 'builder-app.json'), { ...credentials, slug: 'builder-slug' });
+  await writePrivateJson(join(retryState, 'builder-installation.json'), { repository: 'owner/repo', confirmed: true });
+  const standIn = standInGithub();
+  await createApps({ repository: 'owner/repo', stateDirectory: retryState, credentialDirectory, github: standIn.github, output: () => {} });
+  assert.deepEqual(standIn.counts, { builder: 0, release: 1 });
+}
+
+{
+  const retryState = join(root, 'retry-release-stop');
+  const standIn = standInGithub({ failBeginOnce: 'release' });
+  const first = await setupAttempt('owner/release-stop', retryState, standIn.github);
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'github');
+  assert.equal(first.messages.at(-1), 'Setup stopped because the GitHub connection was not completed. Complete the GitHub page before trying setup again.');
+  assert.deepEqual(await pendingFiles(credentialPath(retryState, 'owner/release-stop')), []);
+  const second = await setupAttempt('owner/release-stop', retryState, standIn.github);
+  assert(completedFor('owner/release-stop')(second.messages.at(-1)));
+  assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
+}
+
+await createApps({
+  repository: 'owner/repo', stateDirectory: projectStatePath(state, 'owner/repo'),
+  credentialDirectory: credentialPath(state, 'owner/repo'), output: () => {},
+  github: { exists: isPresent, begin: async () => { throw new Error('must not create'); } }
+});
+
+{
+  const requests = [];
+  const responses = [];
+  const adapter = createGithubAdapter({
+    input: { question: async () => 'http://127.0.0.1/?code=abc' },
+    fetch: async (url, init) => {
+      requests.push({ url, method: init.method });
+      const next = responses.shift();
+      if (next instanceof Error) throw next;
+      return { status: next.status, ok: next.status < 300, json: async () => next.body };
+    }
+  });
+  assert.equal(await adapter.callback(), 'abc');
+  assert.equal(await createGithubAdapter({ input: { question: async () => 'http://127.0.0.1/' } }).callback(), null);
+  assert.equal(await createGithubAdapter({ input: { question: async () => 'not an address' } }).callback(), null);
+  for (const status of [404, 422]) {
+    responses.push({ status });
+    await assert.rejects(adapter.exchange('abc'), error => error.refused === true);
+  }
+  responses.push({ status: 502 });
+  await assert.rejects(adapter.exchange('abc'), error => !error.refused);
+  responses.push(new TypeError('fetch failed'));
+  await assert.rejects(adapter.exchange('abc'), error => !error.refused);
+  responses.push({ status: 201, body: credentials });
+  assert.deepEqual(await adapter.exchange('abc'), credentials);
+  assert(requests.every(request => request.url === 'https://api.github.com/app-manifests/abc/conversions' && request.method === 'POST'));
+}
