@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { chmod, lstat, mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { generateKeyPairSync, verify } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadSettings, ReportedSetupError, setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
@@ -54,6 +55,8 @@ const run = async (command, args, options = {}) => {
     await mkdir(join(options.cwd, 'factory'), { recursive: true });
     await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n\nFactory template.\n');
     await writeFile(join(options.cwd, 'factory/consumer.py'), '# factory stand-in\n');
+    await mkdir(join(options.cwd, '.factory'), { recursive: true });
+    await writeFile(join(options.cwd, '.factory/consumer.json'), '{}\n');
   }
   return { stdout: '' };
 };
@@ -817,8 +820,12 @@ await assert.rejects(stat(emptyRoot));
 
 const isPresent = async path => { try { await stat(path); return true; } catch { return false; } };
 
+// deleted and uninstalled name the Apps GitHub answers for as gone from the account or from the repository;
+// unreachable names the Apps whose check fails as if GitHub could not be reached.
 function standInGithub(options = {}) {
   const counts = { builder: 0, release: 0 };
+  const installs = { builder: 0, release: 0 };
+  const onGithub = { deleted: new Set(), uninstalled: new Set(), unreachable: new Set() };
   const live = { builder: 0, release: 0 };
   const pending = { ...options };
   const usedCodes = new Set();
@@ -845,9 +852,14 @@ function standInGithub(options = {}) {
       usedCodes.add(code);
       return { ...credentials, slug: code };
     },
-    install: async () => true
+    install: async ({ kind }) => { installs[kind] += 1; return true; },
+    appStatus: async ({ kind }) => {
+      if (onGithub.unreachable.has(kind)) throw new Error('network unreachable');
+      if (onGithub.deleted.has(kind)) return 'app-missing';
+      return onGithub.uninstalled.has(kind) ? 'not-installed' : 'installed';
+    }
   };
-  return { counts, live, github };
+  return { counts, live, installs, onGithub, github };
 }
 
 async function setupAttempt(repository, stateDirectory, github) {
@@ -1247,6 +1259,169 @@ for (const [n, prepare] of [
   assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
 }
 
+// A rerun after a finished setup checks what setup made before saying it is set up (#60). Each missing
+// piece stops with one plain message naming it, and following that message gets setup complete again.
+const appGoneStops = {
+  missing: (kind, repository) => [`Setup stopped because the saved details of the ${kind} App on this server are missing. Delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again.`, 'missing-app-details'],
+  gone: (kind, repository) => [`Setup stopped because the ${kind} App for ${repository} is no longer on your GitHub account. Try setup again, which creates it again; if your GitHub App settings still list a ${kind} App for ${repository}, delete it first.`, 'app-missing'],
+  uninstalled: (kind, repository) => [`Setup stopped because the ${kind} App is no longer installed on ${repository}. Try setup again, which asks you to install it again.`, 'app-not-installed'],
+  unchecked: (kind, repository) => [`Setup stopped because GitHub could not be reached to check the ${kind} App for ${repository}. Restore this server's access to GitHub before trying setup again.`, 'github-check'],
+  buildTools: repository => [`Setup stopped because the build tools setup installed in the project folder for ${repository} on this server are missing. Try setup again, which installs them again.`, 'factory-missing']
+};
+
+async function finishedSetup(name) {
+  const repository = `owner/${name}`;
+  const retryState = join(root, `finished-${name}`);
+  const standIn = standInGithub();
+  const first = await setupAttempt(repository, retryState, standIn.github);
+  assert(completedFor(repository)(first.messages.at(-1)), name);
+  return {
+    repository, retryState, standIn,
+    stateDirectory: projectStatePath(retryState, repository),
+    credentialDirectory: credentialPath(retryState, repository),
+    checkout: join(projectsRoot, repository),
+    attempt: () => setupAttempt(repository, retryState, standIn.github)
+  };
+}
+
+function assertStopped(attempt, [message, reason], serverRoot) {
+  assert(attempt.error instanceof ReportedSetupError, message);
+  assert.equal(attempt.error.message, reason);
+  assert.equal(attempt.messages.at(-1), message);
+  assert(!attempt.messages.some(line => line.includes('already set up')));
+  for (const line of attempt.messages) {
+    assertNoInternalText(line, serverRoot);
+    assert(!/factory|archon|config|token/i.test(line), line);
+    for (const secret of Object.values(credentials)) assert(!line.includes(String(secret)), line);
+  }
+}
+
+for (const kind of ['builder', 'release']) {
+  const other = kind === 'builder' ? 'release' : 'builder';
+  {
+    // The App was deleted on GitHub.
+    const project = await finishedSetup(`${kind}-deleted`);
+    project.standIn.onGithub.deleted.add(kind);
+    assertStopped(await project.attempt(), appGoneStops.gone(kind, project.repository), project.retryState);
+    assert(!(await isPresent(join(project.credentialDirectory, `${kind}-app.json`))));
+    assert(!(await isPresent(join(project.stateDirectory, `${kind}-installation.json`))));
+    assert(await isPresent(join(project.credentialDirectory, `${other}-app.json`)));
+    assert(!(await isPresent(join(project.stateDirectory, 'registration.json'))));
+    project.standIn.onGithub.deleted.delete(kind);
+    const next = await project.attempt();
+    assert.equal(next.error, undefined);
+    assert(next.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
+    assert(completedFor(project.repository)(next.messages.at(-1)));
+    assert.equal(project.standIn.counts[kind], 2);
+    assert.equal(project.standIn.counts[other], 1);
+    assert.deepEqual((await project.attempt()).messages, [`The Forge is already set up for ${project.repository}.`]);
+  }
+  {
+    // The App's saved details were deleted from this server.
+    const project = await finishedSetup(`${kind}-details-deleted`);
+    await rm(join(project.credentialDirectory, `${kind}-app.json`));
+    assertStopped(await project.attempt(), appGoneStops.missing(kind, project.repository), project.retryState);
+    assert(!(await isPresent(join(project.stateDirectory, `${kind}-installation.json`))));
+    assert(!(await isPresent(join(project.stateDirectory, 'registration.json'))));
+    const next = await project.attempt();
+    assert(next.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
+    assert(completedFor(project.repository)(next.messages.at(-1)));
+    assert.deepEqual(project.standIn.counts, { [kind]: 2, [other]: 1 });
+  }
+}
+
+{
+  // The App is still on GitHub but no longer installed on the repository: the next run asks to install it
+  // again and creates nothing.
+  const project = await finishedSetup('release-uninstalled');
+  project.standIn.onGithub.uninstalled.add('release');
+  assertStopped(await project.attempt(), appGoneStops.uninstalled('release', project.repository), project.retryState);
+  assert(await isPresent(join(project.credentialDirectory, 'release-app.json')));
+  assert(!(await isPresent(join(project.stateDirectory, 'release-installation.json'))));
+  project.standIn.onGithub.uninstalled.delete('release');
+  const next = await project.attempt();
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(project.standIn.installs, { builder: 1, release: 2 });
+}
+
+{
+  // Both Apps broken at once: the stop names the first, and the next run repairs both.
+  const project = await finishedSetup('both-broken');
+  project.standIn.onGithub.deleted.add('builder');
+  project.standIn.onGithub.uninstalled.add('release');
+  assertStopped(await project.attempt(), appGoneStops.gone('builder', project.repository), project.retryState);
+  assert(!(await isPresent(join(project.stateDirectory, 'release-installation.json'))));
+  project.standIn.onGithub.deleted.clear();
+  project.standIn.onGithub.uninstalled.clear();
+  const next = await project.attempt();
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 2, release: 1 });
+  assert.deepEqual(project.standIn.installs, { builder: 2, release: 2 });
+}
+
+{
+  // GitHub answers that the release App is gone but cannot be reached for the builder App: the stop is the
+  // unreachable check, nothing is removed, and once GitHub answers for both the next runs repair the release
+  // App only after checking the builder App again.
+  const project = await finishedSetup('one-unchecked');
+  const before = await readTree(project.retryState);
+  project.standIn.onGithub.deleted.add('release');
+  project.standIn.onGithub.unreachable.add('builder');
+  assertStopped(await project.attempt(), appGoneStops.unchecked('builder', project.repository), project.retryState);
+  assert.deepEqual(await readTree(project.retryState), before);
+  project.standIn.onGithub.unreachable.clear();
+  project.standIn.onGithub.deleted.add('builder');
+  assertStopped(await project.attempt(), appGoneStops.gone('builder', project.repository), project.retryState);
+  project.standIn.onGithub.deleted.clear();
+  const next = await project.attempt();
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 2, release: 2 });
+}
+
+for (const removed of ['settings', 'folder']) {
+  // The build tools' settings, or the whole project folder, are gone from this server.
+  const project = await finishedSetup(`build-tools-${removed}`);
+  await rm(removed === 'settings' ? join(project.checkout, '.factory/consumer.json') : project.checkout, { recursive: true });
+  assertStopped(await project.attempt(), appGoneStops.buildTools(project.repository), project.retryState);
+  assert(!(await isPresent(join(project.stateDirectory, 'registration.json'))));
+  const next = await project.attempt();
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert(await isPresent(join(project.checkout, '.factory/consumer.json')));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+}
+
+{
+  // GitHub cannot be reached: nothing is changed and the next run checks again. With nothing missing a rerun
+  // says it is set up, creates nothing and changes no saved file.
+  const project = await finishedSetup('nothing-missing');
+  const saved = async () => [await readTree(project.retryState), await readTree(project.checkout)];
+  const before = await saved();
+  project.standIn.onGithub.unreachable.add('builder').add('release');
+  assertStopped(await project.attempt(), appGoneStops.unchecked('builder', project.repository), project.retryState);
+  assert.deepEqual(await saved(), before);
+  project.standIn.onGithub.unreachable.clear();
+  const again = await project.attempt();
+  assert.equal(again.error, undefined);
+  assert.deepEqual(again.messages, [`The Forge is already set up for ${project.repository}.`]);
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(project.standIn.installs, { builder: 1, release: 1 });
+  assert.deepEqual(await saved(), before);
+}
+
+{
+  // An unfinished setup whose App details are gone while the App's install record stays does not skip that App.
+  const stateDirectory = join(root, 'details-gone-installed');
+  const credentialDirectory = join(stateDirectory, 'credentials');
+  const installationPath = join(stateDirectory, 'builder-installation.json');
+  await writePrivateJson(installationPath, { repository: 'owner/repo', confirmed: true });
+  const standIn = standInGithub();
+  await assert.rejects(createApps({ repository: 'owner/repo', stateDirectory, credentialDirectory, github: standIn.github, output: () => {} }),
+    error => error instanceof AppSetupStop && error.reason === 'missing' && error.kind === 'builder');
+  assert(!(await isPresent(installationPath)));
+  assert.deepEqual(standIn.counts, { builder: 0, release: 0 });
+}
+
 await createApps({
   repository: 'owner/repo', stateDirectory: projectStatePath(state, 'owner/repo'),
   credentialDirectory: credentialPath(state, 'owner/repo'), output: () => {},
@@ -1282,6 +1457,48 @@ await createApps({
   assert(requests.every(request => request.url === 'https://api.github.com/app-manifests/abc/conversions' && request.method === 'POST'));
 }
 
+{
+  // appStatus asks GitHub as the App itself, signed with the App's saved key.
+  const requests = [];
+  const responses = [];
+  const adapter = createGithubAdapter({
+    input: { question: async () => '' },
+    fetch: async (url, init) => {
+      requests.push({ url, method: init.method, authorization: init.headers.authorization });
+      const next = responses.shift();
+      if (next instanceof Error) throw next;
+      return { status: next };
+    }
+  });
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const app = { ...credentials, pem: privateKey.export({ type: 'pkcs1', format: 'pem' }) };
+  const status = async (...answers) => {
+    requests.length = 0;
+    responses.push(...answers);
+    return adapter.appStatus({ credentials: app, repository: 'owner/repo', kind: 'builder' });
+  };
+  assert.equal(await status(200, 200), 'installed');
+  assert.deepEqual(requests.map(request => [request.method, request.url]), [
+    ['GET', 'https://api.github.com/app'], ['GET', 'https://api.github.com/repos/owner/repo/installation']
+  ]);
+  for (const { authorization } of requests) {
+    const [header, payload, signature] = authorization.replace(/^Bearer /, '').split('.');
+    assert.equal(JSON.parse(Buffer.from(payload, 'base64url')).iss, String(credentials.id));
+    assert(verify('sha256', Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature, 'base64url')));
+  }
+  assert.equal(await status(404), 'app-missing');
+  assert.equal(await status(401), 'app-missing');
+  assert.equal(requests.length, 1);
+  assert.equal(await status(200, 404), 'not-installed');
+  for (const answers of [[502], [200, 500], [new TypeError('fetch failed')]]) {
+    await assert.rejects(status(...answers), error => error.message === 'GitHub could not be reached to check the App.');
+    responses.length = 0;
+  }
+  requests.length = 0;
+  assert.equal(await adapter.appStatus({ credentials, repository: 'owner/repo', kind: 'builder' }), 'app-missing');
+  assert.equal(requests.length, 0);
+}
+
 async function retryProject(repository) {
   const record = { prompts: [], begins: 0, calls: [], messages: [] };
   const retryState = join(root, 'retry-state');
@@ -1299,6 +1516,8 @@ async function retryProject(repository) {
           try { await stat(join(runOptions.cwd, 'MISSION.md')); } catch {
             await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n\nFactory template.\n');
           }
+          await mkdir(join(runOptions.cwd, '.factory'), { recursive: true });
+          await writeFile(join(runOptions.cwd, '.factory/consumer.json'), '{}\n');
         }
         if (command === 'python3' && args.at(-1) === 'doctor' && failAt === 'final-check') throw new Error('doctor failed');
         return { stdout: '' };
@@ -1313,7 +1532,8 @@ async function retryProject(repository) {
       },
       callback: async () => 'code',
       exchange: async () => credentials,
-      install: async () => true
+      install: async () => true,
+      appStatus: async () => 'installed'
     },
     prompt: async question => { record.prompts.push(question); return answers[record.prompts.length - 1] ?? 'Other.'; },
     output: value => record.messages.push(value)
@@ -1379,12 +1599,21 @@ async function retryProject(repository) {
 {
   const project = await retryProject('owner/legacy-set-up');
   const legacyState = join(root, 'retry-state/projects/owner/legacy-set-up');
-  await writePrivateJson(join(legacyState, 'registration.json'), { repository: 'owner/legacy-set-up', checkout: 'unused', completed: true });
-  await writePrivateJson(join(legacyState, 'builder-app.json'), credentials);
+  const legacyCheckout = join(root, 'retry-projects/owner/legacy-set-up');
+  await mkdir(join(legacyCheckout, '.git'), { recursive: true });
+  await mkdir(join(legacyCheckout, '.factory'), { recursive: true });
+  await writeFile(join(legacyCheckout, '.factory/consumer.json'), '{}\n');
+  await writePrivateJson(join(legacyState, 'registration.json'), { repository: 'owner/legacy-set-up', checkout: legacyCheckout, completed: true });
+  for (const kind of ['builder', 'release']) {
+    await writePrivateJson(join(legacyState, `${kind}-app.json`), credentials);
+    await writePrivateJson(join(legacyState, `${kind}-installation.json`), { repository: 'owner/legacy-set-up', confirmed: true });
+  }
   await setupRepository('owner/legacy-set-up', project.options());
   assert.deepEqual(project.record.messages, ['The Forge is already set up for owner/legacy-set-up.']);
-  await assert.rejects(stat(join(legacyState, 'builder-app.json')));
-  assert.deepEqual(JSON.parse(await readFile(join(root, 'retry-state/credentials/owner/legacy-set-up/builder-app.json'), 'utf8')), credentials);
+  for (const kind of ['builder', 'release']) {
+    await assert.rejects(stat(join(legacyState, `${kind}-app.json`)));
+    assert.deepEqual(JSON.parse(await readFile(join(root, `retry-state/credentials/owner/legacy-set-up/${kind}-app.json`), 'utf8')), credentials);
+  }
 }
 
 // Each stop below prints one plain message with one action, and setup completes once the cause is fixed,
@@ -1629,6 +1858,35 @@ for (const [file, stopAt] of [['mission.json', 'final-check'], ['registration.js
   assert.equal(project.record.begins, 0);
   assert.deepEqual(project.record.prompts, file === 'mission.json' ? ['What is this software for?', 'Who uses it?'] : []);
   assert.equal(await project.missionSections(), 1);
+}
+
+// An App details file emptied after setup stopped at the final check, with both Apps installed: the rerun does
+// what it does when that file is deleted. It stops with the missing-details sentence instead of ending in
+// "Setup is complete", and after the owner deletes that App on GitHub the next run creates it again.
+for (const kind of ['builder', 'release']) {
+  const runs = [];
+  for (const empty of [true, false]) {
+    const repository = `owner/final-check-${empty ? 'empty' : 'deleted'}-${kind}-app`;
+    const project = await retryProject(repository);
+    await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
+      error => error instanceof ReportedSetupError && error.message === 'final-check');
+    const path = join(credentialPath(join(root, 'retry-state'), repository), `${kind}-app.json`);
+    if (empty) await writeFile(path, ''); else await rm(path);
+    project.reset();
+    const rerun = await setupRepository(repository, project.options()).then(() => undefined, error => error);
+    const [message, reason] = appGoneStops.missing(kind, repository);
+    assert(rerun instanceof ReportedSetupError && rerun.message === reason, `${kind} ${empty}: ${rerun?.message}`);
+    assert.equal(project.record.messages.at(-1), message);
+    assert(!project.record.messages.some(line => line.startsWith('Setup is complete') || line.includes('damaged')),
+      JSON.stringify(project.record.messages));
+    assertNoInternalText(project.record.messages.at(-1), join(root, 'retry-state'));
+    runs.push(project.record.messages.map(line => line.replaceAll(repository, 'REPOSITORY')));
+    project.reset();
+    assert.equal((await setupRepository(repository, project.options())).completed, true);
+    assert.equal(project.record.begins, 1);
+    assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
+  }
+  assert.deepEqual(runs[0], runs[1]);
 }
 
 await stopThenRetry('missing-repository', {
