@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ReportedSetupError, setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
+import { loadSettings, ReportedSetupError, setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
 import { findSignedInAgent } from '../lib/agent.mjs';
 import {
   APP_PERMISSIONS, APP_PERMISSION_DOCUMENTATION, builderManifest, createApps,
@@ -179,10 +179,7 @@ const existing = join(root, 'existing', 'owner', 'repo');
 await mkdir(join(existing, '.git'), { recursive: true });
 await prepareCheckout('owner/repo', join(root, 'existing'), {
   run: async () => ({ stdout: 'git@github.com:owner/repo.git\n' })
-});
-await assert.rejects(prepareCheckout('owner/repo', join(root, 'existing'), {
-  run: async () => ({ stdout: 'https://github.com/not-owner/repo.git\n' })
-}), /different repository/);
+}, () => { throw new Error('must not stop'); });
 
 const probes = [];
 assert.equal(await findSignedInAgent(async command => {
@@ -398,7 +395,7 @@ for (const failure of [
   },
   {
     repository: 'owner/failing-initialization', command: 'python3', argument: 'init',
-    message: 'Setup stopped because the downloaded files could not prepare the project. Fix the problem reported during project preparation before trying setup again.'
+    message: 'Setup stopped because the build tools it downloaded could not prepare the project on this server. Install the latest version of the Forge on this server before trying setup again.'
   }
 ]) {
   const failureMessages = [];
@@ -654,3 +651,125 @@ async function retryProject(repository) {
   await assert.rejects(stat(join(legacyState, 'builder-app.json')));
   assert.deepEqual(JSON.parse(await readFile(join(root, 'retry-state/credentials/owner/legacy-set-up/builder-app.json'), 'utf8')), credentials);
 }
+
+// Each stop below prints one plain message with one action, and setup completes once the cause is fixed,
+// creating one App per role.
+function assertPlainStop(printed, expected, serverRoot) {
+  assert.deepEqual(printed, expected);
+  for (const message of printed) {
+    assert(!/EACCES|permission denied|GraphQL|HTTP|\bat \w|private setup detail/i.test(message), message);
+    assert(!message.includes(serverRoot), message);
+  }
+}
+
+{
+  const settingsRoot = join(root, 'unwritable-settings');
+  await mkdir(settingsRoot, { mode: 0o500 });
+  const printed = [];
+  try {
+    await assert.rejects(loadSettings(join(settingsRoot, 'forge/config.json'), value => printed.push(value)),
+      error => error instanceof ReportedSetupError && error.message === 'settings');
+  } finally {
+    await chmod(settingsRoot, 0o700);
+  }
+  assertPlainStop(printed, [
+    'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
+  ], root);
+  assert.deepEqual((await loadSettings(join(settingsRoot, 'forge/config.json'), () => {})).commands, defaults().commands);
+}
+
+async function stopThenRetry(name, { prepare, run: failingRun = () => null, undo = async () => {}, reason, message }) {
+  const repository = `owner/${name}`;
+  const stopRoot = join(root, 'stops', name);
+  const options = { projectsRoot: join(stopRoot, 'projects'), state: join(stopRoot, 'state') };
+  await mkdir(options.state, { recursive: true });
+  await prepare?.(options);
+  let begins = 0;
+  let failing = true;
+  const setup = printed => {
+    let answer = 0;
+    return setupRepository(repository, {
+      config: { ...defaults(stopRoot), projectsRoot: options.projectsRoot }, paths: { state: options.state },
+      commands: {
+        run: async (command, args, runOptions = {}) => {
+          const failure = failing && failingRun(command, args);
+          if (failure instanceof Error) throw failure;
+          if (failure) return failure;
+          if (command === 'claude') return { stdout: 'signed in' };
+          if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+          if (command === 'git' && args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` };
+          if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+          if (command === 'python3' && args.at(-1) === 'init') await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
+          return { stdout: '' };
+        }
+      },
+      github: {
+        exists: async path => { try { await stat(path); return true; } catch { return false; } },
+        begin: async manifest => { begins += 1; return { url: `https://example.test/${manifest.name}` }; },
+        complete: async () => credentials,
+        install: async () => true
+      },
+      prompt: async () => ['Purpose.', 'Users.'][answer++],
+      output: value => printed.push(value)
+    });
+  };
+  const stopped = [];
+  try {
+    await assert.rejects(setup(stopped), error => error instanceof ReportedSetupError && error.message === reason);
+  } finally {
+    await undo(options);
+  }
+  assertPlainStop(stopped, ['Using Claude Code to set up the Forge.', message], stopRoot);
+  failing = false;
+  const retried = [];
+  assert.equal((await setup(retried)).completed, true);
+  assert.match(retried.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
+  assert.equal(begins, 2);
+}
+
+await stopThenRetry('unwritable-state', {
+  prepare: async ({ state }) => chmod(state, 0o500),
+  undo: async ({ state }) => chmod(state, 0o700),
+  reason: 'settings',
+  message: 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
+});
+
+await stopThenRetry('missing-repository', {
+  run: (command, args) => command === 'gh' && args[1] === 'clone'
+    && Object.assign(new Error('gh failed.'), { stderr: 'GraphQL: Could not resolve to a Repository with the name \'owner/missing-repository\'. (repository)\n' }),
+  reason: 'checkout',
+  message: 'Setup stopped because GitHub did not let this server download owner/missing-repository: either it does not exist or this server\'s GitHub sign-in cannot reach it. Check the repository name, or give this server\'s GitHub sign-in access to owner/missing-repository, before trying setup again.'
+});
+
+await stopThenRetry('unreachable-github', {
+  run: (command, args) => command === 'gh' && args[1] === 'clone'
+    && Object.assign(new Error('gh failed.'), { stderr: 'error connecting to api.github.com\n' }),
+  reason: 'checkout',
+  message: 'Setup stopped because owner/unreachable-github could not be downloaded from GitHub. Restore this server\'s access to GitHub before trying setup again.'
+});
+
+for (const [name, prepareFolder, message] of [
+  ['plain-folder', async folder => writeFile(join(folder, 'notes.txt'), 'not a repository\n'),
+    'Setup stopped because the project folder for owner/plain-folder on this server already exists but does not hold a copy of a repository. Move that folder elsewhere before trying setup again.'],
+  ['other-repository', async folder => mkdir(join(folder, '.git')),
+    'Setup stopped because the project folder for owner/other-repository on this server holds a copy of a different repository. Move that folder elsewhere before trying setup again.']
+]) {
+  await stopThenRetry(name, {
+    prepare: async ({ projectsRoot }) => {
+      const folder = join(projectsRoot, 'owner', name);
+      await mkdir(folder, { recursive: true });
+      await prepareFolder(folder);
+    },
+    run: (command, args) => command === 'git' && args[0] === 'remote' && { stdout: 'git@github.com:someone/else.git\n' },
+    undo: async ({ projectsRoot }) => rm(join(projectsRoot, 'owner', name), { recursive: true }),
+    reason: 'checkout',
+    message
+  });
+}
+
+await stopThenRetry('failing-preparation', {
+  run: (command, args) => command === 'python3' && args.at(-1) === 'init'
+    && Object.assign(new Error('python3 failed.'), { stderr: `Traceback (most recent call last):\nPermissionError: [Errno 13] Permission denied: '${root}/x'\n` }),
+  reason: 'initialization',
+  message: 'Setup stopped because the build tools it downloaded could not prepare the project on this server. Install the latest version of the Forge on this server before trying setup again.'
+});
