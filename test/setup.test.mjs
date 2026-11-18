@@ -737,7 +737,7 @@ function assertPlainStop(printed, expected, serverRoot) {
   assert.deepEqual((await loadSettings(join(settingsRoot, 'forge/config.json'), () => {})).commands, defaults().commands);
 }
 
-async function stopThenRetry(name, { prepare, run: failingRun = () => null, undo = async () => {}, reason, message }) {
+async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPrompt = async () => {}, undo = async () => {}, reason, before = [], message }) {
   const repository = `owner/${name}`;
   const stopRoot = join(root, 'stops', name);
   const options = { projectsRoot: join(stopRoot, 'projects'), state: join(stopRoot, 'state') };
@@ -768,7 +768,7 @@ async function stopThenRetry(name, { prepare, run: failingRun = () => null, undo
         complete: async () => credentials,
         install: async () => true
       },
-      prompt: async () => ['Purpose.', 'Users.'][answer++],
+      prompt: async () => { if (failing && answer === 0) await onPrompt(options); return ['Purpose.', 'Users.'][answer++]; },
       output: value => printed.push(value)
     });
   };
@@ -778,7 +778,8 @@ async function stopThenRetry(name, { prepare, run: failingRun = () => null, undo
   } finally {
     await undo(options);
   }
-  assertPlainStop(stopped, ['Using Claude Code to set up the Forge.', message], stopRoot);
+  assert.deepEqual(stopped.slice(0, -1), ['Using Claude Code to set up the Forge.', ...before]);
+  assertPlainStop(stopped.slice(-1), [message], stopRoot);
   failing = false;
   const retried = [];
   assert.equal((await setup(retried)).completed, true);
@@ -792,6 +793,37 @@ await stopThenRetry('unwritable-state', {
   reason: 'settings',
   message: 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
 });
+
+// mission.json lives in the project state folder: failing to read or save it is the same settings stop.
+const missionPath = (state, name) => join(state, 'projects', 'owner', name, 'mission.json');
+const appPages = [
+  'Create the builder App in your browser: https://example.test/Forge builder',
+  'Create the release App in your browser: https://example.test/Forge release'
+];
+for (const [name, mission] of [
+  ['unreadable-mission', {
+    prepare: async ({ state }) => {
+      await writePrivateJson(missionPath(state, 'unreadable-mission'), { purpose: 'Purpose.', users: 'Users.' });
+      await chmod(missionPath(state, 'unreadable-mission'), 0o000);
+    },
+    undo: async ({ state }) => chmod(missionPath(state, 'unreadable-mission'), 0o600)
+  }],
+  ['mission-directory', {
+    prepare: async ({ state }) => mkdir(missionPath(state, 'mission-directory'), { recursive: true }),
+    undo: async ({ state }) => rm(missionPath(state, 'mission-directory'), { recursive: true })
+  }],
+  ['unwritable-mission', {
+    onPrompt: async ({ state }) => chmod(join(state, 'projects', 'owner', 'unwritable-mission'), 0o500),
+    undo: async ({ state }) => chmod(join(state, 'projects', 'owner', 'unwritable-mission'), 0o700)
+  }]
+]) {
+  await stopThenRetry(name, {
+    ...mission,
+    reason: 'settings',
+    before: appPages,
+    message: 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
+  });
+}
 
 await stopThenRetry('missing-repository', {
   run: (command, args) => command === 'gh' && args[1] === 'clone'
