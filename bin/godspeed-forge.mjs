@@ -12,7 +12,9 @@ if (command !== 'setup' || !repository) {
   console.error('Run godspeed-forge setup owner/repository.');
   process.exit(1);
 }
-await runSetupCommand(repository, async () => {
+// Not awaited at the top level: if the input closes while a question waits, that question never settles, and
+// Node would print a raw warning about an unsettled top-level await.
+runSetupCommand(repository, async () => {
   const paths = defaultPaths();
   const output = message => console.log(message);
   const config = await loadSettings(paths.config, output);

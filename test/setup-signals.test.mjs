@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { access, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runSetupCommand } from '../lib/cli.mjs';
-import { ReportedSetupError, setupRepository } from '../lib/setup.mjs';
+import { setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { defaults } from '../lib/config.mjs';
 
@@ -131,16 +131,26 @@ if (process.argv[2] === 'command') {
     const result = await interrupt(root, 'builder-question', 'SIGINT');
     assertStopped(result, { code: 130, sentence: INTERRUPTED, appsKept: false });
     assert.deepEqual(result.lines, ['Using Claude Code to set up the Forge.', INTERRUPTED]);
-    // The next run is not refused as already running. The builder App page was being prepared, so it says
-    // once, as for any setup that ended there (#29), to delete a builder App if GitHub made one; then the
-    // run after creates one App per role.
+    // The next run is not refused as already running. No App page had been shown, so GitHub made no App and
+    // the next run simply asks again and creates one App per role.
     const next = await nextSetup(root);
-    assert(next.error instanceof ReportedSetupError && next.error.message === 'leftover-app');
-    assert.equal(next.messages.at(-1), LEFTOVER_BUILDER);
-    assert.deepEqual(next.manifests, []);
-    const after = await nextSetup(root);
-    assert.equal(after.error, undefined);
-    assert.deepEqual(after.manifests, ['Forge builder', 'Forge release']);
+    assert.equal(next.error, undefined);
+    assert(!next.messages.includes(LEFTOVER_BUILDER));
+    assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
+    assert.deepEqual(next.manifests, ['Forge builder', 'Forge release']);
+  }
+
+  // The same before the release App's page, terminated, with the builder App already made: the next run
+  // creates only the release App and says nothing about deleting one.
+  for (const [waitAt, made] of [['builder-question', ['Forge builder', 'Forge release']], ['release-question', ['Forge release']]]) {
+    const root = await mkdtemp(join(tmpdir(), 'forge-signal-before-page-'));
+    const result = await interrupt(root, waitAt, 'SIGTERM');
+    assertStopped(result, { code: 143, sentence: TERMINATED, appsKept: false });
+    const next = await nextSetup(root);
+    assert.equal(next.error, undefined);
+    assert(!next.messages.some(line => line.includes('delete it in your GitHub App settings')));
+    assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
+    assert.deepEqual(next.manifests, made);
   }
 
   // Ctrl-C typed at a terminal reaches the question, not the process; it stops setup the same way.
@@ -186,6 +196,44 @@ if (process.argv[2] === 'command') {
     assert.equal(next.error, undefined);
     assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
     assert.deepEqual(next.manifests, []);
+  }
+
+  // The real command, with input that closes while a later question waits (after the builder App's install
+  // answer): it prints no raw Node text, such as a warning about an unsettled top-level await.
+  {
+    const root = await mkdtemp(join(tmpdir(), 'forge-signal-input-closes-'));
+    const bin = join(root, 'bin');
+    await mkdir(bin);
+    const tools = {
+      claude: 'echo signed in',
+      gh: 'mkdir -p "${@: -1}/.git"',
+      git: `case "$1" in remote) echo https://github.com/owner/repo.git;; clone) mkdir -p "\${@: -1}/.git";; rev-parse) echo ${FACTORY_REVISION};; esac`,
+      python3: 'if [ "${@: -1}" = init ]; then mkdir -p factory; echo "# Mission" > MISSION.md; fi'
+    };
+    for (const [name, body] of Object.entries(tools)) {
+      await writeFile(join(bin, name), `#!/bin/bash\n${body}\n`);
+      await chmod(join(bin, name), 0o755);
+    }
+    const credentialDirectory = join(root, '.godspeed/forge/state/credentials/owner/repo');
+    await mkdir(credentialDirectory, { recursive: true });
+    await writeFile(join(credentialDirectory, 'builder-app.json'), JSON.stringify(credentials), { mode: 0o600 });
+    const child = spawn(process.execPath, [fileURLToPath(new URL('../bin/godspeed-forge.mjs', import.meta.url)), 'setup', 'owner/repo'],
+      { env: { ...process.env, HOME: root, PATH: `${bin}:${process.env.PATH}` }, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', data => {
+      stdout += data;
+      if (stdout.endsWith('installed only on owner/repo: ')) child.stdin.write('yes\n');
+      if (stdout.endsWith('or no if it is your personal account: ')) child.stdin.end();
+    });
+    child.stderr.on('data', data => { stderr += data; });
+    const timer = setTimeout(() => child.kill('SIGKILL'), 20_000);
+    const code = await new Promise(resolve => child.once('close', resolve));
+    clearTimeout(timer);
+    assert(stdout.includes('Type yes if owner is a GitHub organization'), stdout);
+    assert.equal(stderr, '');
+    assert(!/Warning|await|\^/.test(stdout), stdout);
+    assert.equal(code, 0);
   }
 
   console.log('setup signal tests pass');
