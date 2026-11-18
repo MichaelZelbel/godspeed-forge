@@ -30,7 +30,8 @@ Ask Godspeed to “set up the Forge for `owner/repository`”. Setup uses a sign
 Codex account, installs the pinned factory, guides you through creating separate builder and release
 GitHub Apps in the repository owner's personal or organization account, then guides you to install each App only on that repository. Setup asks the two mission
 questions and reports the setup checks. It completes only after both installations are confirmed
-and the checks succeed, and it leaves the schedule off until you explicitly start it.
+and the checks succeed, and it leaves the schedule off until you explicitly start it. Only one setup
+per repository runs at a time; asking again while one is running says so and changes nothing.
 
 Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 `~/.godspeed/forge/state/` for private state. Root Linux installs use
