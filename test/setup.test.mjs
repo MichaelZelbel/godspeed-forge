@@ -825,6 +825,48 @@ for (const [name, mission] of [
   });
 }
 
+// A saved file that is there but damaged stops setup before it changes anything, with one plain message
+// naming the file to delete. Deleting it, as the message says, lets setup run again without creating new Apps.
+for (const [file, stopAt, damagedMessage] of [
+  ['mission.json', 'final-check', repository => `Setup stopped because the Forge's saved settings for ${repository} on this server are damaged: its saved answers to the mission questions cannot be read. Delete the file projects/${repository}/mission.json in the Forge's private state folder before trying setup again, and setup asks those questions again.`],
+  ['registration.json', undefined, repository => `Setup stopped because the Forge's saved settings for ${repository} on this server are damaged: its record of whether setup finished cannot be read. Delete the file projects/${repository}/registration.json in the Forge's private state folder before trying setup again.`]
+]) {
+  const repository = `owner/damaged-${file.replace('.json', '')}`;
+  const project = await retryProject(repository);
+  const retryState = join(root, 'retry-state');
+  // An earlier run records both Apps and the saved file: it stops at the final check, or completes.
+  if (stopAt) {
+    await assert.rejects(setupRepository(repository, project.options({ failAt: stopAt })),
+      error => error instanceof ReportedSetupError && error.message === stopAt);
+  } else {
+    assert.equal((await setupRepository(repository, project.options())).completed, true);
+  }
+  assert.equal(project.record.begins, 2);
+  await writeFile(join(retryState, 'projects', repository, file), '{ damaged');
+  const before = await readTree(retryState);
+  project.reset();
+  await assert.rejects(setupRepository(repository, project.options()),
+    error => error instanceof ReportedSetupError && error.message === 'damaged-settings');
+  assert.deepEqual(project.record.messages, ['Using Claude Code to set up the Forge.', damagedMessage(repository)]);
+  for (const message of project.record.messages) {
+    assert(!/JSON|position|line \d+ column|SyntaxError|Expected property|\bat \w/.test(message), message);
+    assert(!message.includes(root), message);
+  }
+  assert.equal(project.record.begins, 0);
+  assert.deepEqual(project.record.prompts, []);
+  assert(!project.record.calls.some(call => call.command !== 'claude'), JSON.stringify(project.record.calls));
+  assert.deepEqual(await readTree(retryState), before);
+  // The owner deletes the named file, from the Forge's private state folder, and tries setup again.
+  await rm(join(retryState, 'projects', ...damagedMessage(repository).match(/Delete the file projects\/(\S+) in/)[1].split('/')));
+  project.reset();
+  const result = await setupRepository(repository, project.options());
+  assert.equal(result.completed, true);
+  assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
+  assert.equal(project.record.begins, 0);
+  assert.deepEqual(project.record.prompts, file === 'mission.json' ? ['What is this software for?', 'Who uses it?'] : []);
+  assert.equal(await project.missionSections(), 1);
+}
+
 await stopThenRetry('missing-repository', {
   run: (command, args) => command === 'gh' && args[1] === 'clone'
     && Object.assign(new Error('gh failed.'), { stderr: 'GraphQL: Could not resolve to a Repository with the name \'owner/missing-repository\'. (repository)\n' }),
