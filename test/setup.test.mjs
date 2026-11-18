@@ -9,6 +9,7 @@ import {
   registrationAction, releaseManifest
 } from '../lib/github-apps.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
+import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, writePrivateJson } from '../lib/config.mjs';
 
@@ -181,9 +182,84 @@ await assert.rejects(setupRepository('owner/failing-doctor', {
   },
   prompt: async () => ['Purpose.', 'Users.'][failedAnswer++], output: value => failedMessages.push(value)
 }), error => error instanceof ReportedSetupError && error.message === 'final-check');
-assert.deepEqual(failedMessages.at(-1), 'Setup stopped because the final check found a problem. Fix the problem reported by the check before trying setup again.');
+const FINAL_CHECK_FALLBACK = 'Setup stopped because the final check could not confirm that the build tools setup installed on this server work. Try setup again.';
+assert.deepEqual(failedMessages.at(-1), FINAL_CHECK_FALLBACK);
 await assert.rejects(stat(join(state, 'projects/owner/failing-doctor/registration.json')));
 assert(!failedMessages.some(message => message.includes('schedule')));
+
+const retryRun = async (command, args, options = {}) => {
+  if (command === 'claude') return { stdout: 'signed in' };
+  if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+  if (command === 'git' && args[0] === 'remote') return { stdout: 'git@github.com:owner/retry-check.git\n' };
+  if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+  if (command === 'python3' && args.at(-1) === 'init') {
+    await mkdir(join(options.cwd, 'factory'), { recursive: true });
+    await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
+    return { stdout: '' };
+  }
+  if (command === 'python3' && args.at(-1) === 'doctor') {
+    if (retryCheckPasses) return { stdout: '{}' };
+    throw Object.assign(new Error('python3 failed.'), {
+      stderr: 'Factory refused: Holdout fence is open: a builder reading the scenarios exited 127, expected 2. '
+        + '/bin/sh: 1: python: not found (check that `python` runs Python 3 in bash)\n'
+        + 'Traceback (most recent call last):\n  File "/srv/forge/factory/consumer.py", line 244\n'
+        + 'TOKEN SENTINEL ghs_report_secret'
+    });
+  }
+  return { stdout: '' };
+};
+let retryCheckPasses = false;
+let retryBegins = 0;
+let retryInstalls = 0;
+const retryOptions = output => {
+  let retryAnswer = 0;
+  return {
+    config: { ...defaults(root), projectsRoot }, paths: { state }, commands: { run: retryRun },
+    github: {
+      exists: async path => { try { await stat(path); return true; } catch { return false; } },
+      begin: async manifest => { retryBegins += 1; return { url: `https://example.test/${manifest.name}` }; },
+      complete: async () => credentials,
+      install: async () => { retryInstalls += 1; return true; }
+    },
+    prompt: async () => ['Purpose.', 'Users.'][retryAnswer++],
+    output
+  };
+};
+const retryFailed = [];
+await assert.rejects(setupRepository('owner/retry-check', retryOptions(value => retryFailed.push(value))),
+  error => error instanceof ReportedSetupError && error.message === 'final-check');
+assert.deepEqual(retryFailed, [
+  'Using Claude Code to set up the Forge.',
+  'Create the builder App in your browser: https://example.test/Forge builder',
+  'Create the release App in your browser: https://example.test/Forge release',
+  'Setup stopped because the final check found that the guard keeping your project\'s hidden test scenarios away from the coding agent does not work on this server, because the python command there does not run Python 3. Install the python-is-python3 package on this server before trying setup again.'
+]);
+for (const hidden of ['Factory refused', 'Holdout fence', 'consumer.py', 'Traceback', 'ghs_report_secret', 'report']) {
+  assert(!retryFailed.some(message => message.includes(hidden)), hidden);
+}
+assert(retryFailed.at(-1).split('http').length - 1 <= 1);
+await assert.rejects(stat(join(state, 'projects/owner/retry-check/registration.json')));
+assert.equal(retryBegins, 2);
+const installsBeforeRetry = retryInstalls;
+
+retryCheckPasses = true;
+const retryPassed = [];
+assert.deepEqual(
+  await setupRepository('owner/retry-check', retryOptions(value => retryPassed.push(value))),
+  { completed: true, checkout: join(projectsRoot, 'owner/retry-check') }
+);
+assert.deepEqual(retryPassed, [
+  'Using Claude Code to set up the Forge.',
+  'Setup is complete for owner/retry-check. Automatic work is off. Each release uses your signed-in Claude Code account to plan and build the work. The Forge adds no separate charge; what you pay depends on your account plan, the size of the release, and your provider\'s usage limits. When you are ready to start automatic work, ask me to turn it on.'
+]);
+assert.equal(retryBegins, 2);
+assert.equal(retryInstalls, installsBeforeRetry);
+assert.equal(JSON.parse(await readFile(join(state, 'projects/owner/retry-check/registration.json'), 'utf8')).completed, true);
+
+await assert.rejects(
+  runProcess(process.execPath, ['-e', 'process.stderr.write("check said no"); process.exit(1)']),
+  error => error.message === `${process.execPath} failed.` && error.stderr === 'check said no'
+);
 
 const githubFailureMessages = [];
 const githubFailureCalls = [];
