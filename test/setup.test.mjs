@@ -956,6 +956,32 @@ for (const [kind, damage] of [
   assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
 }
 
+// Stored App details damaged after that App was installed: on a finished setup, and on one that stopped
+// later. The next run still creates and installs that App again instead of skipping it.
+for (const [kind, finished] of [['builder', false], ['release', true]]) {
+  const repository = `owner/${kind}-damaged-${finished ? 'finished' : 'unfinished'}`;
+  const retryState = join(root, `retry-damaged-installed-${kind}`);
+  const stateDirectory = projectStatePath(retryState, repository);
+  const standIn = standInGithub();
+  assert.equal((await setupAttempt(repository, retryState, standIn.github)).error, undefined);
+  if (!finished) await rm(join(stateDirectory, 'registration.json'));
+  await writeFile(join(credentialPath(retryState, repository), `${kind}-app.json`), '{"id": 12345, "pem": "PRIV');
+  const first = await setupAttempt(repository, retryState, standIn.github);
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'damaged-app', `${kind} ${finished}`);
+  assert.equal(first.messages.at(-1), `Setup stopped because the saved details of the ${kind} App on this server are damaged. Delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again.`);
+  assertNoInternalText(first.messages.at(-1), retryState);
+  assert(!(await isPresent(join(stateDirectory, `${kind}-installation.json`))));
+  const second = await setupAttempt(repository, retryState, standIn.github);
+  assert.equal(second.error, undefined);
+  assert(!second.messages.includes(first.messages.at(-1)));
+  assert(second.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
+  assert(completedFor(repository)(second.messages.at(-1)));
+  assert.equal(standIn.counts[kind], 2);
+  assert(await isPresent(join(stateDirectory, `${kind}-installation.json`)));
+  const third = await setupAttempt(repository, retryState, standIn.github);
+  assert.deepEqual(third.messages, [`The Forge is already set up for ${repository}.`]);
+}
+
 {
   // A damaged file setup cannot remove gives the existing stop for an unwritable private folder.
   const repository = 'owner/damaged-locked';
