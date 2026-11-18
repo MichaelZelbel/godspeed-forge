@@ -265,6 +265,7 @@ assert.deepEqual(retryFailed, [
   'Using Claude Code to set up the Forge.',
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release',
+  'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.',
   'Setup stopped because the final check found that the guard keeping your project\'s hidden test scenarios away from the coding agent does not work on this server, because the python command there does not run Python 3. Install the python-is-python3 package on this server before trying setup again.'
 ]);
 for (const hidden of ['Factory refused', 'Holdout fence', 'consumer.py', 'Traceback', 'ghs_report_secret', 'report']) {
@@ -288,6 +289,64 @@ assert.deepEqual(retryPassed, [
 assert.equal(retryBegins, 2);
 assert.equal(retryInstalls, installsBeforeRetry);
 assert.equal(JSON.parse(await readFile(join(state, 'projects/owner/retry-check/registration.json'), 'utf8')).completed, true);
+
+// A stop at the final check tells the owner their Apps are kept; stopping again and retrying add none.
+const appsKeptState = join(root, 'apps-kept-state');
+const appsKeptProjects = join(root, 'apps-kept-projects');
+const APPS_KEPT_MESSAGE = 'Your two GitHub Apps for this repository, "Acme Forge builder" and "Acme Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
+let appsKeptCheckPasses = false;
+const appsKeptBegins = {};
+const appsKeptOptions = output => {
+  let appsKeptAnswer = 0;
+  return {
+    config: { ...defaults(root), projectsRoot: appsKeptProjects }, paths: { state: appsKeptState },
+    commands: {
+      run: async (command, args, options = {}) => {
+        if (command === 'git' && args[0] === 'remote') return { stdout: 'git@github.com:owner/apps-kept.git\n' };
+        if (command === 'python3' && args.at(-1) === 'doctor') {
+          if (appsKeptCheckPasses) return { stdout: '{}' };
+          throw new Error('doctor failed');
+        }
+        return retryRun(command, args, options);
+      }
+    },
+    github: {
+      exists: async path => { try { await stat(path); return true; } catch { return false; } },
+      begin: async manifest => {
+        appsKeptBegins[manifest.name] = (appsKeptBegins[manifest.name] ?? 0) + 1;
+        return { url: `https://example.test/${manifest.name}`, name: manifest.name };
+      },
+      complete: async flow => ({ ...credentials, name: flow.name === 'Forge builder' ? 'Acme Forge builder' : 'Acme Forge release' }),
+      install: async () => true
+    },
+    prompt: async () => ['Purpose.', 'Users.'][appsKeptAnswer++],
+    output
+  };
+};
+const appsKeptFirst = [];
+await assert.rejects(setupRepository('owner/apps-kept', appsKeptOptions(value => appsKeptFirst.push(value))),
+  error => error instanceof ReportedSetupError && error.message === 'final-check');
+assert.equal(appsKeptFirst.at(-1), FINAL_CHECK_FALLBACK);
+assert.equal(appsKeptFirst.at(-2), APPS_KEPT_MESSAGE);
+assert.equal(appsKeptFirst.filter(message => message.startsWith('Setup stopped because')).length, 1);
+assert.deepEqual(appsKeptFirst.filter(message => message.includes('http')), [
+  'Create the builder App in your browser: https://example.test/Forge builder',
+  'Create the release App in your browser: https://example.test/Forge release'
+]);
+for (const hidden of ['archon', 'factory', 'doctor', 'consumer', 'credential', '.json', 'forge-builder-secret-name', 'http']) {
+  assert(!appsKeptFirst.slice(-2).some(message => message.toLowerCase().includes(hidden)), hidden);
+}
+const appsKeptSecond = [];
+await assert.rejects(setupRepository('owner/apps-kept', appsKeptOptions(value => appsKeptSecond.push(value))),
+  error => error instanceof ReportedSetupError && error.message === 'final-check');
+assert.deepEqual(appsKeptSecond, ['Using Claude Code to set up the Forge.', APPS_KEPT_MESSAGE, FINAL_CHECK_FALLBACK]);
+assert.deepEqual(appsKeptBegins, { 'Forge builder': 1, 'Forge release': 1 });
+appsKeptCheckPasses = true;
+const appsKeptPassed = [];
+await setupRepository('owner/apps-kept', appsKeptOptions(value => appsKeptPassed.push(value)));
+assert(appsKeptPassed.at(-1).startsWith('Setup is complete for owner/apps-kept.'));
+assert(!appsKeptPassed.includes(APPS_KEPT_MESSAGE));
+assert.deepEqual(appsKeptBegins, { 'Forge builder': 1, 'Forge release': 1 });
 
 await assert.rejects(
   runProcess(process.execPath, ['-e', 'process.stdout.write("partial"); process.stderr.write("check said no"); process.exit(1)']),
