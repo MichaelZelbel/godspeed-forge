@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ReportedSetupError, setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
+import { loadSettings, ReportedSetupError, setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
 import { findSignedInAgent } from '../lib/agent.mjs';
 import {
   APP_PERMISSIONS, APP_PERMISSION_DOCUMENTATION, builderManifest, createApps,
@@ -10,7 +10,7 @@ import {
 } from '../lib/github-apps.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { run as runProcess } from '../lib/process.mjs';
-import { FACTORY_REVISION } from '../lib/constants.mjs';
+import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
@@ -179,10 +179,7 @@ const existing = join(root, 'existing', 'owner', 'repo');
 await mkdir(join(existing, '.git'), { recursive: true });
 await prepareCheckout('owner/repo', join(root, 'existing'), {
   run: async () => ({ stdout: 'git@github.com:owner/repo.git\n' })
-});
-await assert.rejects(prepareCheckout('owner/repo', join(root, 'existing'), {
-  run: async () => ({ stdout: 'https://github.com/not-owner/repo.git\n' })
-}), /different repository/);
+}, () => { throw new Error('must not stop'); });
 
 const probes = [];
 assert.equal(await findSignedInAgent(async command => {
@@ -265,6 +262,7 @@ assert.deepEqual(retryFailed, [
   'Using Claude Code to set up the Forge.',
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release',
+  'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.',
   'Setup stopped because the final check found that the guard keeping your project\'s hidden test scenarios away from the coding agent does not work on this server, because the python command there does not run Python 3. Install the python-is-python3 package on this server before trying setup again.'
 ]);
 for (const hidden of ['Factory refused', 'Holdout fence', 'consumer.py', 'Traceback', 'ghs_report_secret', 'report']) {
@@ -288,6 +286,64 @@ assert.deepEqual(retryPassed, [
 assert.equal(retryBegins, 2);
 assert.equal(retryInstalls, installsBeforeRetry);
 assert.equal(JSON.parse(await readFile(join(state, 'projects/owner/retry-check/registration.json'), 'utf8')).completed, true);
+
+// A stop at the final check tells the owner their Apps are kept; stopping again and retrying add none.
+const appsKeptState = join(root, 'apps-kept-state');
+const appsKeptProjects = join(root, 'apps-kept-projects');
+const APPS_KEPT_MESSAGE = 'Your two GitHub Apps for this repository, "Acme Forge builder" and "Acme Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
+let appsKeptCheckPasses = false;
+const appsKeptBegins = {};
+const appsKeptOptions = output => {
+  let appsKeptAnswer = 0;
+  return {
+    config: { ...defaults(root), projectsRoot: appsKeptProjects }, paths: { state: appsKeptState },
+    commands: {
+      run: async (command, args, options = {}) => {
+        if (command === 'git' && args[0] === 'remote') return { stdout: 'git@github.com:owner/apps-kept.git\n' };
+        if (command === 'python3' && args.at(-1) === 'doctor') {
+          if (appsKeptCheckPasses) return { stdout: '{}' };
+          throw new Error('doctor failed');
+        }
+        return retryRun(command, args, options);
+      }
+    },
+    github: {
+      exists: async path => { try { await stat(path); return true; } catch { return false; } },
+      begin: async manifest => {
+        appsKeptBegins[manifest.name] = (appsKeptBegins[manifest.name] ?? 0) + 1;
+        return { url: `https://example.test/${manifest.name}`, name: manifest.name };
+      },
+      complete: async flow => ({ ...credentials, name: flow.name === 'Forge builder' ? 'Acme Forge builder' : 'Acme Forge release' }),
+      install: async () => true
+    },
+    prompt: async () => ['Purpose.', 'Users.'][appsKeptAnswer++],
+    output
+  };
+};
+const appsKeptFirst = [];
+await assert.rejects(setupRepository('owner/apps-kept', appsKeptOptions(value => appsKeptFirst.push(value))),
+  error => error instanceof ReportedSetupError && error.message === 'final-check');
+assert.equal(appsKeptFirst.at(-1), FINAL_CHECK_FALLBACK);
+assert.equal(appsKeptFirst.at(-2), APPS_KEPT_MESSAGE);
+assert.equal(appsKeptFirst.filter(message => message.startsWith('Setup stopped because')).length, 1);
+assert.deepEqual(appsKeptFirst.filter(message => message.includes('http')), [
+  'Create the builder App in your browser: https://example.test/Forge builder',
+  'Create the release App in your browser: https://example.test/Forge release'
+]);
+for (const hidden of ['archon', 'factory', 'doctor', 'consumer', 'credential', '.json', 'forge-builder-secret-name', 'http']) {
+  assert(!appsKeptFirst.slice(-2).some(message => message.toLowerCase().includes(hidden)), hidden);
+}
+const appsKeptSecond = [];
+await assert.rejects(setupRepository('owner/apps-kept', appsKeptOptions(value => appsKeptSecond.push(value))),
+  error => error instanceof ReportedSetupError && error.message === 'final-check');
+assert.deepEqual(appsKeptSecond, ['Using Claude Code to set up the Forge.', APPS_KEPT_MESSAGE, FINAL_CHECK_FALLBACK]);
+assert.deepEqual(appsKeptBegins, { 'Forge builder': 1, 'Forge release': 1 });
+appsKeptCheckPasses = true;
+const appsKeptPassed = [];
+await setupRepository('owner/apps-kept', appsKeptOptions(value => appsKeptPassed.push(value)));
+assert(appsKeptPassed.at(-1).startsWith('Setup is complete for owner/apps-kept.'));
+assert(!appsKeptPassed.includes(APPS_KEPT_MESSAGE));
+assert.deepEqual(appsKeptBegins, { 'Forge builder': 1, 'Forge release': 1 });
 
 await assert.rejects(
   runProcess(process.execPath, ['-e', 'process.stdout.write("partial"); process.stderr.write("check said no"); process.exit(1)']),
@@ -401,14 +457,95 @@ assert.deepEqual(githubFailureMessages.at(-1), 'Setup stopped because the GitHub
 assert(!githubFailureCalls.some(call => call.args.at(-1) === 'doctor' || call.args.includes('schedule')));
 await assert.rejects(stat(join(state, 'projects/owner/failing-github/registration.json')));
 
+// The two GitHub App stops with their own cause: the owner leaves the App page unfinished (the real
+// adapter receives an address without GitHub's code), and setup cannot save the App GitHub handed over.
+const appStepRun = (command, args, options = {}) => {
+  if (command === 'claude') return { stdout: 'signed in' };
+  if (command === 'gh') return mkdir(join(args.at(-1), '.git'), { recursive: true }).then(() => ({ stdout: '' }));
+  if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+  return { stdout: '' };
+};
+const abandonedOutputs = [];
+const abandonedAdapter = createGithubAdapter({
+  input: { question: async question => question.startsWith('Type yes if') ? 'no' : 'https://github.com/settings/apps/new\n' },
+  fetch: async () => { throw new Error('must not ask GitHub for an App without a code'); },
+  output: value => abandonedOutputs.push(value)
+});
+await assert.rejects(setupRepository('owner/abandoned-page', {
+  config: { projectsRoot, costMessage: 'Cost notice.' }, paths: { state }, commands: { run: async (...call) => appStepRun(...call) },
+  github: { ...abandonedAdapter, begin: async manifest => { await abandonedAdapter.begin(manifest); return { url: 'https://example.test/create' }; } },
+  prompt: async () => { throw new Error('must not prompt'); },
+  output: value => abandonedOutputs.push(value)
+}), error => error instanceof ReportedSetupError && error.message === 'github');
+assert.deepEqual(abandonedOutputs, [
+  'Using Claude Code to set up the Forge.',
+  'Create the builder App in your browser: https://example.test/create',
+  'Setup stopped because the GitHub page for creating its builder App was left unfinished, so GitHub did not hand that App over. Try setup again, finish creating the builder App on the GitHub page it opens, and paste the address your browser shows afterwards.'
+]);
+await assert.rejects(stat(join(state, 'projects/owner/abandoned-page/registration.json')));
+
+// The builder App is created and installed, then the owner leaves the release App page unfinished.
+const abandonedReleaseOutputs = [];
+const abandonedReleaseAdapter = createGithubAdapter({
+  input: { question: async question => question.startsWith('Type yes if') ? 'no' : 'https://github.com/settings/apps/new\n' },
+  fetch: async () => { throw new Error('must not ask GitHub for an App without a code'); },
+  output: value => abandonedReleaseOutputs.push(value)
+});
+const abandonedReleaseKinds = [];
+await assert.rejects(setupRepository('owner/abandoned-release-page', {
+  config: { projectsRoot, costMessage: 'Cost notice.' }, paths: { state }, commands: { run: async (...call) => appStepRun(...call) },
+  github: {
+    ...abandonedReleaseAdapter,
+    begin: async manifest => { await abandonedReleaseAdapter.begin(manifest); return { url: 'https://example.test/create' }; },
+    complete: async flow => abandonedReleaseKinds.length === 0 ? credentials : abandonedReleaseAdapter.complete(flow),
+    install: async ({ kind }) => { abandonedReleaseKinds.push(kind); return true; }
+  },
+  prompt: async () => { throw new Error('must not prompt'); },
+  output: value => abandonedReleaseOutputs.push(value)
+}), error => error instanceof ReportedSetupError && error.message === 'github');
+assert.deepEqual(abandonedReleaseKinds, ['builder']);
+assert.deepEqual(abandonedReleaseOutputs, [
+  'Using Claude Code to set up the Forge.',
+  'Create the builder App in your browser: https://example.test/create',
+  'Create the release App in your browser: https://example.test/create',
+  'Setup stopped because the GitHub page for creating its release App was left unfinished, so GitHub did not hand that App over. Try setup again, finish creating the release App on the GitHub page it opens, and paste the address your browser shows afterwards.'
+]);
+await assert.rejects(stat(join(state, 'projects/owner/abandoned-release-page/registration.json')));
+
+const unwritableCredentials = credentialPath(state, 'owner/unwritable-credentials');
+await mkdir(unwritableCredentials, { recursive: true, mode: 0o700 });
+await chmod(unwritableCredentials, 0o500);
+const unwritableOutputs = [];
+try {
+  await assert.rejects(setupRepository('owner/unwritable-credentials', {
+    config: { projectsRoot, costMessage: 'Cost notice.' }, paths: { state }, commands: { run: async (...call) => appStepRun(...call) },
+    github: {
+      begin: async () => ({ url: 'https://example.test/create' }),
+      complete: async () => credentials,
+      install: async () => { throw new Error('must not install unsaved credentials'); }
+    },
+    prompt: async () => { throw new Error('must not prompt'); },
+    output: value => unwritableOutputs.push(value)
+  }), error => error instanceof ReportedSetupError && error.message === 'github');
+} finally {
+  await chmod(unwritableCredentials, 0o700);
+}
+assert.deepEqual(unwritableOutputs, [
+  'Using Claude Code to set up the Forge.',
+  'Create the builder App in your browser: https://example.test/create',
+  'Setup stopped because it could not save the details of the GitHub App it just created on this server. Let setup write to the credentials folder in the Forge\'s private state folder before trying setup again.'
+]);
+await assert.rejects(stat(join(unwritableCredentials, 'builder-app.json')));
+await assert.rejects(stat(join(state, 'projects/owner/unwritable-credentials/registration.json')));
+
 for (const failure of [
   {
     repository: 'owner/failing-download', command: 'git', argument: 'fetch',
-    message: 'Setup stopped because the required files could not be downloaded from GitHub. Restore this server\'s access to GitHub before trying setup again.'
+    message: 'Setup stopped because it could not download the build tools from GitHub. Restore this server\'s access to GitHub before trying setup again.'
   },
   {
     repository: 'owner/failing-initialization', command: 'python3', argument: 'init',
-    message: 'Setup stopped because the downloaded files could not prepare the project. Fix the problem reported during project preparation before trying setup again.'
+    message: 'Setup stopped because the build tools it downloaded could not prepare the project on this server. Install the latest version of the Forge on this server before trying setup again.'
   }
 ]) {
   const failureMessages = [];
@@ -663,4 +800,324 @@ async function retryProject(repository) {
   assert.deepEqual(project.record.messages, ['The Forge is already set up for owner/legacy-set-up.']);
   await assert.rejects(stat(join(legacyState, 'builder-app.json')));
   assert.deepEqual(JSON.parse(await readFile(join(root, 'retry-state/credentials/owner/legacy-set-up/builder-app.json'), 'utf8')), credentials);
+}
+
+// Each stop below prints one plain message with one action, and setup completes once the cause is fixed,
+// creating one App per role.
+function assertPlainStop(printed, expected, serverRoot) {
+  assert.deepEqual(printed, expected);
+  for (const message of printed) {
+    assert(!/EACCES|permission denied|GraphQL|HTTP|\bat \w|private setup detail/i.test(message), message);
+    assert(!message.includes(serverRoot), message);
+  }
+}
+
+{
+  const settingsRoot = join(root, 'unwritable-settings');
+  await mkdir(settingsRoot, { mode: 0o500 });
+  const printed = [];
+  try {
+    await assert.rejects(loadSettings(join(settingsRoot, 'forge/config.json'), value => printed.push(value)),
+      error => error instanceof ReportedSetupError && error.message === 'settings');
+  } finally {
+    await chmod(settingsRoot, 0o700);
+  }
+  assertPlainStop(printed, [
+    'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
+  ], root);
+  assert.deepEqual((await loadSettings(join(settingsRoot, 'forge/config.json'), () => {})).commands, defaults().commands);
+}
+
+async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPrompt = async () => {}, answers = ['Purpose.', 'Users.'], undo = async () => {}, reason, before = [], message }) {
+  const repository = `owner/${name}`;
+  const stopRoot = join(root, 'stops', name);
+  const options = { projectsRoot: join(stopRoot, 'projects'), state: join(stopRoot, 'state') };
+  await mkdir(options.state, { recursive: true });
+  await prepare?.(options);
+  let begins = 0;
+  let failing = true;
+  const setup = printed => {
+    let answer = 0;
+    return setupRepository(repository, {
+      config: { ...defaults(stopRoot), projectsRoot: options.projectsRoot }, paths: { state: options.state },
+      commands: {
+        run: async (command, args, runOptions = {}) => {
+          const failure = failing && await failingRun(command, args, runOptions);
+          if (failure instanceof Error) throw failure;
+          if (failure) return failure;
+          if (command === 'claude') return { stdout: 'signed in' };
+          if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+          if (command === 'git' && args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` };
+          if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+          if (command === 'python3' && args.at(-1) === 'init') await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
+          return { stdout: '' };
+        }
+      },
+      github: {
+        exists: async path => { try { await stat(path); return true; } catch { return false; } },
+        begin: async manifest => { begins += 1; return { url: `https://example.test/${manifest.name}` }; },
+        complete: async () => credentials,
+        install: async () => true
+      },
+      prompt: async () => {
+        if (!failing) return ['Purpose.', 'Users.'][answer++];
+        if (answer === 0) await onPrompt(options);
+        return answers[answer++];
+      },
+      output: value => printed.push(value)
+    });
+  };
+  const stopped = [];
+  try {
+    await assert.rejects(setup(stopped), error => error instanceof ReportedSetupError && error.message === reason);
+  } finally {
+    await undo(options);
+  }
+  assert.deepEqual(stopped.slice(0, -1), ['Using Claude Code to set up the Forge.', ...before]);
+  assertPlainStop(stopped.slice(-1), [message], stopRoot);
+  failing = false;
+  const retried = [];
+  assert.equal((await setup(retried)).completed, true);
+  assert.match(retried.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
+  assert.equal(begins, 2);
+}
+
+await stopThenRetry('unwritable-state', {
+  prepare: async ({ state }) => chmod(state, 0o500),
+  undo: async ({ state }) => chmod(state, 0o700),
+  reason: 'settings',
+  message: 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
+});
+
+// mission.json lives in the project state folder: failing to read or save it is the same settings stop.
+// The Apps exist by then, so the stop first says they are kept.
+const missionPath = (state, name) => join(state, 'projects', 'owner', name, 'mission.json');
+const appPages = [
+  'Create the builder App in your browser: https://example.test/Forge builder',
+  'Create the release App in your browser: https://example.test/Forge release'
+];
+const FORGE_APPS_KEPT = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
+for (const [name, mission] of [
+  ['unreadable-mission', {
+    prepare: async ({ state }) => {
+      await writePrivateJson(missionPath(state, 'unreadable-mission'), { purpose: 'Purpose.', users: 'Users.' });
+      await chmod(missionPath(state, 'unreadable-mission'), 0o000);
+    },
+    undo: async ({ state }) => chmod(missionPath(state, 'unreadable-mission'), 0o600)
+  }],
+  ['mission-directory', {
+    prepare: async ({ state }) => mkdir(missionPath(state, 'mission-directory'), { recursive: true }),
+    undo: async ({ state }) => rm(missionPath(state, 'mission-directory'), { recursive: true })
+  }],
+  ['unwritable-mission', {
+    onPrompt: async ({ state }) => chmod(join(state, 'projects', 'owner', 'unwritable-mission'), 0o500),
+    undo: async ({ state }) => chmod(join(state, 'projects', 'owner', 'unwritable-mission'), 0o700)
+  }]
+]) {
+  await stopThenRetry(name, {
+    ...mission,
+    reason: 'settings',
+    before: [...appPages, FORGE_APPS_KEPT],
+    message: 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
+  });
+}
+
+// A mission question left empty, after the Apps exist: a plain stop that says the Apps are kept.
+for (const [name, answers] of [['empty-purpose', ['', 'Users.']], ['empty-users', ['Purpose.', '  ']]]) {
+  await stopThenRetry(name, {
+    answers,
+    reason: 'mission',
+    before: [...appPages, FORGE_APPS_KEPT],
+    message: 'Setup stopped because both mission questions need an answer: what the software is for and who uses it. Try setup again and answer both.'
+  });
+}
+
+// MISSION.md in the project folder cannot be written, or cannot be read, after the Apps exist.
+const missionFile = (projectsRoot, name) => join(projectsRoot, 'owner', name, 'MISSION.md');
+for (const [name, mode] of [['unwritable-mission-file', 0o444], ['unreadable-mission-file', 0o000]]) {
+  await stopThenRetry(name, {
+    onPrompt: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), mode),
+    undo: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), 0o644),
+    reason: 'mission-file',
+    before: [...appPages, FORGE_APPS_KEPT],
+    message: 'Setup stopped because it could not save the project\'s mission in the MISSION.md file of the project folder on this server. Let setup read and write that file before trying setup again.'
+  });
+}
+
+// A saved file that is there but damaged stops setup before it changes anything, with one plain message
+// naming the file to delete. Deleting it, as the message says, lets setup run again without creating new Apps.
+for (const [file, stopAt, damagedMessage] of [
+  ['mission.json', 'final-check', repository => `Setup stopped because the Forge's saved settings for ${repository} on this server are damaged: its saved answers to the mission questions cannot be read. Delete the file projects/${repository}/mission.json in the Forge's private state folder before trying setup again, and setup asks those questions again.`],
+  ['registration.json', undefined, repository => `Setup stopped because the Forge's saved settings for ${repository} on this server are damaged: its record of whether setup finished cannot be read. Delete the file projects/${repository}/registration.json in the Forge's private state folder before trying setup again.`]
+]) {
+  const repository = `owner/damaged-${file.replace('.json', '')}`;
+  const project = await retryProject(repository);
+  const retryState = join(root, 'retry-state');
+  // An earlier run records both Apps and the saved file: it stops at the final check, or completes.
+  if (stopAt) {
+    await assert.rejects(setupRepository(repository, project.options({ failAt: stopAt })),
+      error => error instanceof ReportedSetupError && error.message === stopAt);
+  } else {
+    assert.equal((await setupRepository(repository, project.options())).completed, true);
+  }
+  assert.equal(project.record.begins, 2);
+  await writeFile(join(retryState, 'projects', repository, file), '{ damaged');
+  const before = await readTree(retryState);
+  project.reset();
+  await assert.rejects(setupRepository(repository, project.options()),
+    error => error instanceof ReportedSetupError && error.message === 'damaged-settings');
+  assert.deepEqual(project.record.messages, ['Using Claude Code to set up the Forge.', damagedMessage(repository)]);
+  for (const message of project.record.messages) {
+    assert(!/JSON|position|line \d+ column|SyntaxError|Expected property|\bat \w/.test(message), message);
+    assert(!message.includes(root), message);
+  }
+  assert.equal(project.record.begins, 0);
+  assert.deepEqual(project.record.prompts, []);
+  assert(!project.record.calls.some(call => call.command !== 'claude'), JSON.stringify(project.record.calls));
+  assert.deepEqual(await readTree(retryState), before);
+  // The owner deletes the named file, from the Forge's private state folder, and tries setup again.
+  await rm(join(retryState, 'projects', ...damagedMessage(repository).match(/Delete the file projects\/(\S+) in/)[1].split('/')));
+  project.reset();
+  const result = await setupRepository(repository, project.options());
+  assert.equal(result.completed, true);
+  assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
+  assert.equal(project.record.begins, 0);
+  assert.deepEqual(project.record.prompts, file === 'mission.json' ? ['What is this software for?', 'Who uses it?'] : []);
+  assert.equal(await project.missionSections(), 1);
+}
+
+await stopThenRetry('missing-repository', {
+  run: (command, args) => command === 'gh' && args[1] === 'clone'
+    && Object.assign(new Error('gh failed.'), { stderr: 'GraphQL: Could not resolve to a Repository with the name \'owner/missing-repository\'. (repository)\n' }),
+  reason: 'checkout',
+  message: 'Setup stopped because GitHub did not let this server download owner/missing-repository: either it does not exist or this server\'s GitHub sign-in cannot reach it. Check the repository name, or give this server\'s GitHub sign-in access to owner/missing-repository, before trying setup again.'
+});
+
+for (const [name, stderr] of [
+  ['forbidden-repository', 'HTTP 403: Resource not accessible by integration (https://api.github.com/graphql)\n'],
+  ['signed-out-repository', 'To get started with GitHub CLI, please run:  gh auth login\n']
+]) {
+  await stopThenRetry(name, {
+    run: (command, args) => command === 'gh' && args[1] === 'clone' && Object.assign(new Error('gh failed.'), { stderr }),
+    reason: 'checkout',
+    message: `Setup stopped because GitHub did not let this server download owner/${name}: either it does not exist or this server's GitHub sign-in cannot reach it. Check the repository name, or give this server's GitHub sign-in access to owner/${name}, before trying setup again.`
+  });
+}
+
+await stopThenRetry('unreachable-github', {
+  run: (command, args) => command === 'gh' && args[1] === 'clone'
+    && Object.assign(new Error('gh failed.'), { stderr: 'error connecting to api.github.com\n' }),
+  reason: 'checkout',
+  message: 'Setup stopped because owner/unreachable-github could not be downloaded from GitHub. Restore this server\'s access to GitHub before trying setup again.'
+});
+
+const realGit = (command, args, runOptions) => command === 'git' && args[0] === 'remote'
+  && runProcess('git', args, { ...runOptions, env: { ...process.env, GIT_CEILING_DIRECTORIES: root } }).catch(error => error);
+const gitInit = async (folder, ...remote) => {
+  await runProcess('git', ['init', '-q', folder]);
+  if (remote.length) await runProcess('git', ['-C', folder, 'remote', 'add', 'origin', ...remote]);
+};
+for (const [name, prepareFolder, message] of [
+  ['plain-folder', async folder => writeFile(join(folder, 'notes.txt'), 'not a repository\n'),
+    'Setup stopped because the project folder for owner/plain-folder on this server already exists but does not hold a copy of a repository. Move that folder elsewhere before trying setup again.'],
+  ['other-repository', async folder => gitInit(folder, 'git@github.com:someone/else.git'),
+    'Setup stopped because the project folder for owner/other-repository on this server holds a copy of a different repository. Move that folder elsewhere before trying setup again.'],
+  ['no-origin', async folder => gitInit(folder),
+    'Setup stopped because the project folder for owner/no-origin on this server holds a copy that setup cannot match to owner/no-origin on GitHub. Move that folder elsewhere before trying setup again.'],
+  ['damaged-copy', async folder => mkdir(join(folder, '.git')),
+    'Setup stopped because the project folder for owner/damaged-copy on this server holds a copy that setup cannot match to owner/damaged-copy on GitHub. Move that folder elsewhere before trying setup again.'],
+  ['unreadable-origin', async folder => gitInit(folder, 'https://example.test/owner/unreadable-origin.git'),
+    'Setup stopped because the project folder for owner/unreadable-origin on this server holds a copy that setup cannot match to owner/unreadable-origin on GitHub. Move that folder elsewhere before trying setup again.']
+]) {
+  await stopThenRetry(name, {
+    prepare: async ({ projectsRoot }) => {
+      const folder = join(projectsRoot, 'owner', name);
+      await mkdir(folder, { recursive: true });
+      await prepareFolder(folder);
+    },
+    run: realGit,
+    undo: async ({ projectsRoot }) => rm(join(projectsRoot, 'owner', name), { recursive: true }),
+    reason: 'checkout',
+    message
+  });
+}
+
+await gitInit(join(root, 'git-missing', 'owner', 'existing'));
+await assert.rejects(
+  prepareCheckout('owner/existing', join(root, 'git-missing'), { names: { git: join(root, 'no-such-git') }, run: runProcess },
+    message => assert.fail(`a git that cannot start was reported as: ${message}`)),
+  /^Error: Could not run /
+);
+
+await stopThenRetry('failing-preparation', {
+  run: (command, args) => command === 'python3' && args.at(-1) === 'init'
+    && Object.assign(new Error('python3 failed.'), { stderr: `Traceback (most recent call last):\nPermissionError: [Errno 13] Permission denied: '${root}/x'\n` }),
+  reason: 'initialization',
+  message: 'Setup stopped because the build tools it downloaded could not prepare the project on this server. Install the latest version of the Forge on this server before trying setup again.'
+});
+
+// The build tools download runs real git against a stand-in for GitHub: a missing folder (GitHub cannot be
+// reached) or a repository without the pinned revision (GitHub no longer has it).
+const buildToolsRemote = join(root, 'build-tools-remote.git');
+await runProcess('git', ['init', '-q', '--bare', buildToolsRemote]);
+const buildToolsWork = join(root, 'build-tools-work');
+await runProcess('git', ['clone', '-q', buildToolsRemote, buildToolsWork]);
+await runProcess('git', ['-C', buildToolsWork, '-c', 'user.name=Forge test', '-c', 'user.email=forge@example.test',
+  'commit', '-q', '--allow-empty', '-m', 'Not the pinned revision']);
+await runProcess('git', ['-C', buildToolsWork, 'push', '-q', 'origin', 'HEAD:main']);
+const downloadFrom = remote => (command, args, runOptions = {}) => command === 'git' && args[0] !== 'remote'
+  && runProcess('git', args, { ...runOptions, env: {
+    ...process.env, GIT_CEILING_DIRECTORIES: root, GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.${remote}.insteadOf`, GIT_CONFIG_VALUE_0: FACTORY_REPOSITORY
+  } }).catch(error => error);
+const DOWNLOAD_STOPS = {
+  unreachable: 'Setup stopped because it could not download the build tools from GitHub. Restore this server\'s access to GitHub before trying setup again.',
+  revision: 'Setup stopped because it could not download the build tools: GitHub no longer has the version of them that this Forge needs. Install the latest version of the Forge on this server before trying setup again.'
+};
+
+await stopThenRetry('unreachable-build-tools', {
+  run: downloadFrom(join(root, 'no-such-remote.git')), reason: 'preparation', message: DOWNLOAD_STOPS.unreachable
+});
+await stopThenRetry('missing-build-tools-revision', {
+  run: downloadFrom(buildToolsRemote), reason: 'preparation', message: DOWNLOAD_STOPS.revision
+});
+
+// A copy an interrupted download left behind is replaced by a fresh download instead of failing every retry.
+await stopThenRetry('damaged-build-tools', {
+  prepare: async ({ state }) => mkdir(join(state, 'factory', '.git'), { recursive: true }),
+  run: downloadFrom(buildToolsRemote),
+  undo: async ({ state }) => {
+    assert.equal((await runProcess('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd: join(state, 'factory'), env: { ...process.env, GIT_CEILING_DIRECTORIES: root }
+    })).stdout.trim(), 'true');
+  },
+  reason: 'preparation', message: DOWNLOAD_STOPS.revision
+});
+{
+  const healRoot = join(root, 'stops', 'heal');
+  const healState = join(healRoot, 'state');
+  await mkdir(join(healState, 'factory', '.git', 'damaged'), { recursive: true });
+  const healCalls = [];
+  const healed = [];
+  let healAnswer = 0;
+  const result = await setupRepository('owner/healed-build-tools', {
+    config: { ...defaults(healRoot), projectsRoot: join(healRoot, 'projects') }, paths: { state: healState },
+    commands: {
+      run: async (command, args, runOptions = {}) => {
+        healCalls.push([command, args[0]]);
+        if (command === 'git' && args[0] === 'fetch' && await stat(join(runOptions.cwd, '.git', 'damaged')).then(() => true, () => false)) {
+          throw Object.assign(new Error('git failed.'), { stderr: 'fatal: bad object HEAD\n' });
+        }
+        return run(command, args, runOptions);
+      }
+    },
+    github: { begin: async manifest => ({ url: `https://example.test/${manifest.name}` }), complete: async () => credentials, install: async () => true },
+    prompt: async () => ['Purpose.', 'Users.'][healAnswer++],
+    output: value => healed.push(value)
+  });
+  assert.equal(result.completed, true);
+  assert.match(healed.at(-1), /^Setup is complete for owner\/healed-build-tools\./);
+  assert(!healed.some(message => message.startsWith('Setup stopped')));
+  assert.deepEqual(healCalls.filter(([command]) => command === 'git').map(([, step]) => step),
+    ['fetch', 'clone', 'fetch', 'checkout', 'rev-parse']);
 }
