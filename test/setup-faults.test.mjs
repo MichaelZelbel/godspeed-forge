@@ -1,11 +1,13 @@
-// Makes every file operation, command, GitHub call and question setup reaches fail, one at a time, from a
-// set of starting states, and checks that setup then stops with one plain sentence and a non-zero exit, says
-// the Apps are kept exactly when both exist, and finishes on retry with one App per role. Every place in
-// setup's code that reads or writes a file, runs a command, calls GitHub or asks a question must be made to
-// fail by some scenario here, so a new step that no scenario reaches fails this test.
+// Makes every file operation, command, GitHub call, question and hold on the repository's setup that setup
+// reaches fail, one at a time, from a set of starting states, and checks that setup then stops with one plain
+// sentence and a non-zero exit, says the Apps are kept exactly when both exist, and finishes on retry with one
+// App per role. Every place in lib/ that reads or writes a file, runs a command, calls GitHub, asks a question
+// or takes that hold must be made to fail by some scenario here, so a new step that no scenario reaches fails
+// this test.
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { Server } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { files } from '../lib/files.mjs';
@@ -25,15 +27,23 @@ const buildToolsSource = join(root, 'build-tools', FACTORY_REVISION);
 const KEPT = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
 const credentialsFor = code => ({ id: 1, pem: 'PRIVATE KEY', slug: code });
 
-// Every line in setup's modules that calls one of the points this test makes fail.
-const SEAM_CALL = /\bfiles\.\w+\(|\bcommands\.run\(|\brunCommand\(|\bgithub\.\w+(?:\?\.)?\(|\bprompt\(/;
+// Every line in lib/ that calls one of the points this test makes fail.
+const SEAM_CALL = /\bfiles\.\w+\(|\bcommands\.run\(|\brunCommand\(|\bgithub\.\w+(?:\?\.)?\(|\bprompt\(|\.listen\(/;
+// Modules whose points setup never reaches in this test, and why.
+const EXEMPT = {
+  'files.mjs': 'the file operations themselves, which this test makes fail where setup calls them',
+  'github-adapter.mjs': 'the real GitHub, which this test replaces with the stand-in whose every call it makes fail'
+};
 const sources = new Map();
 for (const name of await readdir(lib)) {
   if (name.endsWith('.mjs')) sources.set(join(lib, name), await readFile(join(lib, name), 'utf8'));
 }
+for (const module of Object.keys(EXEMPT)) assert(sources.has(join(lib, module)), `lib/${module} no longer exists`);
 const staticSites = [];
-for (const module of ['setup.mjs', 'github-apps.mjs', 'config.mjs', 'agent.mjs']) {
-  sources.get(join(lib, module)).split('\n').forEach((line, index) => {
+for (const [path, text] of sources) {
+  const module = path.slice(lib.length);
+  if (module in EXEMPT) continue;
+  text.split('\n').forEach((line, index) => {
     if (!line.trim().startsWith('//') && SEAM_CALL.test(line)) staticSites.push(`${module}:${index + 1}`);
   });
 }
@@ -52,7 +62,7 @@ function siteOf(module, text) {
 // A file operation outside the seam could not be made to fail here.
 for (const [path, text] of sources) {
   const module = path.slice(lib.length);
-  if (module === 'files.mjs' || module === 'github-adapter.mjs') continue;
+  if (module === 'files.mjs') continue;
   assert(!text.includes("from 'node:fs"), `${module} uses the file system without lib/files.mjs, so this test cannot make that step fail`);
 }
 
@@ -80,20 +90,28 @@ function rawError(op) {
 
 // The run being watched: every point call is recorded, and the calls named in faults fail instead of running.
 let current = null;
+function watch(kind, op) {
+  if (!current) return undefined;
+  const index = current.events.length;
+  current.events.push({ kind, op, ...callerOf(new Error().stack) });
+  const fault = current.faults.get(index);
+  if (fault) current.fired.push(index);
+  return fault;
+}
 function point(kind, op, call) {
   return (...args) => {
-    if (!current) return call(...args);
-    const index = current.events.length;
-    current.events.push({ kind, op, ...callerOf(new Error().stack) });
-    const fault = current.faults.get(index);
-    if (fault) {
-      current.fired.push(index);
-      return Promise.reject(fault === 'closed' ? new InputClosed() : rawError(op));
-    }
-    return call(...args);
+    const fault = watch(kind, op);
+    if (!fault) return call(...args);
+    return Promise.reject(fault === 'closed' ? new InputClosed() : rawError(op));
   };
 }
 for (const op of Object.keys(files)) files[op] = point('file', op, files[op]);
+const listen = Server.prototype.listen;
+Server.prototype.listen = function (...args) {
+  if (!watch('lock', 'listen')) return listen.apply(this, args);
+  process.nextTick(() => this.emit('error', rawError('listen')));
+  return this;
+};
 
 function standInGithub() {
   const world = { counts: { builder: 0, release: 0 }, live: { builder: 0, release: 0 }, usedCodes: new Set(), noCallback: null };
