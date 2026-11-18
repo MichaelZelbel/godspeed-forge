@@ -818,7 +818,7 @@ function assertPlainStop(printed, expected, serverRoot) {
   assert.deepEqual((await loadSettings(join(settingsRoot, 'forge/config.json'), () => {})).commands, defaults().commands);
 }
 
-async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPrompt = async () => {}, undo = async () => {}, reason, before = [], message }) {
+async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPrompt = async () => {}, answers = ['Purpose.', 'Users.'], undo = async () => {}, reason, before = [], message }) {
   const repository = `owner/${name}`;
   const stopRoot = join(root, 'stops', name);
   const options = { projectsRoot: join(stopRoot, 'projects'), state: join(stopRoot, 'state') };
@@ -849,7 +849,11 @@ async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPr
         complete: async () => credentials,
         install: async () => true
       },
-      prompt: async () => { if (failing && answer === 0) await onPrompt(options); return ['Purpose.', 'Users.'][answer++]; },
+      prompt: async () => {
+        if (!failing) return ['Purpose.', 'Users.'][answer++];
+        if (answer === 0) await onPrompt(options);
+        return answers[answer++];
+      },
       output: value => printed.push(value)
     });
   };
@@ -876,11 +880,13 @@ await stopThenRetry('unwritable-state', {
 });
 
 // mission.json lives in the project state folder: failing to read or save it is the same settings stop.
+// The Apps exist by then, so the stop first says they are kept.
 const missionPath = (state, name) => join(state, 'projects', 'owner', name, 'mission.json');
 const appPages = [
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release'
 ];
+const FORGE_APPS_KEPT = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
 for (const [name, mission] of [
   ['unreadable-mission', {
     prepare: async ({ state }) => {
@@ -901,8 +907,30 @@ for (const [name, mission] of [
   await stopThenRetry(name, {
     ...mission,
     reason: 'settings',
-    before: appPages,
+    before: [...appPages, FORGE_APPS_KEPT],
     message: 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
+  });
+}
+
+// A mission question left empty, after the Apps exist: a plain stop that says the Apps are kept.
+for (const [name, answers] of [['empty-purpose', ['', 'Users.']], ['empty-users', ['Purpose.', '  ']]]) {
+  await stopThenRetry(name, {
+    answers,
+    reason: 'mission',
+    before: [...appPages, FORGE_APPS_KEPT],
+    message: 'Setup stopped because both mission questions need an answer: what the software is for and who uses it. Try setup again and answer both.'
+  });
+}
+
+// MISSION.md in the project folder cannot be written, or cannot be read, after the Apps exist.
+const missionFile = (projectsRoot, name) => join(projectsRoot, 'owner', name, 'MISSION.md');
+for (const [name, mode] of [['unwritable-mission-file', 0o444], ['unreadable-mission-file', 0o000]]) {
+  await stopThenRetry(name, {
+    onPrompt: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), mode),
+    undo: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), 0o644),
+    reason: 'mission-file',
+    before: [...appPages, FORGE_APPS_KEPT],
+    message: 'Setup stopped because it could not save the project\'s mission in the MISSION.md file of the project folder on this server. Let setup read and write that file before trying setup again.'
   });
 }
 
