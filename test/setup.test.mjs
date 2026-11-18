@@ -401,3 +401,107 @@ await assert.rejects(setupRepository('owner/other', {
 }), error => error instanceof ReportedSetupError && error.message === 'agent');
 assert.deepEqual(stopped, ['Setup stopped because neither Claude Code nor Codex is signed in. Sign in to one of them before trying setup again.']);
 await assert.rejects(stat(emptyRoot));
+
+async function retryProject(repository) {
+  const record = { prompts: [], begins: 0, calls: [], messages: [] };
+  const retryState = join(root, 'retry-state');
+  const options = ({ failAt, answers = ['First purpose.', 'First users.'] } = {}) => ({
+    config: { ...defaults(root), projectsRoot: join(root, 'retry-projects') }, paths: { state: retryState },
+    commands: {
+      run: async (command, args, runOptions = {}) => {
+        record.calls.push({ command, args });
+        if (command === 'claude') return { stdout: 'signed in' };
+        if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+        if (command === 'git' && args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` };
+        if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+        if (command === 'python3' && args.at(-1) === 'init') {
+          await mkdir(join(runOptions.cwd, 'factory'), { recursive: true });
+          try { await stat(join(runOptions.cwd, 'MISSION.md')); } catch {
+            await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n\nFactory template.\n');
+          }
+        }
+        if (command === 'python3' && args.at(-1) === 'doctor' && failAt === 'final-check') throw new Error('doctor failed');
+        return { stdout: '' };
+      }
+    },
+    github: {
+      exists: async path => { try { await stat(path); return true; } catch { return false; } },
+      begin: async manifest => {
+        record.begins += 1;
+        if (failAt === 'github') throw new Error('GitHub page not completed');
+        return { url: `https://example.test/${manifest.name}` };
+      },
+      complete: async () => credentials,
+      install: async () => true
+    },
+    prompt: async question => { record.prompts.push(question); return answers[record.prompts.length - 1] ?? 'Other.'; },
+    output: value => record.messages.push(value)
+  });
+  const missionPath = join(root, 'retry-projects', repository, 'MISSION.md');
+  const missionSections = async () => (await readFile(missionPath, 'utf8')).match(/^## Project mission$/gm)?.length ?? 0;
+  return { record, options, missionPath, missionSections, reset: () => {
+    record.prompts.length = 0; record.begins = 0; record.calls.length = 0; record.messages.length = 0;
+  } };
+}
+
+// A stop after the mission answers: the retry does not ask them again.
+{
+  const project = await retryProject('owner/stopped-after-mission');
+  await assert.rejects(setupRepository('owner/stopped-after-mission', project.options({ failAt: 'final-check' })),
+    error => error instanceof ReportedSetupError && error.message === 'final-check');
+  assert.deepEqual(project.record.prompts, ['What is this software for?', 'Who uses it?']);
+  project.reset();
+  const result = await setupRepository('owner/stopped-after-mission', project.options({ answers: ['Second purpose.', 'Second users.'] }));
+  assert.equal(result.completed, true);
+  assert.deepEqual(project.record.prompts, []);
+  assert.equal(project.record.begins, 0);
+  assert.equal(await project.missionSections(), 1);
+  const mission = await readFile(project.missionPath, 'utf8');
+  assert.match(mission, /What this software is for: First purpose\.\n\nWho uses it: First users\.\n$/);
+  assert(!mission.includes('Second'));
+  assert.match(project.record.messages.at(-1), /^Setup is complete for owner\/stopped-after-mission\./);
+}
+
+// A stop before the mission answers: the retry asks them once.
+{
+  const project = await retryProject('owner/stopped-before-mission');
+  await assert.rejects(setupRepository('owner/stopped-before-mission', project.options({ failAt: 'github' })),
+    error => error instanceof ReportedSetupError && error.message === 'github');
+  assert.deepEqual(project.record.prompts, []);
+  project.reset();
+  await setupRepository('owner/stopped-before-mission', project.options());
+  assert.deepEqual(project.record.prompts, ['What is this software for?', 'Who uses it?']);
+  assert.equal(await project.missionSections(), 1);
+  assert.match(await readFile(project.missionPath, 'utf8'), /\n## Project mission\n\nWhat this software is for: First purpose\.\n\nWho uses it: First users\.\n$/);
+}
+
+// Setup on a project that is already set up says so and changes nothing.
+{
+  const project = await retryProject('owner/already-set-up');
+  await setupRepository('owner/already-set-up', project.options());
+  assert.deepEqual(project.record.prompts, ['What is this software for?', 'Who uses it?']);
+  assert.equal(project.record.begins, 2);
+  assert.match(project.record.messages.at(-1), /^Setup is complete for owner\/already-set-up\./);
+  assert.deepEqual(JSON.parse(await readFile(join(root, 'retry-state/projects/owner/already-set-up/registration.json'), 'utf8')).completed, true);
+  const missionBefore = await readFile(project.missionPath);
+  project.reset();
+  const result = await setupRepository('owner/already-set-up', project.options({ answers: ['Second purpose.', 'Second users.'] }));
+  assert.equal(result.alreadySetUp, true);
+  assert.deepEqual(project.record.prompts, []);
+  assert.equal(project.record.begins, 0);
+  assert(!project.record.calls.some(call => call.args.at(-1) === 'doctor'));
+  assert.deepEqual(await readFile(project.missionPath), missionBefore);
+  assert.deepEqual(project.record.messages, ['The Forge is already set up for owner/already-set-up.']);
+}
+
+// An already set-up project from an earlier release still has its credentials moved by asking for setup again.
+{
+  const project = await retryProject('owner/legacy-set-up');
+  const legacyState = join(root, 'retry-state/projects/owner/legacy-set-up');
+  await writePrivateJson(join(legacyState, 'registration.json'), { repository: 'owner/legacy-set-up', checkout: 'unused', completed: true });
+  await writePrivateJson(join(legacyState, 'builder-app.json'), credentials);
+  await setupRepository('owner/legacy-set-up', project.options());
+  assert.deepEqual(project.record.messages, ['The Forge is already set up for owner/legacy-set-up.']);
+  await assert.rejects(stat(join(legacyState, 'builder-app.json')));
+  assert.deepEqual(JSON.parse(await readFile(join(root, 'retry-state/credentials/owner/legacy-set-up/builder-app.json'), 'utf8')), credentials);
+}
