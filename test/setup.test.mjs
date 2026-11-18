@@ -10,7 +10,7 @@ import {
 } from '../lib/github-apps.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { run as runProcess } from '../lib/process.mjs';
-import { FACTORY_REVISION } from '../lib/constants.mjs';
+import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
@@ -450,7 +450,7 @@ await assert.rejects(stat(join(state, 'projects/owner/failing-github/registratio
 for (const failure of [
   {
     repository: 'owner/failing-download', command: 'git', argument: 'fetch',
-    message: 'Setup stopped because the required files could not be downloaded from GitHub. Restore this server\'s access to GitHub before trying setup again.'
+    message: 'Setup stopped because it could not download the build tools from GitHub. Restore this server\'s access to GitHub before trying setup again.'
   },
   {
     repository: 'owner/failing-initialization', command: 'python3', argument: 'init',
@@ -936,3 +936,69 @@ await stopThenRetry('failing-preparation', {
   reason: 'initialization',
   message: 'Setup stopped because the build tools it downloaded could not prepare the project on this server. Install the latest version of the Forge on this server before trying setup again.'
 });
+
+// The build tools download runs real git against a stand-in for GitHub: a missing folder (GitHub cannot be
+// reached) or a repository without the pinned revision (GitHub no longer has it).
+const buildToolsRemote = join(root, 'build-tools-remote.git');
+await runProcess('git', ['init', '-q', '--bare', buildToolsRemote]);
+const buildToolsWork = join(root, 'build-tools-work');
+await runProcess('git', ['clone', '-q', buildToolsRemote, buildToolsWork]);
+await runProcess('git', ['-C', buildToolsWork, '-c', 'user.name=Forge test', '-c', 'user.email=forge@example.test',
+  'commit', '-q', '--allow-empty', '-m', 'Not the pinned revision']);
+await runProcess('git', ['-C', buildToolsWork, 'push', '-q', 'origin', 'HEAD:main']);
+const downloadFrom = remote => (command, args, runOptions = {}) => command === 'git' && args[0] !== 'remote'
+  && runProcess('git', args, { ...runOptions, env: {
+    ...process.env, GIT_CEILING_DIRECTORIES: root, GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.${remote}.insteadOf`, GIT_CONFIG_VALUE_0: FACTORY_REPOSITORY
+  } }).catch(error => error);
+const DOWNLOAD_STOPS = {
+  unreachable: 'Setup stopped because it could not download the build tools from GitHub. Restore this server\'s access to GitHub before trying setup again.',
+  revision: 'Setup stopped because it could not download the build tools: GitHub no longer has the version of them that this Forge needs. Install the latest version of the Forge on this server before trying setup again.'
+};
+
+await stopThenRetry('unreachable-build-tools', {
+  run: downloadFrom(join(root, 'no-such-remote.git')), reason: 'preparation', message: DOWNLOAD_STOPS.unreachable
+});
+await stopThenRetry('missing-build-tools-revision', {
+  run: downloadFrom(buildToolsRemote), reason: 'preparation', message: DOWNLOAD_STOPS.revision
+});
+
+// A copy an interrupted download left behind is replaced by a fresh download instead of failing every retry.
+await stopThenRetry('damaged-build-tools', {
+  prepare: async ({ state }) => mkdir(join(state, 'factory', '.git'), { recursive: true }),
+  run: downloadFrom(buildToolsRemote),
+  undo: async ({ state }) => {
+    assert.equal((await runProcess('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd: join(state, 'factory'), env: { ...process.env, GIT_CEILING_DIRECTORIES: root }
+    })).stdout.trim(), 'true');
+  },
+  reason: 'preparation', message: DOWNLOAD_STOPS.revision
+});
+{
+  const healRoot = join(root, 'stops', 'heal');
+  const healState = join(healRoot, 'state');
+  await mkdir(join(healState, 'factory', '.git', 'damaged'), { recursive: true });
+  const healCalls = [];
+  const healed = [];
+  let healAnswer = 0;
+  const result = await setupRepository('owner/healed-build-tools', {
+    config: { ...defaults(healRoot), projectsRoot: join(healRoot, 'projects') }, paths: { state: healState },
+    commands: {
+      run: async (command, args, runOptions = {}) => {
+        healCalls.push([command, args[0]]);
+        if (command === 'git' && args[0] === 'fetch' && await stat(join(runOptions.cwd, '.git', 'damaged')).then(() => true, () => false)) {
+          throw Object.assign(new Error('git failed.'), { stderr: 'fatal: bad object HEAD\n' });
+        }
+        return run(command, args, runOptions);
+      }
+    },
+    github: { begin: async manifest => ({ url: `https://example.test/${manifest.name}` }), complete: async () => credentials, install: async () => true },
+    prompt: async () => ['Purpose.', 'Users.'][healAnswer++],
+    output: value => healed.push(value)
+  });
+  assert.equal(result.completed, true);
+  assert.match(healed.at(-1), /^Setup is complete for owner\/healed-build-tools\./);
+  assert(!healed.some(message => message.startsWith('Setup stopped')));
+  assert.deepEqual(healCalls.filter(([command]) => command === 'git').map(([, step]) => step),
+    ['fetch', 'clone', 'fetch', 'checkout', 'rev-parse']);
+}
