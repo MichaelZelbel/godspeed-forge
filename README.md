@@ -32,6 +32,16 @@ GitHub Apps in the repository owner's personal or organization account, then gui
 questions and reports the setup checks. It completes only after both installations are confirmed
 and the checks succeed, and it leaves the schedule off until you explicitly start it.
 
+After setup, ask “plan release `project`”, “plan the next `project` release”, or “what should go into
+the next `project` version?”. The project name is optional. The Forge
+selects one completed project, considers its latest public release, subsequent work, open issues and
+pull requests, default-branch checks, and deferred work, then proposes a one-sitting release. Its
+plain-language proposal includes outcomes, deferred work, an approximate share of the signed-in
+agent allowance, and a version. You can request changes or say no without creating anything. Only an
+explicit “yes” writes private approved-release records and creates one GitHub issue for each item.
+If filing is interrupted, asking again with the same approved proposal resumes from its saved issue
+mappings instead of duplicating completed issues.
+
 Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 `~/.godspeed/forge/state/` for private state. Root Linux installs use
 `/etc/godspeed-forge/config.json` and `/var/lib/godspeed/forge/`. The state directories are mode
