@@ -1144,34 +1144,6 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   assert.deepEqual(third.messages, [`The Forge is already set up for ${repository}.`]);
 }
 
-// Stored App details that are a link whose target is gone are damaged, not finished: the run stops with the
-// damaged-App sentence instead of reporting setup as done, and once the owner deletes that App on GitHub the
-// next run creates it again, leaving one App per role.
-for (const [kind, finished] of [['builder', false], ['release', true]]) {
-  const repository = `owner/${kind}-broken-link-${finished ? 'finished' : 'unfinished'}`;
-  const retryState = join(root, `retry-broken-link-${kind}`);
-  const stateDirectory = projectStatePath(retryState, repository);
-  const linkPath = join(credentialPath(retryState, repository), `${kind}-app.json`);
-  const standIn = standInGithub();
-  assert.equal((await setupAttempt(repository, retryState, standIn.github)).error, undefined);
-  if (!finished) await rm(join(stateDirectory, 'registration.json'));
-  await rm(linkPath);
-  await symlink(join(retryState, 'gone', 'target.json'), linkPath);
-  const first = await setupAttempt(repository, retryState, standIn.github);
-  assert(first.error instanceof ReportedSetupError && first.error.message === 'damaged-app', `${kind} ${finished}`);
-  assert.equal(first.messages.at(-1), `Setup stopped because the saved details of the ${kind} App on this server are damaged. Delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again.`);
-  assertNoInternalText(first.messages.at(-1), retryState);
-  assert(!first.messages.some(message => message.startsWith('Setup is complete') || message.startsWith('The Forge is already set up')));
-  await assert.rejects(lstat(linkPath));
-  assert(!(await isPresent(join(stateDirectory, `${kind}-installation.json`))));
-  standIn.live[kind] -= 1;
-  const second = await setupAttempt(repository, retryState, standIn.github);
-  assert.equal(second.error, undefined);
-  assert(second.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
-  assert(completedFor(repository)(second.messages.at(-1)));
-  assert.deepEqual(standIn.live, { builder: 1, release: 1 });
-}
-
 // An empty App details file is nothing saved: setup does exactly what it does when that file is missing,
 // on a fresh setup and after a finished one, and never calls it damaged.
 for (const [n, prepare] of [
@@ -1294,6 +1266,33 @@ function assertStopped(attempt, [message, reason], serverRoot) {
     assert(!/factory|archon|config|token/i.test(line), line);
     for (const secret of Object.values(credentials)) assert(!line.includes(String(secret)), line);
   }
+}
+
+// Stored App details that are a link whose target is gone read as missing, exactly as a deleted file does:
+// the run stops with the missing-details sentence instead of reporting setup as done or calling the details
+// damaged, and leaves the link in place for the owner to repair. Once the owner deletes that App on GitHub,
+// the next run creates it again, leaving one App per role.
+for (const [kind, finished] of [['builder', false], ['release', true]]) {
+  const repository = `owner/${kind}-broken-link-${finished ? 'finished' : 'unfinished'}`;
+  const retryState = join(root, `retry-broken-link-${kind}`);
+  const stateDirectory = projectStatePath(retryState, repository);
+  const linkPath = join(credentialPath(retryState, repository), `${kind}-app.json`);
+  const standIn = standInGithub();
+  assert.equal((await setupAttempt(repository, retryState, standIn.github)).error, undefined);
+  if (!finished) await rm(join(stateDirectory, 'registration.json'));
+  await rm(linkPath);
+  await symlink(join(retryState, 'gone', 'target.json'), linkPath);
+  const first = await setupAttempt(repository, retryState, standIn.github);
+  assertStopped(first, appGoneStops.missing(kind, repository), retryState);
+  assert(!first.messages.some(message => message.startsWith('Setup is complete') || message.includes('damaged')), JSON.stringify(first.messages));
+  assert((await lstat(linkPath)).isSymbolicLink(), `${kind} link left in place`);
+  assert(!(await isPresent(join(stateDirectory, `${kind}-installation.json`))));
+  standIn.live[kind] -= 1;
+  const second = await setupAttempt(repository, retryState, standIn.github);
+  assert.equal(second.error, undefined);
+  assert(second.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
+  assert(completedFor(repository)(second.messages.at(-1)));
+  assert.deepEqual(standIn.live, { builder: 1, release: 1 });
 }
 
 for (const kind of ['builder', 'release']) {
