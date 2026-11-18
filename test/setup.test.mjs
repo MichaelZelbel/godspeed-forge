@@ -821,11 +821,11 @@ await assert.rejects(stat(emptyRoot));
 const isPresent = async path => { try { await stat(path); return true; } catch { return false; } };
 
 // deleted and uninstalled name the Apps GitHub answers for as gone from the account or from the repository;
-// unreachable makes every check fail as if GitHub could not be reached.
+// unreachable names the Apps whose check fails as if GitHub could not be reached.
 function standInGithub(options = {}) {
   const counts = { builder: 0, release: 0 };
   const installs = { builder: 0, release: 0 };
-  const onGithub = { deleted: new Set(), uninstalled: new Set(), unreachable: false };
+  const onGithub = { deleted: new Set(), uninstalled: new Set(), unreachable: new Set() };
   const live = { builder: 0, release: 0 };
   const pending = { ...options };
   const usedCodes = new Set();
@@ -854,7 +854,7 @@ function standInGithub(options = {}) {
     },
     install: async ({ kind }) => { installs[kind] += 1; return true; },
     appStatus: async ({ kind }) => {
-      if (onGithub.unreachable) throw new Error('network unreachable');
+      if (onGithub.unreachable.has(kind)) throw new Error('network unreachable');
       if (onGithub.deleted.has(kind)) return 'app-missing';
       return onGithub.uninstalled.has(kind) ? 'not-installed' : 'installed';
     }
@@ -1299,6 +1299,25 @@ for (const kind of ['builder', 'release']) {
   assert.deepEqual(project.standIn.installs, { builder: 2, release: 2 });
 }
 
+{
+  // GitHub answers that the release App is gone but cannot be reached for the builder App: the stop is the
+  // unreachable check, nothing is removed, and once GitHub answers for both the next runs repair the release
+  // App only after checking the builder App again.
+  const project = await finishedSetup('one-unchecked');
+  const before = await readTree(project.retryState);
+  project.standIn.onGithub.deleted.add('release');
+  project.standIn.onGithub.unreachable.add('builder');
+  assertStopped(await project.attempt(), appGoneStops.unchecked('builder', project.repository), project.retryState);
+  assert.deepEqual(await readTree(project.retryState), before);
+  project.standIn.onGithub.unreachable.clear();
+  project.standIn.onGithub.deleted.add('builder');
+  assertStopped(await project.attempt(), appGoneStops.gone('builder', project.repository), project.retryState);
+  project.standIn.onGithub.deleted.clear();
+  const next = await project.attempt();
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 2, release: 2 });
+}
+
 for (const removed of ['settings', 'folder']) {
   // The build tools' settings, or the whole project folder, are gone from this server.
   const project = await finishedSetup(`build-tools-${removed}`);
@@ -1317,10 +1336,10 @@ for (const removed of ['settings', 'folder']) {
   const project = await finishedSetup('nothing-missing');
   const saved = async () => [await readTree(project.retryState), await readTree(project.checkout)];
   const before = await saved();
-  project.standIn.onGithub.unreachable = true;
+  project.standIn.onGithub.unreachable.add('builder').add('release');
   assertStopped(await project.attempt(), appGoneStops.unchecked('builder', project.repository), project.retryState);
   assert.deepEqual(await saved(), before);
-  project.standIn.onGithub.unreachable = false;
+  project.standIn.onGithub.unreachable.clear();
   const again = await project.attempt();
   assert.equal(again.error, undefined);
   assert.deepEqual(again.messages, [`The Forge is already set up for ${project.repository}.`]);
