@@ -692,7 +692,7 @@ async function stopThenRetry(name, { prepare, run: failingRun = () => null, undo
       config: { ...defaults(stopRoot), projectsRoot: options.projectsRoot }, paths: { state: options.state },
       commands: {
         run: async (command, args, runOptions = {}) => {
-          const failure = failing && failingRun(command, args);
+          const failure = failing && await failingRun(command, args, runOptions);
           if (failure instanceof Error) throw failure;
           if (failure) return failure;
           if (command === 'claude') return { stdout: 'signed in' };
@@ -741,6 +741,17 @@ await stopThenRetry('missing-repository', {
   message: 'Setup stopped because GitHub did not let this server download owner/missing-repository: either it does not exist or this server\'s GitHub sign-in cannot reach it. Check the repository name, or give this server\'s GitHub sign-in access to owner/missing-repository, before trying setup again.'
 });
 
+for (const [name, stderr] of [
+  ['forbidden-repository', 'HTTP 403: Resource not accessible by integration (https://api.github.com/graphql)\n'],
+  ['signed-out-repository', 'To get started with GitHub CLI, please run:  gh auth login\n']
+]) {
+  await stopThenRetry(name, {
+    run: (command, args) => command === 'gh' && args[1] === 'clone' && Object.assign(new Error('gh failed.'), { stderr }),
+    reason: 'checkout',
+    message: `Setup stopped because GitHub did not let this server download owner/${name}: either it does not exist or this server's GitHub sign-in cannot reach it. Check the repository name, or give this server's GitHub sign-in access to owner/${name}, before trying setup again.`
+  });
+}
+
 await stopThenRetry('unreachable-github', {
   run: (command, args) => command === 'gh' && args[1] === 'clone'
     && Object.assign(new Error('gh failed.'), { stderr: 'error connecting to api.github.com\n' }),
@@ -748,11 +759,23 @@ await stopThenRetry('unreachable-github', {
   message: 'Setup stopped because owner/unreachable-github could not be downloaded from GitHub. Restore this server\'s access to GitHub before trying setup again.'
 });
 
+const realGit = (command, args, runOptions) => command === 'git' && args[0] === 'remote'
+  && runProcess('git', args, { ...runOptions, env: { ...process.env, GIT_CEILING_DIRECTORIES: root } }).catch(error => error);
+const gitInit = async (folder, ...remote) => {
+  await runProcess('git', ['init', '-q', folder]);
+  if (remote.length) await runProcess('git', ['-C', folder, 'remote', 'add', 'origin', ...remote]);
+};
 for (const [name, prepareFolder, message] of [
   ['plain-folder', async folder => writeFile(join(folder, 'notes.txt'), 'not a repository\n'),
     'Setup stopped because the project folder for owner/plain-folder on this server already exists but does not hold a copy of a repository. Move that folder elsewhere before trying setup again.'],
-  ['other-repository', async folder => mkdir(join(folder, '.git')),
-    'Setup stopped because the project folder for owner/other-repository on this server holds a copy of a different repository. Move that folder elsewhere before trying setup again.']
+  ['other-repository', async folder => gitInit(folder, 'git@github.com:someone/else.git'),
+    'Setup stopped because the project folder for owner/other-repository on this server holds a copy of a different repository. Move that folder elsewhere before trying setup again.'],
+  ['no-origin', async folder => gitInit(folder),
+    'Setup stopped because the project folder for owner/no-origin on this server holds a copy that does not record which repository it was downloaded from. Move that folder elsewhere before trying setup again.'],
+  ['damaged-copy', async folder => mkdir(join(folder, '.git')),
+    'Setup stopped because the project folder for owner/damaged-copy on this server holds a copy that does not record which repository it was downloaded from. Move that folder elsewhere before trying setup again.'],
+  ['unreadable-origin', async folder => gitInit(folder, 'https://example.test/owner/unreadable-origin.git'),
+    'Setup stopped because the project folder for owner/unreadable-origin on this server holds a copy that does not record which repository it was downloaded from. Move that folder elsewhere before trying setup again.']
 ]) {
   await stopThenRetry(name, {
     prepare: async ({ projectsRoot }) => {
@@ -760,12 +783,19 @@ for (const [name, prepareFolder, message] of [
       await mkdir(folder, { recursive: true });
       await prepareFolder(folder);
     },
-    run: (command, args) => command === 'git' && args[0] === 'remote' && { stdout: 'git@github.com:someone/else.git\n' },
+    run: realGit,
     undo: async ({ projectsRoot }) => rm(join(projectsRoot, 'owner', name), { recursive: true }),
     reason: 'checkout',
     message
   });
 }
+
+await gitInit(join(root, 'git-missing', 'owner', 'existing'));
+await assert.rejects(
+  prepareCheckout('owner/existing', join(root, 'git-missing'), { names: { git: join(root, 'no-such-git') }, run: runProcess },
+    message => assert.fail(`a git that cannot start was reported as: ${message}`)),
+  /^Error: Could not run /
+);
 
 await stopThenRetry('failing-preparation', {
   run: (command, args) => command === 'python3' && args.at(-1) === 'init'
