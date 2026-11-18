@@ -11,7 +11,7 @@ import {
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
-import { credentialPath, defaults, projectStatePath, writePrivateJson } from '../lib/config.mjs';
+import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -79,8 +79,41 @@ assert.deepEqual(messages, [
   'Using Claude Code to set up the Forge.',
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release',
-  'Setup is complete for owner/repo. Automatic work is off. Each release uses your signed-in Claude Code account to plan and build the work. The Forge adds no separate charge; what you pay depends on your account plan, the size of the release, and your provider\'s usage limits. When you are ready to start automatic work, ask me to turn it on.'
+  'Setup is complete for owner/repo. Automatic work is off. A typical release costs about $5 to $40 of Claude Code use, based on Anthropic\'s published average of about $6 a day for one person using Claude Code, with most people under $12, and a release taking one to a few days of that work. On a Pro or Max plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready to start automatic work, ask me to turn it on.'
 ]);
+
+const codexMessages = [];
+let codexAnswer = 0;
+await setupRepository('owner/codex-repo', {
+  config: { ...defaults(root), projectsRoot }, paths: { state: join(root, 'codex-state') },
+  commands: { run: async (command, args, options) => command === 'claude' ? Promise.reject(new Error('not signed in')) : run(command, args, options) },
+  github: {
+    begin: async manifest => ({ url: `https://example.test/${manifest.name}` }),
+    complete: async () => credentials,
+    install: async () => true
+  },
+  prompt: async () => ['Keep releases dependable.', 'Small software teams.'][codexAnswer++],
+  output: value => codexMessages.push(value)
+});
+assert.deepEqual(codexMessages, [
+  'Using Codex to set up the Forge.',
+  'Create the builder App in your browser: https://example.test/Forge builder',
+  'Create the release App in your browser: https://example.test/Forge release',
+  'Setup is complete for owner/codex-repo. Automatic work is off. A typical release costs about $3 to $25 of Codex use, based on OpenAI\'s published usage prices for the Codex models, which are lower than Claude Code\'s, and a release taking one to a few days of agent work. On a ChatGPT Plus or Pro plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready to start automatic work, ask me to turn it on.'
+]);
+for (const message of [...messages, ...codexMessages]) {
+  assert((message.match(/https?:\/\//g) ?? []).length <= 1);
+  assert(!/factory|archon|config|token/i.test(message));
+}
+
+assert.equal(
+  releaseCostMessage('codex', 'Codex', { codex: { low: 10, high: 15 } }),
+  'A typical release costs about $10 to $15 of Codex use, based on OpenAI\'s published usage prices for the Codex models, which are lower than Claude Code\'s, and a release taking one to a few days of agent work. On a ChatGPT Plus or Pro plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more.'
+);
+assert.equal(
+  releaseCostMessage('claude', 'Claude Code', { message: 'About ${low}-${high} on {agent} ({basis}).', claude: { basis: 'measured releases' } }),
+  'About $5-$40 on Claude Code (measured releases).'
+);
 assert.equal(manifests.length, 2);
 assert.deepEqual(manifests[0].default_permissions, APP_PERMISSIONS.builder);
 assert.deepEqual(manifests[1].default_permissions, APP_PERMISSIONS.release);
@@ -101,7 +134,7 @@ for (const kind of ['builder', 'release']) {
   });
 }
 const serializedProjectState = JSON.stringify({
-  config: { projectsRoot, releaseCostMessage: 'Release cost.' },
+  config: { projectsRoot, releaseCost: { message: 'Release cost.' } },
   paths: { state },
   projectState: await readTree(join(state, 'projects/owner/repo'))
 });
