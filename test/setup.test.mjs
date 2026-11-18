@@ -470,9 +470,37 @@ await assert.rejects(setupRepository('owner/abandoned-page', {
 assert.deepEqual(abandonedOutputs, [
   'Using Claude Code to set up the Forge.',
   'Create the builder App in your browser: https://example.test/create',
-  'Setup stopped because the GitHub page for creating one of its Apps was left unfinished, so GitHub did not hand that App over. Try setup again, finish creating the App on the GitHub page it opens, and paste the address your browser shows afterwards.'
+  'Setup stopped because the GitHub page for creating its builder App was left unfinished, so GitHub did not hand that App over. Try setup again, finish creating the builder App on the GitHub page it opens, and paste the address your browser shows afterwards.'
 ]);
 await assert.rejects(stat(join(state, 'projects/owner/abandoned-page/registration.json')));
+
+// The builder App is created and installed, then the owner leaves the release App page unfinished.
+const abandonedReleaseOutputs = [];
+const abandonedReleaseAdapter = createGithubAdapter({
+  input: { question: async question => question.startsWith('Type yes if') ? 'no' : 'https://github.com/settings/apps/new\n' },
+  fetch: async () => { throw new Error('must not ask GitHub for an App without a code'); },
+  output: value => abandonedReleaseOutputs.push(value)
+});
+const abandonedReleaseKinds = [];
+await assert.rejects(setupRepository('owner/abandoned-release-page', {
+  config: { projectsRoot, costMessage: 'Cost notice.' }, paths: { state }, commands: { run: async (...call) => appStepRun(...call) },
+  github: {
+    ...abandonedReleaseAdapter,
+    begin: async manifest => { await abandonedReleaseAdapter.begin(manifest); return { url: 'https://example.test/create' }; },
+    complete: async flow => abandonedReleaseKinds.length === 0 ? credentials : abandonedReleaseAdapter.complete(flow),
+    install: async ({ kind }) => { abandonedReleaseKinds.push(kind); return true; }
+  },
+  prompt: async () => { throw new Error('must not prompt'); },
+  output: value => abandonedReleaseOutputs.push(value)
+}), error => error instanceof ReportedSetupError && error.message === 'github');
+assert.deepEqual(abandonedReleaseKinds, ['builder']);
+assert.deepEqual(abandonedReleaseOutputs, [
+  'Using Claude Code to set up the Forge.',
+  'Create the builder App in your browser: https://example.test/create',
+  'Create the release App in your browser: https://example.test/create',
+  'Setup stopped because the GitHub page for creating its release App was left unfinished, so GitHub did not hand that App over. Try setup again, finish creating the release App on the GitHub page it opens, and paste the address your browser shows afterwards.'
+]);
+await assert.rejects(stat(join(state, 'projects/owner/abandoned-release-page/registration.json')));
 
 const unwritableCredentials = credentialPath(state, 'owner/unwritable-credentials');
 await mkdir(unwritableCredentials, { recursive: true, mode: 0o700 });
