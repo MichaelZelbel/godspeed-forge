@@ -1816,3 +1816,50 @@ async function closedInputSetup(name, start) {
     'Setup stopped because the Forge\'s settings file on this server contains commands.github_token, which must never be kept there. Remove commands.github_token from config.json in the folder where the Forge keeps its settings before trying setup again.'
   ] });
 }
+
+// Saved App details in the old place in the project folder, or a half-finished App record, that setup may not
+// read: the stop names the folder they are in, and once they can be read setup uses that App.
+for (const [name, place] of [['unreadable-legacy-app', 'legacy'], ['unreadable-pending-app', 'pending']]) {
+  const repository = `owner/${name}`;
+  const retryState = join(root, 'retry-state');
+  const project = await retryProject(repository);
+  let lockedPath;
+  if (place === 'legacy') {
+    await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
+      error => error instanceof ReportedSetupError && error.message === 'final-check');
+    lockedPath = join(projectStatePath(retryState, repository), 'builder-app.json');
+    await writeFile(lockedPath, await readFile(join(credentialPath(retryState, repository), 'builder-app.json')));
+    await rm(join(credentialPath(retryState, repository), 'builder-app.json'));
+  } else {
+    lockedPath = join(credentialPath(retryState, repository), 'builder-app-pending.json');
+    await writePrivateJson(lockedPath, { code: 'code' });
+  }
+  await chmod(lockedPath, 0o000);
+  project.reset();
+  try {
+    await assert.rejects(setupRepository(repository, project.options()),
+      error => error instanceof ReportedSetupError && error.message === 'unreadable-app');
+  } finally {
+    await chmod(lockedPath, 0o600);
+  }
+  const folder = place === 'legacy' ? `the folder projects/${repository}` : 'the credentials folder';
+  assert.equal(project.record.messages.at(-1), `Setup stopped because it could not read the saved details of the builder App on this server. Let setup read ${folder} in the Forge's private state folder before trying setup again.`);
+  project.reset();
+  assert.equal((await setupRepository(repository, project.options())).completed, true);
+  assert.equal(project.record.begins, place === 'legacy' ? 0 : 1);
+}
+
+// A release-cost setting setup cannot use stops setup before it records that setup finished, so the next
+// run, with that setting mended, finishes instead of saying setup was already done.
+{
+  const repository = 'owner/bad-release-cost';
+  const project = await retryProject(repository);
+  const options = project.options();
+  await assert.rejects(setupRepository(repository, { ...options, config: { ...options.config, releaseCost: null } }),
+    error => error instanceof ReportedSetupError && error.message === 'unexpected');
+  assert.equal(project.record.messages.at(-1), UNEXPECTED_MESSAGE);
+  assert(!(await isPresent(join(projectStatePath(join(root, 'retry-state'), repository), 'registration.json'))));
+  project.reset();
+  await setupRepository(repository, project.options());
+  assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
+}
