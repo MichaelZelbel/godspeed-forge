@@ -305,6 +305,8 @@ const GUARD_OPEN = `${found} ${guard} lets the coding agent read those scenarios
 const GUARD_MISSING = `${found} ${guard} is not fully installed in the project. Try setup again, which installs it.`;
 const SETTINGS = `${found} the project's record of which build tools to use is missing or damaged. Try setup again, which writes that record again.`;
 const SOURCE_DAMAGED = `${found} the copy of the build tools that setup downloaded to this server is incomplete or has been changed. Delete the folder ${buildToolsCache} on this server before trying setup again.`;
+const SOURCE_MISSING = `${found} the copy of the build tools that setup downloaded to this server is missing. Try setup again, which downloads it again.`;
+const TOOLS_FAIL = `${found} the build tools fail when they run on this server. Delete the folder ${buildToolsCache} on this server before trying setup again, which downloads and installs them again.`;
 const PIN_INCOMPLETE = `${found} the version of the build tools this Forge installs is missing parts that automatic work needs. Install the latest version of the Forge on this server before trying setup again.`;
 const refusal = text => `Factory refused: ${text}\n`;
 const refusalCases = [
@@ -329,6 +331,11 @@ const refusalCases = [
   [refusal("Native workflow discovery errors: ['bad yaml']"), PIN_INCOMPLETE],
   [refusal("[Errno 2] No such file or directory: 'bun'"), `${found} the bun program the build tools need is not installed on this server. Install bun before trying setup again.`],
   [refusal("Command '['/usr/bin/bun', 'cli.ts', 'workflow', '--help']' timed out after 180 seconds"), `${found} the build tools did not answer in time. Try setup again.`],
+  [refusal(`[Errno 2] No such file or directory: PosixPath('${buildToolsCache}')`), SOURCE_MISSING],
+  [refusal(`Command exited 128: ['git', 'rev-parse', 'HEAD']\nfatal: not a git repository (or any of the parent directories): .git`), SOURCE_DAMAGED],
+  [refusal(`Command exited 128: ['git', 'status', '--porcelain']\nfatal: not a git repository (or any of the parent directories): .git`), SOURCE_DAMAGED],
+  [refusal(`Command exited 1: ['bun', '${buildToolsCache}/packages/cli/src/cli.ts', 'workflow']\nerror: Cannot find module '@archon/core'`), TOOLS_FAIL],
+  [refusal(`Command exited 139: ['/usr/local/bin/bun', '${buildToolsCache}/packages/cli/src/cli.ts', 'trigger']\nSegmentation fault`), TOOLS_FAIL],
   ['Traceback (most recent call last):\n  File "factory/consumer.py", line 115\nAttributeError: \'PosixPath\' object has no attribute \'is_relative_to\'\n',
     `${found} the Python on this server is too old to run the build tools. Install Python 3.9 or newer before trying setup again.`]
 ];
@@ -361,11 +368,14 @@ for (const [index, [report, expected]] of refusalCases.entries()) {
     output: value => outputs.push(value)
   }), error => error instanceof ReportedSetupError && error.message === 'final-check', repository);
   assert.equal(outputs.at(-1), expected, report);
-  for (const hidden of ['Factory refused', 'Holdout fence', 'consumer', 'Traceback', 'ghs_report_secret', 'report', 'Archon', 'Errno']) {
+  for (const hidden of ['Factory refused', 'Holdout fence', 'consumer', 'Traceback', 'ghs_report_secret', 'report', 'Archon', 'Errno',
+    'PosixPath', 'Command exited', 'fatal', 'rev-parse', 'cli.ts', 'Segmentation', 'archon/core', 'output']) {
     assert(!outputs.at(-1).includes(hidden), `${hidden} in: ${outputs.at(-1)}`);
   }
+  // The only server path a message may name is the build tools folder the owner is told to delete.
+  assert.deepEqual(outputs.at(-1).match(/\/\S*/g) ?? [], outputs.at(-1).includes('Delete the folder') ? [buildToolsCache] : [], outputs.at(-1));
 }
-assert.equal(new Set(refusalCases.map(([, expected]) => expected)).size, 10);
+assert.equal(new Set(refusalCases.map(([, expected]) => expected)).size, 12);
 
 const githubFailureMessages = [];
 const githubFailureCalls = [];
