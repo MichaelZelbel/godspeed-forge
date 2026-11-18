@@ -40,6 +40,8 @@ function standIn(root, { manifests = [], beforeAgent = async () => {}, page = as
         if (command === 'python3' && args.at(-1) === 'init') {
           await mkdir(join(runOptions.cwd, 'factory'), { recursive: true });
           await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
+          await mkdir(join(runOptions.cwd, '.factory'), { recursive: true });
+          await writeFile(join(runOptions.cwd, '.factory/consumer.json'), '{}\n');
         }
         return { stdout: '' };
       }
@@ -48,7 +50,8 @@ function standIn(root, { manifests = [], beforeAgent = async () => {}, page = as
       begin: async manifest => { manifests.push(manifest.name); return { url: `https://example.test/${manifest.name}` }; },
       callback: async flow => { await page(flow); return 'app-code'; },
       exchange: async () => credentials,
-      install: async () => true
+      install: async () => true,
+      appStatus: async () => 'installed'
     },
     prompt: async () => ['Keep releases dependable.', 'Small teams.'][answer++ % 2],
     output: value => record.messages.push(value)
