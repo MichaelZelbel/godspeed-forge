@@ -9,6 +9,7 @@ import { runSetupCommand } from '../lib/cli.mjs';
 import { setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { defaults } from '../lib/config.mjs';
+import { testCase } from './cases.mjs';
 
 const credentials = {
   id: 12345, slug: 'forge-app', pem: 'PRIVATE KEY', client_secret: 'CLIENT SECRET', webhook_secret: 'WEBHOOK SECRET'
@@ -127,6 +128,7 @@ if (process.argv[2] === 'command') {
 
   // Ctrl-C at a question before any App exists: the interrupt sentence and nothing about Apps.
   {
+    testCase('Ctrl-C at a question before any App exists');
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-question-'));
     const result = await interrupt(root, 'builder-question', 'SIGINT');
     assertStopped(result, { code: 130, sentence: INTERRUPTED, appsKept: false });
@@ -143,6 +145,7 @@ if (process.argv[2] === 'command') {
   // The same before the release App's page, terminated, with the builder App already made: the next run
   // creates only the release App and says nothing about deleting one.
   for (const [waitAt, made] of [['builder-question', ['Forge builder', 'Forge release']], ['release-question', ['Forge release']]]) {
+    testCase(`terminated before the ${waitAt.split('-')[0]} App page was shown`);
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-before-page-'));
     const result = await interrupt(root, waitAt, 'SIGTERM');
     assertStopped(result, { code: 143, sentence: TERMINATED, appsKept: false });
@@ -155,6 +158,7 @@ if (process.argv[2] === 'command') {
 
   // Ctrl-C typed at a terminal reaches the question, not the process; it stops setup the same way.
   {
+    testCase('Ctrl-C typed at a terminal');
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-terminal-'));
     const result = await interrupt(root, 'builder-question', 'terminal');
     assertStopped(result, { code: 130, sentence: INTERRUPTED, appsKept: false });
@@ -167,6 +171,7 @@ if (process.argv[2] === 'command') {
   // up, and the next run then says the same; once that stop is followed, the run after it completes.
   for (const [signal, code, why] of [['SIGINT', 130, 'it was interrupted'], ['SIGTERM', 143, 'this server told it to stop']]) {
     for (const [kind, waitAt, made] of [['builder', 'builder-callback', ['Forge builder', 'Forge release']], ['release', 'release-callback', ['Forge release']]]) {
+      testCase(`${signal} after the ${kind} App page was shown`);
       const root = await mkdtemp(join(tmpdir(), 'forge-signal-page-shown-'));
       const result = await interrupt(root, waitAt, signal);
       const sentence = `Setup stopped because ${why} before it finished connecting the ${kind} App; if GitHub created a ${kind} App for owner/repo, delete it in your GitHub App settings before you try setup again, as the next setup will ask you to.`;
@@ -187,6 +192,7 @@ if (process.argv[2] === 'command') {
   // Stopped while GitHub turns the builder App's code into its credentials: the code is saved, so the next run
   // tries to finish that App, as the sentence says, and creates no second one.
   for (const [signal, code, why] of [['SIGINT', 130, 'it was interrupted'], ['SIGTERM', 143, 'this server told it to stop']]) {
+    testCase(`${signal} while the builder App code is being exchanged`);
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-code-saved-'));
     const result = await interrupt(root, 'exchange', signal);
     const sentence = `Setup stopped because ${why} before it finished connecting the builder App; try setup again and it will try to finish this App, and if GitHub no longer accepts it, setup will say what to do.`;
@@ -200,6 +206,7 @@ if (process.argv[2] === 'command') {
 
   // Terminated while a step runs, before any App exists; the next run finishes setup from there.
   {
+    testCase('terminated while a step runs');
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-step-'));
     const result = await interrupt(root, 'download', 'SIGTERM');
     assertStopped(result, { code: 143, sentence: TERMINATED, appsKept: false });
@@ -214,6 +221,7 @@ if (process.argv[2] === 'command') {
   // No stop there names kept Apps (the kept-Apps line is for the point where both are set up), so neither
   // does this one. The next run asks to install it again and creates no second App for either role.
   for (const [signal, code, sentence] of [['SIGINT', 130, INTERRUPTED], ['SIGTERM', 143, TERMINATED]]) {
+    testCase(`${signal} at the release install question`);
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-one-app-'));
     const result = await interrupt(root, 'release-install', signal);
     assertStopped(result, { code, sentence, appsKept: false });
@@ -226,6 +234,7 @@ if (process.argv[2] === 'command') {
   // Stopped at the mission question, both Apps on GitHub: the kept-Apps line, then the stop sentence. The next
   // run asks the mission questions again and finishes with the same two Apps.
   for (const [signal, code, sentence] of [['SIGINT', 130, INTERRUPTED], ['SIGTERM', 143, TERMINATED]]) {
+    testCase(`${signal} at the mission question, both Apps on GitHub`);
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-apps-'));
     const result = await interrupt(root, 'mission', signal);
     assertStopped(result, { code, sentence, appsKept: true });
@@ -239,6 +248,7 @@ if (process.argv[2] === 'command') {
   // The real command, with input that closes while a later question waits (after the builder App's install
   // answer): it prints no raw Node text, such as a warning about an unsettled top-level await.
   {
+    testCase('input closes at a later question');
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-input-closes-'));
     const bin = join(root, 'bin');
     await mkdir(bin);
