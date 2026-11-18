@@ -771,11 +771,11 @@ for (const [name, prepareFolder, message] of [
   ['other-repository', async folder => gitInit(folder, 'git@github.com:someone/else.git'),
     'Setup stopped because the project folder for owner/other-repository on this server holds a copy of a different repository. Move that folder elsewhere before trying setup again.'],
   ['no-origin', async folder => gitInit(folder),
-    'Setup stopped because the project folder for owner/no-origin on this server holds a copy that does not record which repository it was downloaded from. Move that folder elsewhere before trying setup again.'],
+    'Setup stopped because the project folder for owner/no-origin on this server holds a copy that setup cannot match to owner/no-origin on GitHub. Move that folder elsewhere before trying setup again.'],
   ['damaged-copy', async folder => mkdir(join(folder, '.git')),
-    'Setup stopped because the project folder for owner/damaged-copy on this server holds a copy that does not record which repository it was downloaded from. Move that folder elsewhere before trying setup again.'],
+    'Setup stopped because the project folder for owner/damaged-copy on this server holds a copy that setup cannot match to owner/damaged-copy on GitHub. Move that folder elsewhere before trying setup again.'],
   ['unreadable-origin', async folder => gitInit(folder, 'https://example.test/owner/unreadable-origin.git'),
-    'Setup stopped because the project folder for owner/unreadable-origin on this server holds a copy that does not record which repository it was downloaded from. Move that folder elsewhere before trying setup again.']
+    'Setup stopped because the project folder for owner/unreadable-origin on this server holds a copy that setup cannot match to owner/unreadable-origin on GitHub. Move that folder elsewhere before trying setup again.']
 ]) {
   await stopThenRetry(name, {
     prepare: async ({ projectsRoot }) => {
