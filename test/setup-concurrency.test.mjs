@@ -6,7 +6,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ReportedSetupError, setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
-import { defaults } from '../lib/config.mjs';
+import { credentialPath, defaults } from '../lib/config.mjs';
 
 const credentials = {
   id: 12345, slug: 'forge-app', pem: 'PRIVATE KEY', client_secret: 'CLIENT SECRET', webhook_secret: 'WEBHOOK SECRET'
@@ -21,8 +21,8 @@ function deferred() {
 }
 
 // A setup's whole outside world: the agent, git, gh and the factory commands, GitHub and the owner's answers.
-// `beforeAgent` holds the run at its first command; `complete` stands in for the owner finishing the GitHub page.
-function standIn(root, { manifests = [], beforeAgent = async () => {}, complete = async () => credentials } = {}) {
+// `beforeAgent` holds the run at its first command; `page` stands in for the owner finishing the GitHub page.
+function standIn(root, { manifests = [], beforeAgent = async () => {}, page = async () => {} } = {}) {
   const record = { calls: [], messages: [] };
   let answer = 0;
   const options = {
@@ -45,7 +45,8 @@ function standIn(root, { manifests = [], beforeAgent = async () => {}, complete 
     },
     github: {
       begin: async manifest => { manifests.push(manifest.name); return { url: `https://example.test/${manifest.name}` }; },
-      complete,
+      callback: async flow => { await page(flow); return 'app-code'; },
+      exchange: async () => credentials,
       install: async () => true
     },
     prompt: async () => ['Keep releases dependable.', 'Small teams.'][answer++ % 2],
@@ -70,7 +71,7 @@ const settled = (name, promise) => promise.then(result => ({ name, result }), er
 // Run as a child by the kill test below: a setup that waits forever on the GitHub page.
 if (process.argv[2] === 'waiting-setup') {
   setInterval(() => {}, 60_000);
-  const { options } = standIn(process.argv[3], { complete: () => new Promise(() => {}) });
+  const { options } = standIn(process.argv[3], { page: () => new Promise(() => {}) });
   const begin = options.github.begin;
   options.github.begin = async manifest => { process.stdout.write('ready\n'); return begin(manifest); };
   await setupRepository('owner/repo', options);
@@ -137,12 +138,47 @@ if (process.argv[2] === 'waiting-setup') {
 
     child.kill('SIGKILL');
     await exited;
+    // The killed setup may have left the owner finishing the builder App page (#29), so the next setup is
+    // not blocked but says once to delete that App; the one after creates one App per role.
     const manifests = [];
     const next = standIn(root, { manifests });
-    const result = await setupRepository('owner/repo', next.options);
+    await assert.rejects(setupRepository('owner/repo', next.options),
+      error => error instanceof ReportedSetupError && error.message === 'leftover-app');
+    assert.deepEqual(next.record.messages.at(-1), 'Setup stopped because it could not finish connecting the builder App. If GitHub created a builder App for owner/repo, delete it in your GitHub App settings, then try setup again.');
+    assert.deepEqual(manifests, []);
+    const after = standIn(root, { manifests });
+    const result = await setupRepository('owner/repo', after.options);
     assert.equal(result.completed, true);
     assert.deepEqual(manifests, ['Forge builder', 'Forge release']);
-    assert(next.record.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
+    assert(after.record.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
+  }
+
+  // A second setup while the first waits on the builder App page (#29 with #35): the second stops with the
+  // already-running message, gives no advice to delete an App, and leaves the first setup's pending record
+  // alone; the first then finishes with one App per role.
+  {
+    const root = await mkdtemp(join(tmpdir(), 'forge-overlap-page-'));
+    const manifests = [];
+    const onPage = deferred();
+    const pageDone = deferred();
+    const first = standIn(root, { manifests, page: async () => { onPage.open(); await pageDone.promise; } });
+    const firstRun = settled('first', setupRepository('owner/repo', first.options));
+    await onPage.promise;
+    const pending = join(credentialPath(first.options.paths.state, 'owner/repo'), 'builder-app-pending.json');
+    const pendingBefore = await readFile(pending, 'utf8');
+    const second = standIn(root, { manifests });
+    await assert.rejects(setupRepository('owner/repo', second.options), inProgress);
+    assert.deepEqual(second.record.messages, [running('owner/repo')]);
+    assert(!second.record.messages.some(message => /delete/i.test(message)));
+    assert.deepEqual(second.record.calls, []);
+    assert.equal(await readFile(pending, 'utf8'), pendingBefore);
+    pageDone.open();
+    const done = await firstRun;
+    assert.equal(done.error, undefined);
+    assert.equal(done.result.completed, true);
+    assert.deepEqual(manifests, ['Forge builder', 'Forge release']);
+    assert(first.record.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
+    await assert.rejects(readFile(pending, 'utf8'));
   }
 
   // Setups for two different repositories run at the same time.
@@ -151,13 +187,12 @@ if (process.argv[2] === 'waiting-setup') {
     const pages = deferred();
     const bothOnPage = deferred();
     let onPage = 0;
-    const complete = async () => {
+    const page = async () => {
       if (++onPage === 2) bothOnPage.open();
       await pages.promise;
-      return credentials;
     };
-    const one = standIn(root, { complete });
-    const two = standIn(root, { complete });
+    const one = standIn(root, { page });
+    const two = standIn(root, { page });
     const runs = Promise.all([setupRepository('owner/one', one.options), setupRepository('owner/two', two.options)]);
     await bothOnPage.promise;
     pages.open();
