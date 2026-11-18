@@ -3,29 +3,29 @@ import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { defaultPaths } from '../lib/config.mjs';
 import { run } from '../lib/process.mjs';
-import { loadSettings, ReportedSetupError, setupRepository } from '../lib/setup.mjs';
+import { answersFrom, setupCommand, UNEXPECTED_MESSAGE } from '../lib/setup.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 
 async function main() {
   const [command, repository] = process.argv.slice(2);
-  if (command !== 'setup' || !repository) throw new Error('Run godspeed-forge setup owner/repository.');
-  const paths = defaultPaths();
-  const output = message => console.log(message);
-  const config = await loadSettings(paths.config, output);
-  const input = createInterface({ input: stdin, output: stdout });
-  const github = createGithubAdapter({ input });
+  if (command !== 'setup' || !repository) {
+    console.error('Run godspeed-forge setup owner/repository.');
+    return 1;
+  }
+  const readline = createInterface({ input: stdin, output: stdout });
+  const input = answersFrom(readline);
   try {
-    await setupRepository(repository, {
-      config, paths, commands: { run }, github,
+    return await setupCommand(repository, {
+      paths: defaultPaths(), commands: { run }, github: createGithubAdapter({ input }),
       prompt: question => input.question(`${question} `),
-      output
+      output: message => console.log(message)
     });
   } finally {
-    input.close();
+    readline.close();
   }
 }
 
-main().catch(error => {
-  if (!(error instanceof ReportedSetupError)) console.error(error.message);
+main().then(code => { process.exitCode = code; }, () => {
+  console.log(UNEXPECTED_MESSAGE);
   process.exitCode = 1;
 });

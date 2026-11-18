@@ -2,7 +2,13 @@ import assert from 'node:assert/strict';
 import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadSettings, ReportedSetupError, setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
+import { createInterface } from 'node:readline/promises';
+import { PassThrough } from 'node:stream';
+import {
+  answersFrom, InputClosed, loadSettings, ReportedSetupError, setupCommand, setupRepository, prepareCheckout,
+  repositoryFromRemote, UNEXPECTED_MESSAGE
+} from '../lib/setup.mjs';
+import { files } from '../lib/files.mjs';
 import { findSignedInAgent } from '../lib/agent.mjs';
 import {
   APP_PERMISSIONS, APP_PERMISSION_DOCUMENTATION, AppSetupStop, AppStepError, builderManifest, createApps,
@@ -1645,4 +1651,168 @@ await stopThenRetry('damaged-build-tools', {
   assert(!healed.some(message => message.startsWith('Setup stopped')));
   assert.deepEqual(healCalls.filter(([command]) => command === 'git').map(([, step]) => step),
     ['fetch', 'clone', 'fetch', 'checkout', 'rev-parse']);
+}
+
+// The final record that setup finished cannot be written: the Apps exist, so the stop says they are kept.
+{
+  const projectState = join(root, 'stops', 'unrecordable-registration', 'state', 'projects', 'owner', 'unrecordable-registration');
+  await stopThenRetry('unrecordable-registration', {
+    run: async (command, args) => {
+      if (command === 'python3' && args.at(-1) === 'doctor') await chmod(projectState, 0o500);
+      return null;
+    },
+    undo: async () => chmod(projectState, 0o700),
+    reason: 'registration',
+    before: [...appPages, FORGE_APPS_KEPT],
+    message: 'Setup stopped because it could not record on this server that setup finished. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
+  });
+}
+
+// Saved App details setup may not read: the stop names reading them, not the GitHub page, and once they can
+// be read again setup uses that App instead of creating another.
+{
+  const repository = 'owner/unreadable-app';
+  const project = await retryProject(repository);
+  await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
+    error => error instanceof ReportedSetupError && error.message === 'final-check');
+  const builderPath = join(credentialPath(join(root, 'retry-state'), repository), 'builder-app.json');
+  await chmod(builderPath, 0o000);
+  project.reset();
+  try {
+    await assert.rejects(setupRepository(repository, project.options()),
+      error => error instanceof ReportedSetupError && error.message === 'unreadable-app');
+  } finally {
+    await chmod(builderPath, 0o600);
+  }
+  assert.equal(project.record.messages.at(-1), 'Setup stopped because it could not read the saved details of the builder App on this server. Let setup read the credentials folder in the Forge\'s private state folder before trying setup again.');
+  assert(!project.record.messages.some(message => message.includes('Complete the GitHub page')));
+  project.reset();
+  assert.equal((await setupRepository(repository, project.options())).completed, true);
+  assert.equal(project.record.begins, 0);
+}
+
+// The place answers come from closes while setup waits for the address from the browser.
+const INPUT_CLOSED = 'Setup stopped because the place it was reading your answers from closed before you answered. Try setup again and answer each question it asks.';
+async function closedInputSetup(name, start) {
+  const closedRoot = join(root, 'closed-input', name);
+  const stream = new PassThrough();
+  const input = answersFrom(createInterface({ input: stream }));
+  const adapter = createGithubAdapter({ input });
+  const printed = [];
+  const options = {
+    paths: { state: join(closedRoot, 'state'), config: join(closedRoot, 'config.json') },
+    commands: { run },
+    github: {
+      ...adapter,
+      begin: async manifest => {
+        const answered = adapter.begin(manifest);
+        stream.write('no\n');
+        await answered;
+        stream.end();
+        return { url: 'https://example.test/create' };
+      }
+    },
+    prompt: question => input.question(question),
+    output: value => printed.push(value)
+  };
+  await writePrivateJson(options.paths.config, { ...defaults(closedRoot), projectsRoot: join(closedRoot, 'projects') });
+  return { printed, result: start(options, { ...defaults(closedRoot), projectsRoot: join(closedRoot, 'projects') }) };
+}
+{
+  const closed = await closedInputSetup('repository', (options, config) => setupRepository('owner/closed-input', { ...options, config }));
+  await assert.rejects(closed.result, error => error instanceof ReportedSetupError && error.message === 'input-closed');
+  assert.deepEqual(closed.printed, [
+    'Using Claude Code to set up the Forge.', 'Create the builder App in your browser: https://example.test/create', INPUT_CLOSED
+  ]);
+  const command = await closedInputSetup('command', options => setupCommand('owner/closed-input', options));
+  assert.equal(await command.result, 1);
+  assert.equal(command.printed.at(-1), INPUT_CLOSED);
+  const readline = createInterface({ input: new PassThrough() });
+  const answers = answersFrom(readline);
+  readline.close();
+  await assert.rejects(answers.question('Anything? '), error => error instanceof InputClosed);
+}
+
+// A finished setup whose release App details are damaged, where the record that setup finished cannot be
+// removed: nothing is removed, so the next run does not wrongly say the Forge is already set up.
+{
+  const repository = 'owner/damaged-unrecorded';
+  const retryState = join(root, 'retry-damaged-unrecorded');
+  const credentialDirectory = credentialPath(retryState, repository);
+  const standIn = standInGithub();
+  assert.equal((await setupAttempt(repository, retryState, standIn.github)).error, undefined);
+  const damagedPath = join(credentialDirectory, 'release-app.json');
+  await writeFile(damagedPath, '{"id": 12345, "pem": "PRIV');
+  const realRm = files.rm;
+  files.rm = async (path, options) => {
+    if (path.endsWith('registration.json')) {
+      throw Object.assign(new Error(`EACCES: permission denied, unlink '${path}'`), { code: 'EACCES', syscall: 'unlink' });
+    }
+    return realRm(path, options);
+  };
+  let first;
+  try {
+    first = await setupAttempt(repository, retryState, standIn.github);
+  } finally {
+    files.rm = realRm;
+  }
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'settings');
+  assert.equal(first.messages.at(-1), 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.');
+  assert(await isPresent(damagedPath));
+  assert(await isPresent(join(projectStatePath(retryState, repository), 'release-installation.json')));
+  const second = await setupAttempt(repository, retryState, standIn.github);
+  assert(second.error instanceof ReportedSetupError && second.error.message === 'damaged-app');
+  assert(!second.messages.some(message => message.includes('already set up')));
+  const third = await setupAttempt(repository, retryState, standIn.github);
+  assert(completedFor(repository)(third.messages.at(-1)));
+  assert.deepEqual(standIn.counts, { builder: 1, release: 2 });
+}
+
+// A failure no step names stops with the general sentence and never the failure's own text.
+{
+  const commandRoot = join(root, 'unexpected');
+  const paths = { state: join(commandRoot, 'state'), config: join(commandRoot, 'config.json') };
+  const commandProjects = join(commandRoot, 'projects');
+  await writePrivateJson(paths.config, { ...defaults(commandRoot), projectsRoot: commandProjects });
+  const printed = [];
+  const realMkdir = files.mkdir;
+  files.mkdir = async (path, options) => {
+    if (path === join(commandProjects, 'owner')) throw new Error(`boom ${commandRoot}`);
+    return realMkdir(path, options);
+  };
+  try {
+    assert.equal(await setupCommand('owner/unexpected', {
+      paths, commands: { run }, github: standInGithub().github, prompt: async () => 'Answer.', output: value => printed.push(value)
+    }), 1);
+  } finally {
+    files.mkdir = realMkdir;
+  }
+  assert.deepEqual(printed, ['Using Claude Code to set up the Forge.', UNEXPECTED_MESSAGE]);
+  assert.equal(UNEXPECTED_MESSAGE, 'Setup stopped because of a problem on this server that setup could not identify. Try setup again.');
+}
+
+// A repository name setup cannot use, and a settings file that is damaged or holds a secret.
+{
+  const commandRoot = join(root, 'settings-stops');
+  const config = join(commandRoot, 'config.json');
+  const command = async repository => {
+    const printed = [];
+    const code = await setupCommand(repository, {
+      paths: { state: join(commandRoot, 'state'), config }, commands: { run }, github: standInGithub().github,
+      prompt: async () => 'Answer.', output: value => printed.push(value)
+    });
+    return { code, printed };
+  };
+  await writePrivateJson(config, { ...defaults(commandRoot), projectsRoot: join(commandRoot, 'projects') });
+  assert.deepEqual(await command('owner/bad/name'), { code: 1, printed: [
+    'Setup stopped because the repository name is not in the form owner/repository. Try setup again with a name in that form.'
+  ] });
+  await writeFile(config, '{ damaged');
+  assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
+    'Setup stopped because the Forge\'s settings file on this server is damaged. Delete config.json in the folder where the Forge keeps its settings before trying setup again, and setup writes a fresh one.'
+  ] });
+  await writeFile(config, JSON.stringify({ commands: { github_token: 'ghs_secret' } }));
+  assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
+    'Setup stopped because the Forge\'s settings file on this server contains commands.github_token, which must never be kept there. Remove commands.github_token from config.json in the folder where the Forge keeps its settings before trying setup again.'
+  ] });
 }
