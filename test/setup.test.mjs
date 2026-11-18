@@ -9,6 +9,7 @@ import {
   registrationAction, releaseManifest
 } from '../lib/github-apps.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
+import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 
@@ -214,9 +215,157 @@ await assert.rejects(setupRepository('owner/failing-doctor', {
   },
   prompt: async () => ['Purpose.', 'Users.'][failedAnswer++], output: value => failedMessages.push(value)
 }), error => error instanceof ReportedSetupError && error.message === 'final-check');
-assert.deepEqual(failedMessages.at(-1), 'Setup stopped because the final check found a problem. Fix the problem reported by the check before trying setup again.');
+const FINAL_CHECK_FALLBACK = 'Setup stopped because the final check could not confirm that the build tools setup installed on this server work. Try setup again.';
+assert.deepEqual(failedMessages.at(-1), FINAL_CHECK_FALLBACK);
 await assert.rejects(stat(join(state, 'projects/owner/failing-doctor/registration.json')));
 assert(!failedMessages.some(message => message.includes('schedule')));
+
+const retryRun = async (command, args, options = {}) => {
+  if (command === 'claude') return { stdout: 'signed in' };
+  if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+  if (command === 'git' && args[0] === 'remote') return { stdout: 'git@github.com:owner/retry-check.git\n' };
+  if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+  if (command === 'python3' && args.at(-1) === 'init') {
+    await mkdir(join(options.cwd, 'factory'), { recursive: true });
+    await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
+    return { stdout: '' };
+  }
+  if (command === 'python3' && args.at(-1) === 'doctor') {
+    if (retryCheckPasses) return { stdout: '{}' };
+    throw Object.assign(new Error('python3 failed.'), {
+      stderr: 'Factory refused: Holdout fence is open: a builder reading the scenarios exited 127, expected 2. '
+        + '/bin/sh: 1: python: not found (check that `python` runs Python 3 in bash)\n'
+        + 'Traceback (most recent call last):\n  File "/srv/forge/factory/consumer.py", line 244\n'
+        + 'TOKEN SENTINEL ghs_report_secret'
+    });
+  }
+  return { stdout: '' };
+};
+let retryCheckPasses = false;
+let retryBegins = 0;
+let retryInstalls = 0;
+const retryOptions = output => {
+  let retryAnswer = 0;
+  return {
+    config: { ...defaults(root), projectsRoot }, paths: { state }, commands: { run: retryRun },
+    github: {
+      exists: async path => { try { await stat(path); return true; } catch { return false; } },
+      begin: async manifest => { retryBegins += 1; return { url: `https://example.test/${manifest.name}` }; },
+      complete: async () => credentials,
+      install: async () => { retryInstalls += 1; return true; }
+    },
+    prompt: async () => ['Purpose.', 'Users.'][retryAnswer++],
+    output
+  };
+};
+const retryFailed = [];
+await assert.rejects(setupRepository('owner/retry-check', retryOptions(value => retryFailed.push(value))),
+  error => error instanceof ReportedSetupError && error.message === 'final-check');
+assert.deepEqual(retryFailed, [
+  'Using Claude Code to set up the Forge.',
+  'Create the builder App in your browser: https://example.test/Forge builder',
+  'Create the release App in your browser: https://example.test/Forge release',
+  'Setup stopped because the final check found that the guard keeping your project\'s hidden test scenarios away from the coding agent does not work on this server, because the python command there does not run Python 3. Install the python-is-python3 package on this server before trying setup again.'
+]);
+for (const hidden of ['Factory refused', 'Holdout fence', 'consumer.py', 'Traceback', 'ghs_report_secret', 'report']) {
+  assert(!retryFailed.some(message => message.includes(hidden)), hidden);
+}
+assert(retryFailed.at(-1).split('http').length - 1 <= 1);
+await assert.rejects(stat(join(state, 'projects/owner/retry-check/registration.json')));
+assert.equal(retryBegins, 2);
+const installsBeforeRetry = retryInstalls;
+
+retryCheckPasses = true;
+const retryPassed = [];
+assert.deepEqual(
+  await setupRepository('owner/retry-check', retryOptions(value => retryPassed.push(value))),
+  { completed: true, checkout: join(projectsRoot, 'owner/retry-check') }
+);
+assert.deepEqual(retryPassed, [
+  'Using Claude Code to set up the Forge.',
+  'Setup is complete for owner/retry-check. Automatic work is off. A typical release costs about $5 to $40 of Claude Code use, based on Anthropic\'s published average of about $6 a day for one person using Claude Code, with most people under $12, and a release taking one to a few days of that work. On a Pro or Max plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready to start automatic work, ask me to turn it on.'
+]);
+assert.equal(retryBegins, 2);
+assert.equal(retryInstalls, installsBeforeRetry);
+assert.equal(JSON.parse(await readFile(join(state, 'projects/owner/retry-check/registration.json'), 'utf8')).completed, true);
+
+await assert.rejects(
+  runProcess(process.execPath, ['-e', 'process.stdout.write("partial"); process.stderr.write("check said no"); process.exit(1)']),
+  error => error.message === `${process.execPath} failed.` && error.stderr === 'check said no' && error.stdout === 'partial'
+);
+
+// Every refusal the pinned factory's doctor can raise, in its real report text, gets a message naming
+// what the check found and the one action that fixes it.
+const buildToolsCache = join(root, 'cache/factory/archon/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb');
+const scenariosFolder = ['.factory', 'holdout', ''].join('/');
+const found = 'Setup stopped because the final check found that';
+const guard = 'the guard keeping your project\'s hidden test scenarios away from the coding agent';
+const PYTHON_COMMAND = `${found} ${guard} does not work on this server, because the python command there does not run Python 3. Install the python-is-python3 package on this server before trying setup again.`;
+const GUARD_OPEN = `${found} ${guard} lets the coding agent read those scenarios on this server. Try setup again, which reinstalls the guard.`;
+const GUARD_MISSING = `${found} ${guard} is not fully installed in the project. Try setup again, which installs it.`;
+const SETTINGS = `${found} the project's record of which build tools to use is missing or damaged. Try setup again, which writes that record again.`;
+const SOURCE_DAMAGED = `${found} the copy of the build tools that setup downloaded to this server is incomplete or has been changed. Delete the folder ${buildToolsCache} on this server before trying setup again.`;
+const PIN_INCOMPLETE = `${found} the version of the build tools this Forge installs is missing parts that automatic work needs. Install the latest version of the Forge on this server before trying setup again.`;
+const refusal = text => `Factory refused: ${text}\n`;
+const refusalCases = [
+  [refusal('Holdout fence is open: a builder reading the scenarios exited 127, expected 2. /bin/sh: 1: python: not found (check that `python` runs Python 3 in bash)'), PYTHON_COMMAND],
+  [refusal('Holdout fence is open: a builder reading the scenarios exited 1, expected 2. SyntaxError: invalid syntax (check that `python` runs Python 3 in bash)'), PYTHON_COMMAND],
+  [refusal('Holdout fence is open: a builder reading the scenarios exited 0, expected 2.  (check that `python` runs Python 3 in bash)'), GUARD_OPEN],
+  [refusal('Holdout fence not registered in .claude/settings.json for PreToolUse, PostToolUse; rerun factory init'), GUARD_MISSING],
+  [refusal(`.ignore does not list ${scenariosFolder}; rerun factory init`), GUARD_MISSING],
+  [refusal('No bash to run the holdout fence the way Claude Code runs hooks'), `${found} the bash shell is not installed on this server. Install bash before trying setup again.`],
+  [refusal('Integration pin required. Run factory init --source <complete Archon checkout or URL> --revision <40-character SHA> --cache <directory>.'), SETTINGS],
+  [refusal('Invalid consumer settings: /srv/project/consumer.json'), SETTINGS],
+  [refusal("'source'"), SETTINGS],
+  [refusal('Integration revision must be a full lowercase commit SHA'), SETTINGS],
+  [refusal(`Pinned source has changes (bun.lock). The pinned tree is verified byte for byte. Restore it with: rm -rf ${buildToolsCache} && python3 bin/factory.py init from your repo.`), SOURCE_DAMAGED],
+  [refusal('Source SHA mismatch: expected 1cfb8fc541580fe5edf15e9a504b572bc9bb45bb, found 0000000000000000000000000000000000000000'), SOURCE_DAMAGED],
+  [refusal('Untracked authoring file in pinned source: /srv/cache/.archon/workflows/extra.yaml'), SOURCE_DAMAGED],
+  [refusal('Incomplete Archon source: missing packages/cli/src/cli.ts'), SOURCE_DAMAGED],
+  [refusal('Archon dependencies missing; complete the pinned source installation'), SOURCE_DAMAGED],
+  [refusal("Pinned CLI missing workflow run capability: ['--workflow-source', '--input', '--adopt', '--detach', '--json']"), PIN_INCOMPLETE],
+  [refusal('Incomplete integration source; missing shared workflows: archon-loop, archon-manager'), PIN_INCOMPLETE],
+  [refusal("Workflow/command validation failed for archon-loop: {'results': []}"), PIN_INCOMPLETE],
+  [refusal("Native workflow discovery errors: ['bad yaml']"), PIN_INCOMPLETE],
+  [refusal("[Errno 2] No such file or directory: 'bun'"), `${found} the bun program the build tools need is not installed on this server. Install bun before trying setup again.`],
+  [refusal("Command '['/usr/bin/bun', 'cli.ts', 'workflow', '--help']' timed out after 180 seconds"), `${found} the build tools did not answer in time. Try setup again.`],
+  ['Traceback (most recent call last):\n  File "factory/consumer.py", line 115\nAttributeError: \'PosixPath\' object has no attribute \'is_relative_to\'\n',
+    `${found} the Python on this server is too old to run the build tools. Install Python 3.9 or newer before trying setup again.`]
+];
+for (const [index, [report, expected]] of refusalCases.entries()) {
+  const repository = `owner/check-${index}`;
+  const outputs = [];
+  let answer = 0;
+  await assert.rejects(setupRepository(repository, {
+    config: { ...defaults(root), projectsRoot }, paths: { state }, commands: {
+      run: async (command, args, options = {}) => {
+        if (command === 'claude') return { stdout: 'signed in' };
+        if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+        if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+        if (command === 'python3' && args.at(-1) === 'init') {
+          await mkdir(join(options.cwd, '.factory'), { recursive: true });
+          await writeFile(join(options.cwd, '.factory', 'consumer.json'), JSON.stringify({ source: buildToolsCache }));
+          await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
+          return { stdout: '' };
+        }
+        if (command === 'python3' && args.at(-1) === 'doctor') {
+          // The last case's report reaches setup on standard output, to show both streams are read.
+          throw Object.assign(new Error('python3 failed.'), index === refusalCases.length - 1
+            ? { stdout: report, stderr: '' } : { stderr: `${report}TOKEN SENTINEL ghs_report_secret\n` });
+        }
+        return { stdout: '' };
+      }
+    },
+    github: { begin: async () => ({ url: 'https://example.test/create' }), complete: async () => credentials, install: async () => true },
+    prompt: async () => ['Purpose.', 'Users.'][answer++],
+    output: value => outputs.push(value)
+  }), error => error instanceof ReportedSetupError && error.message === 'final-check', repository);
+  assert.equal(outputs.at(-1), expected, report);
+  for (const hidden of ['Factory refused', 'Holdout fence', 'consumer', 'Traceback', 'ghs_report_secret', 'report', 'Archon', 'Errno']) {
+    assert(!outputs.at(-1).includes(hidden), `${hidden} in: ${outputs.at(-1)}`);
+  }
+}
+assert.equal(new Set(refusalCases.map(([, expected]) => expected)).size, 10);
 
 const githubFailureMessages = [];
 const githubFailureCalls = [];
