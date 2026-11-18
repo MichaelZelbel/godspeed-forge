@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ReportedSetupError, setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
@@ -410,6 +410,7 @@ function standInGithub(options = {}) {
   const counts = { builder: 0, release: 0 };
   const live = { builder: 0, release: 0 };
   const pending = { ...options };
+  const usedCodes = new Set();
   let current;
   const github = {
     exists: isPresent,
@@ -426,10 +427,11 @@ function standInGithub(options = {}) {
       const kind = code.split('-')[1];
       await options.onExchange?.(kind);
       if (pending.failExchangeOnce === kind) { delete pending.failExchangeOnce; throw new Error('network unreachable'); }
-      if (pending.refuseExchangeOnce === kind) {
+      if (pending.refuseExchangeOnce === kind || usedCodes.has(code)) {
         delete pending.refuseExchangeOnce;
         throw Object.assign(new Error('GitHub refused the App code.'), { refused: true });
       }
+      usedCodes.add(code);
       return { ...credentials, slug: code };
     },
     install: async () => true
@@ -498,21 +500,21 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
 
 {
   const retryState = join(root, 'retry-write-after-exchange');
-  const credentialDirectory = join(retryState, 'credentials');
-  let lockOnce = true;
+  const credentialDirectory = credentialPath(retryState, 'owner/lost-keys');
+  const blockedPath = join(credentialDirectory, 'builder-app.json');
+  let blockOnce = true;
   const standIn = standInGithub({
-    onExchange: async () => { if (lockOnce) { lockOnce = false; await chmod(credentialDirectory, 0o500); } }
+    onExchange: async () => { if (blockOnce) { blockOnce = false; await mkdir(join(blockedPath, 'blocked'), { recursive: true }); } }
   });
-  const options = { repository: 'owner/repo', stateDirectory: retryState, credentialDirectory, github: standIn.github, output: () => {} };
-  try {
-    await assert.rejects(createApps(options), error => error instanceof AppSetupStop && error.reason === 'not-writable' && error.kind === 'builder');
-  } finally {
-    await chmod(credentialDirectory, 0o700);
-  }
-  assert(await isPresent(join(credentialDirectory, 'builder-app-pending.json')));
-  await createApps(options);
-  assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
-  assert(await isPresent(join(credentialDirectory, 'builder-app.json')));
+  const first = await setupAttempt('owner/lost-keys', retryState, standIn.github);
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'lost-app-keys');
+  assert.equal(first.messages.at(-1), 'Setup stopped because this server would not let it save the builder App keys in its private folder, and GitHub hands them out only once. Delete the builder App for owner/lost-keys in your GitHub App settings and allow setup to write to that folder, then try setup again.');
+  assert(!(await isPresent(join(credentialDirectory, 'builder-app-pending.json'))));
+  standIn.live.builder -= 1;
+  await rm(blockedPath, { recursive: true });
+  const second = await setupAttempt('owner/lost-keys', retryState, standIn.github);
+  assert(completedFor('owner/lost-keys')(second.messages.at(-1)));
+  assert.deepEqual(standIn.live, { builder: 1, release: 1 });
   assert.deepEqual(await pendingFiles(credentialDirectory), []);
 }
 
@@ -557,9 +559,11 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   const credentialDirectory = join(retryState, 'credentials');
   await writePrivateJson(join(credentialDirectory, 'builder-app.json'), { ...credentials, slug: 'builder-slug' });
   await writePrivateJson(join(retryState, 'builder-installation.json'), { repository: 'owner/repo', confirmed: true });
+  await writePrivateJson(join(credentialDirectory, 'builder-app-pending.json'), { code: 'code-builder-1' });
   const standIn = standInGithub();
   await createApps({ repository: 'owner/repo', stateDirectory: retryState, credentialDirectory, github: standIn.github, output: () => {} });
   assert.deepEqual(standIn.counts, { builder: 0, release: 1 });
+  assert.deepEqual(await pendingFiles(credentialDirectory), []);
 }
 
 {
