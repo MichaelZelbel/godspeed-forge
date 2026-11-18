@@ -781,10 +781,8 @@ await assert.rejects(createApps({
   repository: 'owner/repo', stateDirectory: malformedState,
   credentialDirectory: malformedCredentials, output: () => {},
   github: { install: async () => { throw new Error('must not install malformed credentials'); } }
-}), /Stored builder App credentials are incomplete/);
-assert.deepEqual(JSON.parse(await readFile(join(malformedState, 'builder-app.json'), 'utf8')), {
-  id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG'
-});
+}), error => error instanceof AppSetupStop && error.reason === 'damaged' && error.kind === 'builder');
+await assert.rejects(stat(join(malformedState, 'builder-app.json')));
 await assert.rejects(stat(join(malformedCredentials, 'builder-app.json')));
 
 const inaccessibleState = join(root, 'inaccessible-state');
@@ -1037,6 +1035,105 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   }), error => error instanceof AppStepError && error.step === 'page' && error.kind === 'builder');
   assert.deepEqual(noCallback.counts, { builder: 1, release: 0 });
   assert.deepEqual(await pendingFiles(noCallbackCredentials), []);
+}
+
+// A stop on damaged App files (#52) names no file or internal detail, carries at most one link, and the
+// next run asks for the GitHub page of that App again instead of stopping the same way.
+function assertNoInternalText(message, serverRoot) {
+  assert(!/\.json|pending|credentials|Errno|SyntaxError|JSON/i.test(message), message);
+  assert(!message.includes(serverRoot), message);
+  assert((message.match(/https?:\/\//g) ?? []).length <= 1, message);
+}
+
+for (const [kind, damage] of [
+  ['builder', { file: 'pending', text: '', name: 'empty-record' }],
+  ['release', { file: 'pending', text: '{"code": "code-rel', name: 'cut-record' }],
+  ['builder', { file: 'legacy', text: JSON.stringify({ id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' }), name: 'old-keys' }],
+  ['release', { file: 'stored', text: '{"id": 12345, "pem": "PRIV', name: 'cut-keys' }]
+]) {
+  const repository = `owner/${kind}-${damage.name}`;
+  const retryState = join(root, `retry-damaged-${kind}-${damage.file}`);
+  const credentialDirectory = credentialPath(retryState, repository);
+  const damagedPath = {
+    pending: join(credentialDirectory, `${kind}-app-pending.json`),
+    stored: join(credentialDirectory, `${kind}-app.json`),
+    legacy: join(projectStatePath(retryState, repository), `${kind}-app.json`)
+  }[damage.file];
+  await mkdir(join(damagedPath, '..'), { recursive: true, mode: 0o700 });
+  await writeFile(damagedPath, damage.text, { mode: 0o600 });
+  const standIn = standInGithub();
+  const first = await setupAttempt(repository, retryState, standIn.github);
+  const expected = damage.file === 'pending'
+    ? [`Setup stopped because it could not finish connecting the ${kind} App. If GitHub created a ${kind} App for ${repository}, delete it in your GitHub App settings, then try setup again.`, 'leftover-app']
+    : [`Setup stopped because the saved details of the ${kind} App on this server are damaged. Delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again.`, 'damaged-app'];
+  assert(first.error instanceof ReportedSetupError && first.error.message === expected[1], `${kind} ${damage.file}`);
+  assert.equal(first.messages.at(-1), expected[0]);
+  assert(!first.messages.some(message => message.includes('Complete the GitHub page')));
+  assertNoInternalText(first.messages.at(-1), retryState);
+  assert(!(await isPresent(damagedPath)));
+  assert.equal(standIn.counts[kind], 0);
+  const second = await setupAttempt(repository, retryState, standIn.github);
+  assert.equal(second.error, undefined);
+  assert(!second.messages.includes(first.messages.at(-1)));
+  assert(second.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
+  assert(completedFor(repository)(second.messages.at(-1)));
+  assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
+}
+
+// Stored App details damaged after that App was installed: on a finished setup, and on one that stopped
+// later. The next run still creates and installs that App again instead of skipping it.
+for (const [kind, finished] of [['builder', false], ['release', true]]) {
+  const repository = `owner/${kind}-damaged-${finished ? 'finished' : 'unfinished'}`;
+  const retryState = join(root, `retry-damaged-installed-${kind}`);
+  const stateDirectory = projectStatePath(retryState, repository);
+  const standIn = standInGithub();
+  assert.equal((await setupAttempt(repository, retryState, standIn.github)).error, undefined);
+  if (!finished) await rm(join(stateDirectory, 'registration.json'));
+  await writeFile(join(credentialPath(retryState, repository), `${kind}-app.json`), '{"id": 12345, "pem": "PRIV');
+  const first = await setupAttempt(repository, retryState, standIn.github);
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'damaged-app', `${kind} ${finished}`);
+  assert.equal(first.messages.at(-1), `Setup stopped because the saved details of the ${kind} App on this server are damaged. Delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again.`);
+  assertNoInternalText(first.messages.at(-1), retryState);
+  assert(!(await isPresent(join(stateDirectory, `${kind}-installation.json`))));
+  const second = await setupAttempt(repository, retryState, standIn.github);
+  assert.equal(second.error, undefined);
+  assert(!second.messages.includes(first.messages.at(-1)));
+  assert(second.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
+  assert(completedFor(repository)(second.messages.at(-1)));
+  assert.equal(standIn.counts[kind], 2);
+  assert(await isPresent(join(stateDirectory, `${kind}-installation.json`)));
+  const third = await setupAttempt(repository, retryState, standIn.github);
+  assert.deepEqual(third.messages, [`The Forge is already set up for ${repository}.`]);
+}
+
+{
+  // A damaged file setup cannot remove gives the existing stop for an unwritable private folder.
+  const repository = 'owner/damaged-locked';
+  const retryState = join(root, 'retry-damaged-locked');
+  const credentialDirectory = credentialPath(retryState, repository);
+  await mkdir(credentialDirectory, { recursive: true, mode: 0o700 });
+  await writeFile(join(credentialDirectory, 'builder-app.json'), '{', { mode: 0o600 });
+  await chmod(credentialDirectory, 0o500);
+  let first;
+  try {
+    first = await setupAttempt(repository, retryState, standInGithub().github);
+  } finally {
+    await chmod(credentialDirectory, 0o700);
+  }
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'credential-location');
+  assert.equal(first.messages.at(-1), 'Setup stopped because this server would not let it save the GitHub App keys in its private folder. Allow setup to write to that folder before trying setup again.');
+}
+
+{
+  // A pending record whose saved keys lack a field is damaged too: GitHub created the App, so the owner deletes it.
+  const credentialDirectory = join(root, 'retry-damaged-pending-keys', 'credentials');
+  const pendingPath = join(credentialDirectory, 'builder-app-pending.json');
+  await writePrivateJson(pendingPath, { code: 'code-builder-1', credentials: { id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' } });
+  await assert.rejects(createApps({
+    repository: 'owner/repo', stateDirectory: join(root, 'retry-damaged-pending-keys'),
+    credentialDirectory, github: standInGithub().github, output: () => {}
+  }), error => error instanceof AppSetupStop && error.reason === 'leftover' && error.kind === 'builder');
+  assert(!(await isPresent(pendingPath)));
 }
 
 {
