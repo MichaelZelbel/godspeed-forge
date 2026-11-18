@@ -1,0 +1,22 @@
+// The command itself, run as the owner runs it: every stop exits 1 and prints only the plain sentence.
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const command = fileURLToPath(new URL('../bin/godspeed-forge.mjs', import.meta.url));
+const home = await mkdtemp(join(tmpdir(), 'forge-cli-'));
+const forge = (...args) => spawnSync(process.execPath, [command, ...args], {
+  env: { ...process.env, HOME: home }, input: '', encoding: 'utf8', timeout: 30000
+});
+
+const usage = forge();
+assert.deepEqual([usage.status, usage.stdout, usage.stderr], [1, '', 'Run godspeed-forge setup owner/repository.\n']);
+
+const badName = forge('setup', 'bad name');
+assert.deepEqual([badName.status, badName.stdout, badName.stderr], [1,
+  'Setup stopped because the repository name is not in the form owner/repository. Try setup again with a name in that form.\n', '']);
+
+await rm(home, { recursive: true, force: true });
