@@ -447,6 +447,59 @@ assert.deepEqual(githubFailureMessages.at(-1), 'Setup stopped because the GitHub
 assert(!githubFailureCalls.some(call => call.args.at(-1) === 'doctor' || call.args.includes('schedule')));
 await assert.rejects(stat(join(state, 'projects/owner/failing-github/registration.json')));
 
+// The two GitHub App stops with their own cause: the owner leaves the App page unfinished (the real
+// adapter receives an address without GitHub's code), and setup cannot save the App GitHub handed over.
+const appStepRun = (command, args, options = {}) => {
+  if (command === 'claude') return { stdout: 'signed in' };
+  if (command === 'gh') return mkdir(join(args.at(-1), '.git'), { recursive: true }).then(() => ({ stdout: '' }));
+  if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+  return { stdout: '' };
+};
+const abandonedOutputs = [];
+const abandonedAdapter = createGithubAdapter({
+  input: { question: async question => question.startsWith('Type yes if') ? 'no' : 'https://github.com/settings/apps/new\n' },
+  fetch: async () => { throw new Error('must not ask GitHub for an App without a code'); },
+  output: value => abandonedOutputs.push(value)
+});
+await assert.rejects(setupRepository('owner/abandoned-page', {
+  config: { projectsRoot, costMessage: 'Cost notice.' }, paths: { state }, commands: { run: async (...call) => appStepRun(...call) },
+  github: { ...abandonedAdapter, begin: async manifest => { await abandonedAdapter.begin(manifest); return { url: 'https://example.test/create' }; } },
+  prompt: async () => { throw new Error('must not prompt'); },
+  output: value => abandonedOutputs.push(value)
+}), error => error instanceof ReportedSetupError && error.message === 'github');
+assert.deepEqual(abandonedOutputs, [
+  'Using Claude Code to set up the Forge.',
+  'Create the builder App in your browser: https://example.test/create',
+  'Setup stopped because the GitHub page for creating one of its Apps was left unfinished, so GitHub did not hand that App over. Try setup again, finish creating the App on the GitHub page it opens, and paste the address your browser shows afterwards.'
+]);
+await assert.rejects(stat(join(state, 'projects/owner/abandoned-page/registration.json')));
+
+const unwritableCredentials = credentialPath(state, 'owner/unwritable-credentials');
+await mkdir(unwritableCredentials, { recursive: true, mode: 0o700 });
+await chmod(unwritableCredentials, 0o500);
+const unwritableOutputs = [];
+try {
+  await assert.rejects(setupRepository('owner/unwritable-credentials', {
+    config: { projectsRoot, costMessage: 'Cost notice.' }, paths: { state }, commands: { run: async (...call) => appStepRun(...call) },
+    github: {
+      begin: async () => ({ url: 'https://example.test/create' }),
+      complete: async () => credentials,
+      install: async () => { throw new Error('must not install unsaved credentials'); }
+    },
+    prompt: async () => { throw new Error('must not prompt'); },
+    output: value => unwritableOutputs.push(value)
+  }), error => error instanceof ReportedSetupError && error.message === 'github');
+} finally {
+  await chmod(unwritableCredentials, 0o700);
+}
+assert.deepEqual(unwritableOutputs, [
+  'Using Claude Code to set up the Forge.',
+  'Create the builder App in your browser: https://example.test/create',
+  'Setup stopped because it could not save the details of the GitHub App it just created on this server. Let setup write to the credentials folder in the Forge\'s private state folder before trying setup again.'
+]);
+await assert.rejects(stat(join(unwritableCredentials, 'builder-app.json')));
+await assert.rejects(stat(join(state, 'projects/owner/unwritable-credentials/registration.json')));
+
 for (const failure of [
   {
     repository: 'owner/failing-download', command: 'git', argument: 'fetch',
