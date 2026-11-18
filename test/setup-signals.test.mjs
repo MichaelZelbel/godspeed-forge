@@ -54,8 +54,8 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {} } = {}) {
         await wait(`${manifest.name === 'Forge builder' ? 'builder' : 'release'}-question`);
         return { url: `https://example.test/${manifest.name}` };
       },
-      callback: async () => 'app-code',
-      exchange: async () => credentials,
+      callback: async flow => { await wait(`${flow.url.endsWith('builder') ? 'builder' : 'release'}-callback`); return 'app-code'; },
+      exchange: async () => { await wait('exchange'); return credentials; },
       install: async ({ kind }) => { await wait(`${kind}-install`); return true; }
     },
     prompt: async () => { await wait('mission'); return ['Keep releases dependable.', 'Small teams.'][answer++ % 2]; },
@@ -68,7 +68,7 @@ if (process.argv[2] === 'command') {
   // Run as a child: `godspeed-forge setup` as the command runs it, with the stand-in world. It prints "ready"
   // on stderr once it waits; with "terminal", the wait ends with Ctrl-C typed at the question instead.
   const [, , , root, waitAt, terminal] = process.argv;
-  const input = Object.assign(new EventEmitter(), { close() {} });
+  const input = Object.assign(new EventEmitter(), { close() {}, terminal: Boolean(terminal) });
   setInterval(() => {}, 60_000);
   await runSetupCommand('owner/repo', async () => ({
     ...standIn(root, {
@@ -158,6 +158,44 @@ if (process.argv[2] === 'command') {
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-terminal-'));
     const result = await interrupt(root, 'builder-question', 'terminal');
     assertStopped(result, { code: 130, sentence: INTERRUPTED, appsKept: false });
+    // In a terminal the sentence starts on a line of its own instead of running onto the open question.
+    assert.deepEqual(result.lines, ['Using Claude Code to set up the Forge.', '', INTERRUPTED]);
+  }
+
+  // Stopped while waiting for the address from an App's GitHub page: GitHub may have created that App, and the
+  // next run asks for it to be deleted. The stop sentence says that, instead of promising the next run picks
+  // up, and the next run then says the same; once that stop is followed, the run after it completes.
+  for (const [signal, code, why] of [['SIGINT', 130, 'it was interrupted'], ['SIGTERM', 143, 'this server told it to stop']]) {
+    for (const [kind, waitAt, made] of [['builder', 'builder-callback', ['Forge builder', 'Forge release']], ['release', 'release-callback', ['Forge release']]]) {
+      const root = await mkdtemp(join(tmpdir(), 'forge-signal-page-shown-'));
+      const result = await interrupt(root, waitAt, signal);
+      const sentence = `Setup stopped because ${why} before it finished connecting the ${kind} App; if GitHub created a ${kind} App for owner/repo, delete it in your GitHub App settings before you try setup again, as the next setup will ask you to.`;
+      assertStopped(result, { code, sentence, appsKept: false });
+      assert.equal(result.lines.at(-2), `Create the ${kind} App in your browser: https://example.test/Forge ${kind}`);
+      assert(!result.lines.some(line => line.includes('pick up from what it had already done')));
+      const next = await nextSetup(root);
+      assert(next.error);
+      assert.deepEqual(next.manifests, []);
+      assert.equal(next.messages.at(-1), `Setup stopped because it could not finish connecting the ${kind} App. If GitHub created a ${kind} App for owner/repo, delete it in your GitHub App settings, then try setup again.`);
+      const after = await nextSetup(root);
+      assert.equal(after.error, undefined);
+      assert(after.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
+      assert.deepEqual(after.manifests, made);
+    }
+  }
+
+  // Stopped while GitHub turns the builder App's code into its credentials: the code is saved, so the next run
+  // tries to finish that App, as the sentence says, and creates no second one.
+  for (const [signal, code, why] of [['SIGINT', 130, 'it was interrupted'], ['SIGTERM', 143, 'this server told it to stop']]) {
+    const root = await mkdtemp(join(tmpdir(), 'forge-signal-code-saved-'));
+    const result = await interrupt(root, 'exchange', signal);
+    const sentence = `Setup stopped because ${why} before it finished connecting the builder App; try setup again and it will try to finish this App, and if GitHub no longer accepts it, setup will say what to do.`;
+    assertStopped(result, { code, sentence, appsKept: false });
+    const next = await nextSetup(root);
+    assert.equal(next.error, undefined);
+    assert(!next.messages.some(line => line.includes('delete it in your GitHub App settings')));
+    assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
+    assert.deepEqual(next.manifests, ['Forge release']);
   }
 
   // Terminated while a step runs, before any App exists; the next run finishes setup from there.
