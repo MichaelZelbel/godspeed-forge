@@ -32,6 +32,9 @@ GitHub Apps in the repository owner's personal or organization account, then gui
 questions and reports the setup checks. It completes only after both installations are confirmed
 and the checks succeed, and it leaves the schedule off until you explicitly start it. Only one setup
 per repository runs at a time; asking again while one is running says so and changes nothing.
+Asking for setup again after it completed checks that both Apps are still on GitHub and installed on
+the repository, that their saved details are still on this server and that the project's build tools
+are still in place; when something is missing it says what, instead of reporting the repository set up.
 
 Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 `~/.godspeed/forge/state/` for private state. Root Linux installs use
