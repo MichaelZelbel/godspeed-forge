@@ -487,7 +487,7 @@ for (const [name, damage, report, expected] of replaceCases) {
           return retryRun(command, args, runOptions);
         }
       },
-      github: { begin: async () => ({ url: 'https://example.test/create' }), complete: async () => credentials, install: async () => true },
+      github: { begin: async () => ({ url: 'https://example.test/create' }), callback: async () => 'code', exchange: async () => credentials, install: async () => true },
       prompt: async () => ['Purpose.', 'Users.'][answer++],
       output: value => outputs.push(value)
     };
@@ -540,7 +540,7 @@ for (const [name, damage, report, expected] of replaceCases) {
     await assert.rejects(setupRepository(repository, {
       config: { ...defaults(root), projectsRoot: join(caseRoot, 'projects') }, paths: { state: join(caseRoot, 'state') },
       commands: { run: run(source, report) },
-      github: { begin: async () => ({ url: 'https://example.test/create' }), complete: async () => credentials, install: async () => true },
+      github: { begin: async () => ({ url: 'https://example.test/create' }), callback: async () => 'code', exchange: async () => credentials, install: async () => true },
       prompt: async () => ['Purpose.', 'Users.'][answer++],
       output: () => {}
     }), error => error instanceof ReportedSetupError && error.message === 'final-check');
