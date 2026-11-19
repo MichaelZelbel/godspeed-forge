@@ -290,7 +290,7 @@ assert.deepEqual(retryFailed, [
   'Using Claude Code to set up the Forge.',
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release',
-  'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.',
+  'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.',
   'Setup stopped because the final check found that the guard keeping your project\'s hidden test scenarios away from the coding agent does not work on this server, because the python command there does not run Python 3. Install the python-is-python3 package on this server before trying setup again.'
 ]);
 for (const hidden of ['Factory refused', 'Holdout fence', 'consumer.py', 'Traceback', 'ghs_report_secret', 'report']) {
@@ -320,8 +320,8 @@ testCase('a stop at the final check says the Apps are kept and retrying adds non
 const appsKeptState = join(root, 'apps-kept-state');
 const appsKeptProjects = join(root, 'apps-kept-projects');
 // The kept-Apps line when only the builder App (named as in the stand-in's credentials, or by default) exists.
-const builderKept = name => `Your GitHub App "${name}" for this repository is already on your GitHub account and is kept there. Trying setup again uses it instead of creating a new one.`;
-const APPS_KEPT_MESSAGE = 'Your two GitHub Apps for this repository, "Acme Forge builder" and "Acme Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
+const builderKept = name => `Setup kept the details of your GitHub App "${name}" for this repository on this server. Trying setup again checks whether it is still on your GitHub account and uses it if it is, instead of creating a new one.`;
+const APPS_KEPT_MESSAGE = 'Setup kept the details of your two GitHub Apps for this repository, "Acme Forge builder" and "Acme Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.';
 let appsKeptCheckPasses = false;
 const appsKeptBegins = {};
 const appsKeptOptions = output => {
@@ -1434,7 +1434,7 @@ const appGoneStops = {
   buildTools: repository => [`Setup stopped because the build tools setup installed in the project folder for ${repository} on this server are missing. Try setup again, which installs them again.`, 'factory-missing']
 };
 
-const FORGE_APPS_KEPT = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
+const FORGE_APPS_KEPT = 'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.';
 
 async function finishedSetup(name) {
   const repository = `owner/${name}`;
@@ -2501,7 +2501,7 @@ for (const { name, mission, sentence, recovered, prompts, final } of [
   await assert.rejects(setupRepository(repository, project.options({ answers: ['Second purpose.', 'Second users.'] })),
     error => error instanceof ReportedSetupError && error.message === 'unreadable-mission-answers');
   assert.deepEqual(project.record.messages.slice(-2), [
-    'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.',
+    'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.',
     sentence
   ]);
   assert.equal(project.record.messages.filter(message => message.startsWith('Setup stopped because')).length, 1);
@@ -2920,7 +2920,7 @@ testCase('a pending record setup cannot read is not called a kept App');
     await chmod(pendingPath, 0o600);
   }
   assert.deepEqual(project.record.messages.slice(-2), [
-    'Your GitHub App "Forge builder" for this repository is already on your GitHub account and is kept there. Trying setup again uses it instead of creating a new one.',
+    'Setup kept the details of your GitHub App "Forge builder" for this repository on this server. Trying setup again checks whether it is still on your GitHub account and uses it if it is, instead of creating a new one.',
     'Setup stopped because it could not read the saved details of the builder App on this server. Let setup read the credentials folder in the Forge\'s private state folder before trying setup again.'
   ]);
   assert(!project.record.messages.some(message => message.includes('"Forge release"')));
