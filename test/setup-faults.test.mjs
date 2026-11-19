@@ -1,7 +1,8 @@
 // Makes every file operation, command, GitHub call, question and hold on the repository's setup that setup
 // reaches fail, one at a time, from a set of starting states, and checks that setup then stops with one plain
-// sentence and a non-zero exit, says the Apps are kept exactly when both exist, and finishes on retry with one
-// App per role. Every place in lib/ that reads or writes a file, runs a command, calls GitHub, asks a question
+// sentence and a non-zero exit, says which Apps are kept exactly when this server holds an App's details, and
+// finishes on retry with one App per role. GitHub calls and commands also fail with plain errors that carry no
+// code (as real network failures do), and GitHub calls and questions as if the input closed. Every place in lib/ that reads or writes a file, runs a command, calls GitHub, asks a question
 // or takes that hold must be made to fail by some scenario here, so a new step that no scenario reaches fails
 // this test.
 import assert from 'node:assert/strict';
@@ -14,6 +15,7 @@ import { files } from '../lib/files.mjs';
 import { InputClosed, setupCommand } from '../lib/setup.mjs';
 import { defaults } from '../lib/config.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
+import { testCase } from './cases.mjs';
 
 Error.stackTraceLimit = 100;
 const lib = fileURLToPath(new URL('../lib/', import.meta.url));
@@ -24,7 +26,8 @@ const projectsRoot = join(root, 'projects');
 const projectState = join(paths.state, 'projects', repository);
 const credentialFolder = join(paths.state, 'credentials', repository);
 const buildToolsSource = join(root, 'build-tools', FACTORY_REVISION);
-const KEPT = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
+const KEPT_BOTH = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
+const keptOne = name => `Your GitHub App "${name}" for this repository is already on your GitHub account and is kept there. Trying setup again uses it instead of creating a new one.`;
 const credentialsFor = code => ({ id: 1, pem: 'PRIVATE KEY', slug: code });
 
 // Every line in lib/ that calls one of the points this test makes fail.
@@ -79,6 +82,9 @@ function callerOf(stack) {
   return { site: first ? `${first.module}:${first.line}` : 'outside lib', functions: frames.map(frame => frame.name).filter(Boolean) };
 }
 
+// A failure with no code, as fetch and other network calls raise, whose message must not reach the owner.
+const plainError = () => new TypeError('fetch failed');
+
 const SYSCALLS = { readFile: 'open', writeFile: 'open', open: 'open', access: 'access' };
 function rawError(op) {
   const syscall = SYSCALLS[op] ?? op;
@@ -90,19 +96,20 @@ function rawError(op) {
 
 // The run being watched: every point call is recorded, and the calls named in faults fail instead of running.
 let current = null;
-function watch(kind, op) {
+function watch(kind, op, args = []) {
   if (!current) return undefined;
   const index = current.events.length;
-  current.events.push({ kind, op, ...callerOf(new Error().stack) });
+  current.events.push({ kind, op, path: kind === 'file' ? String(args[0]) : undefined, ...callerOf(new Error().stack) });
   const fault = current.faults.get(index);
   if (fault) current.fired.push(index);
   return fault;
 }
 function point(kind, op, call) {
   return (...args) => {
-    const fault = watch(kind, op);
+    const fault = watch(kind, op, args);
     if (!fault) return call(...args);
-    return Promise.reject(fault === 'closed' ? new InputClosed() : rawError(op));
+    if (fault === 'closed') return Promise.reject(new InputClosed());
+    return Promise.reject(fault === 'plain' ? plainError() : rawError(op));
   };
 }
 for (const op of Object.keys(files)) files[op] = point('file', op, files[op]);
@@ -130,7 +137,9 @@ function standInGithub() {
       world.live[code.split('-')[1]] += 1;
       return credentialsFor(code);
     },
-    install: async () => true
+    install: async () => true,
+    // What GitHub says about an App on a finished setup: still there while the owner has not deleted it.
+    appStatus: async ({ kind }) => world.live[kind] > 0 ? 'installed' : 'app-missing'
   };
   return world;
 }
@@ -190,9 +199,8 @@ const SCENARIOS = [
   { name: 'resumed', finish: 'complete', arrange: world => setup(world, { behaviour: { doctor: 'fail' } }) },
   { name: 'already set up', finish: 'already', arrange: world => setup(world) },
   { name: 'legacy set up', finish: 'already', arrange: async world => {
-    await writeJson(join(projectState, 'registration.json'), { repository, checkout: 'unused', completed: true });
-    await writeJson(join(projectState, 'builder-app.json'), credentialsFor('legacy-builder'));
-    Object.assign(world.live, { builder: 1, release: 1 });
+    await setup(world);
+    await files.rename(join(credentialFolder, 'builder-app.json'), join(projectState, 'builder-app.json'));
   } },
   { name: 'legacy duplicate', finish: 'complete', arrange: async world => {
     await writeJson(join(credentialFolder, 'builder-app.json'), credentialsFor('stored-builder'));
@@ -231,18 +239,38 @@ async function prepare(scenario) {
 }
 
 const STOP = 'Setup stopped because';
-const RAW = /Errno|EACCES|ENOENT|GraphQL|SyntaxError|^\s*at |\bat \S+ \(/m;
+const RAW = /Errno|EACCES|ENOENT|GraphQL|SyntaxError|fetch failed|^\s*at |\bat \S+ \(/m;
 const ABSOLUTE_PATH = /(?:^|\s)\/(?:[\w.-]+\/)+/;
 const finished = { complete: `Setup is complete for ${repository}.`, already: `The Forge is already set up for ${repository}.` };
 const absorbed = event => event.functions.some(name => ABSORBED.includes(name)) || ABSORBED_SITES.includes(event.site);
 
-// The Apps are kept exactly when this run got both of them: a step outside createApps ran after it.
-function appsExist(events) {
-  const first = events.findIndex(event => event.functions.includes('createApps'));
-  return first >= 0 && events.slice(first + 1).some(event => !event.functions.includes('createApps'));
+const validDetails = value => Boolean(value && typeof value === 'object' && value.id && value.pem
+  && typeof value.slug === 'string' && value.slug.trim());
+async function savedJson(path) {
+  try { return JSON.parse(await readFile(path, 'utf8')); } catch { return null; }
 }
 
-function checkRun(label, run) {
+// The kept-Apps line a stop must print, or null: it names every App whose details this server holds after
+// the run, saved or waiting in a pending record. Details setup was kept from reading when it looked for them
+// at the stop (a fault fired there) count too: setup knows they are there, only not what they hold.
+async function expectedKept(run) {
+  const names = {};
+  for (const kind of ['builder', 'release']) {
+    const detailFiles = [join(credentialFolder, `${kind}-app.json`), join(projectState, `${kind}-app.json`)];
+    const pendingFile = join(credentialFolder, `${kind}-app-pending.json`);
+    const held = (await Promise.all(detailFiles.map(savedJson))).some(validDetails)
+      || validDetails((await savedJson(pendingFile))?.credentials)
+      || run.fired.some(index => {
+        const event = run.events[index];
+        return event.functions.includes('savedApps') && [...detailFiles, pendingFile].includes(event.path);
+      });
+    if (held) names[kind] = kind === 'builder' ? 'Forge builder' : 'Forge release';
+  }
+  if (names.builder && names.release) return KEPT_BOTH;
+  return names.builder || names.release ? keptOne(names.builder ?? names.release) : null;
+}
+
+async function checkRun(label, run) {
   assert.deepEqual(run.fired, [...run.faults.keys()], `${label}: a fault was not reached`);
   for (const line of run.output) {
     assert(!RAW.test(line), `${label}: raw error text reached the owner: ${line}`);
@@ -262,9 +290,10 @@ function checkRun(label, run) {
   assert.equal(run.code, 1, `${label}: stopped with exit code ${run.code}`);
   assert.equal(stops.length, 1, `${label}: ${stops.length} stop lines: ${run.output.join(' | ')}`);
   assert(run.output.at(-1).startsWith(STOP), `${label}: the stop line is not the last line`);
-  const kept = run.output.includes(KEPT);
-  assert.equal(kept, appsExist(run.events), `${label}: kept-Apps line ${kept ? 'printed' : 'missing'}: ${run.output.join(' | ')}`);
-  if (kept) assert.equal(run.output.at(-2), KEPT, `${label}: the kept-Apps line is not just before the stop`);
+  const kept = run.output.filter(line => / kept there\./.test(line));
+  const expected = await expectedKept(run);
+  assert.deepEqual(kept, expected ? [expected] : [], `${label}: wrong kept-Apps line: ${run.output.join(' | ')}`);
+  if (expected) assert.equal(run.output.at(-2), expected, `${label}: the kept-Apps line is not just before the stop`);
 }
 
 // Retrying, doing what each stop says about deleting an App, finishes setup with one App per role.
@@ -291,7 +320,7 @@ async function faultRun(scenario, faults) {
     const event = run.events[index];
     return `${event ? `${event.kind} ${event.op} at ${event.site}` : `call ${index}`} (${variant})`;
   }).join(' then ')}`;
-  checkRun(label, run);
+  await checkRun(label, run);
   await checkRetry(label, scenario, world, run);
   return { run, faults };
 }
@@ -299,9 +328,11 @@ async function faultRun(scenario, faults) {
 const injected = new Set();
 const depthOne = [];
 for (const scenario of SCENARIOS) {
+  testCase(`every single failure, starting from: ${scenario.name}`);
   const baseline = await setup(await prepare(scenario), { behaviour: scenario.behaviour, faults: new Map() });
   for (const [index, event] of baseline.events.entries()) {
-    const variants = event.kind === 'github' || event.kind === 'prompt' ? ['raw', 'closed'] : ['raw'];
+    const variants = event.kind === 'github' ? ['raw', 'plain', 'closed']
+      : event.kind === 'prompt' ? ['raw', 'closed'] : event.kind === 'command' ? ['raw', 'plain'] : ['raw'];
     for (const variant of variants) {
       const result = await faultRun(scenario, new Map([[index, variant]]));
       injected.add(event.site);
@@ -311,6 +342,7 @@ for (const scenario of SCENARIOS) {
 }
 
 // Steps reached only after an earlier failure: fail them too, after that first failure.
+testCase('steps reached only after an earlier failure, and every step reached by some failure');
 for (const site of staticSites.filter(site => !injected.has(site))) {
   const found = depthOne.find(run => run.events.slice(run.index + 1).some(event => event.site === site));
   if (!found) continue;

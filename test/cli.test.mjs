@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { testCase } from './cases.mjs';
 
 const command = fileURLToPath(new URL('../bin/godspeed-forge.mjs', import.meta.url));
 const home = await mkdtemp(join(tmpdir(), 'forge-cli-'));
@@ -12,9 +13,11 @@ const forge = (...args) => spawnSync(process.execPath, [command, ...args], {
   env: { ...process.env, HOME: home }, input: '', encoding: 'utf8', timeout: 30000
 });
 
+testCase('the command without a repository prints how to run it and exits 1');
 const usage = forge();
 assert.deepEqual([usage.status, usage.stdout, usage.stderr], [1, '', 'Run godspeed-forge setup owner/repository.\n']);
 
+testCase('a repository name not in the form owner/repository stops plainly with exit 1');
 const badName = forge('setup', 'bad name');
 assert.deepEqual([badName.status, badName.stdout, badName.stderr], [1,
   'Setup stopped because the repository name is not in the form owner/repository. Try setup again with a name in that form.\n', '']);

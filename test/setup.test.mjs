@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { generateKeyPairSync, verify } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -18,6 +19,7 @@ import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
+import { testCase } from './cases.mjs';
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -60,9 +62,12 @@ const run = async (command, args, options = {}) => {
     await mkdir(join(options.cwd, 'factory'), { recursive: true });
     await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n\nFactory template.\n');
     await writeFile(join(options.cwd, 'factory/consumer.py'), '# factory stand-in\n');
+    await mkdir(join(options.cwd, '.factory'), { recursive: true });
+    await writeFile(join(options.cwd, '.factory/consumer.json'), '{}\n');
   }
   return { stdout: '' };
 };
+testCase('setup with Claude Code writes the mission and creates and installs both Apps');
 let answer = 0;
 await setupRepository('owner/repo', {
   config: { ...defaults(root), projectsRoot }, paths: { state }, commands: { run },
@@ -88,6 +93,7 @@ assert.deepEqual(messages, [
   'Setup is complete for owner/repo. Automatic work is off. A typical release costs about $5 to $40 of Claude Code use, based on Anthropic\'s published average of about $6 a day for one person using Claude Code, with most people under $12, and a release taking one to a few days of that work. On a Pro or Max plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready to start automatic work, ask me to turn it on.'
 ]);
 
+testCase('setup with Codex says it is using Codex');
 const codexMessages = [];
 let codexAnswer = 0;
 await setupRepository('owner/codex-repo', {
@@ -107,10 +113,12 @@ assert.deepEqual(codexMessages, [
   'Create the release App in your browser: https://example.test/Forge release',
   'Setup is complete for owner/codex-repo. Automatic work is off. A typical release costs about $3 to $25 of Codex use, based on OpenAI\'s published usage prices for the Codex models, which are lower than Claude Code\'s, and a release taking one to a few days of agent work. On a ChatGPT Plus or Pro plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready to start automatic work, ask me to turn it on.'
 ]);
+testCase('setup messages carry at most one link and no internal names');
 for (const message of [...messages, ...codexMessages]) {
   assert((message.match(/https?:\/\//g) ?? []).length <= 1);
   assert(!/factory|archon|config|token/i.test(message));
 }
+testCase('the release cost message names the agent, the price and its basis');
 
 assert.equal(
   releaseCostMessage('codex', 'Codex', { codex: { low: 10, high: 15 } }),
@@ -120,6 +128,7 @@ assert.equal(
   releaseCostMessage('claude', 'Claude Code', { message: 'About ${low}-${high} on {agent} ({basis}).', claude: { basis: 'measured releases' } }),
   'About $5-$40 on Claude Code (measured releases).'
 );
+testCase('each App asks only for the permissions it needs and is installed on the repository');
 assert.equal(manifests.length, 2);
 assert.deepEqual(manifests[0].default_permissions, APP_PERMISSIONS.builder);
 assert.deepEqual(manifests[1].default_permissions, APP_PERMISSIONS.release);
@@ -139,6 +148,7 @@ for (const kind of ['builder', 'release']) {
     repository: 'owner/repo', confirmed: true
   });
 }
+testCase('App keys are saved privately and no secret reaches the project state, mission or messages');
 assert.deepEqual((await readdir(join(state, 'credentials/owner/repo'))).sort(), ['builder-app.json', 'release-app.json']);
 const serializedProjectState = JSON.stringify({
   config: { projectsRoot, releaseCost: { message: 'Release cost.' } },
@@ -153,6 +163,7 @@ for (const [field, secret] of Object.entries(credentials)) {
   assert(!messages.join('\n').includes(String(secret)));
 }
 
+testCase('the README documents the App permissions and the App page address follows the owner type');
 const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
 assert(readme.includes(APP_PERMISSION_DOCUMENTATION));
 assert.equal(registrationAction('owner', false), 'https://github.com/settings/apps/new');
@@ -167,6 +178,7 @@ for (const [manifest, answer, action, permissions] of [
     contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read'
   }]
 ]) {
+  testCase(`the App page posts the ${manifest.name} manifest to ${action}`);
   const github = createGithubAdapter({ input: { question: async () => answer } });
   const flow = await github.begin(manifest);
   const page = Buffer.from(flow.url.split(',')[1], 'base64').toString('utf8');
@@ -176,6 +188,7 @@ for (const [manifest, answer, action, permissions] of [
   assert.deepEqual(submittedManifest.default_permissions, permissions);
 }
 
+testCase('repository names are read from every GitHub remote form and kept apart in state');
 assert.equal(repositoryFromRemote('https://github.com/Owner/Repo.git'), 'owner/repo');
 assert.equal(repositoryFromRemote('git@github.com:owner/repo.git'), 'owner/repo');
 assert.equal(repositoryFromRemote('ssh://git@github.com/owner/repo.git'), 'owner/repo');
@@ -183,12 +196,14 @@ assert.equal(repositoryFromRemote('https://github.com/not-owner/repo.git'), 'not
 assert.equal(projectStatePath(state, 'owner/repo'), join(state, 'projects/owner/repo'));
 assert.equal(credentialPath(state, 'owner/repo'), join(state, 'credentials/owner/repo'));
 assert.notEqual(projectStatePath(state, 'owner--repo/name'), projectStatePath(state, 'owner/repo--name'));
+testCase('an existing copy of the same repository is used as it is');
 const existing = join(root, 'existing', 'owner', 'repo');
 await mkdir(join(existing, '.git'), { recursive: true });
 await prepareCheckout('owner/repo', join(root, 'existing'), {
   run: async () => ({ stdout: 'git@github.com:owner/repo.git\n' })
 }, () => { throw new Error('must not stop'); });
 
+testCase('a signed-out Claude Code falls back to a signed-in Codex');
 const probes = [];
 assert.equal(await findSignedInAgent(async command => {
   probes.push(command);
@@ -197,6 +212,7 @@ assert.equal(await findSignedInAgent(async command => {
 }), 'codex');
 assert.deepEqual(probes, ['claude', 'codex']);
 
+testCase('a failing final check stops with the fallback message and saves no registration');
 const failedMessages = [];
 let failedAnswer = 0;
 await assert.rejects(setupRepository('owner/failing-doctor', {
@@ -225,6 +241,7 @@ assert.deepEqual(failedMessages.at(-1), FINAL_CHECK_FALLBACK);
 await assert.rejects(stat(join(state, 'projects/owner/failing-doctor/registration.json')));
 assert(!failedMessages.some(message => message.includes('schedule')));
 
+testCase('a refused final check stops plainly and the retry finishes without new Apps');
 const retryRun = async (command, args, options = {}) => {
   if (command === 'claude') return { stdout: 'signed in' };
   if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
@@ -295,9 +312,12 @@ assert.equal(retryBegins, 2);
 assert.equal(retryInstalls, installsBeforeRetry);
 assert.equal(JSON.parse(await readFile(join(state, 'projects/owner/retry-check/registration.json'), 'utf8')).completed, true);
 
+testCase('a stop at the final check says the Apps are kept and retrying adds none');
 // A stop at the final check tells the owner their Apps are kept; stopping again and retrying add none.
 const appsKeptState = join(root, 'apps-kept-state');
 const appsKeptProjects = join(root, 'apps-kept-projects');
+// The kept-Apps line when only the builder App (named as in the stand-in's credentials, or by default) exists.
+const builderKept = name => `Your GitHub App "${name}" for this repository is already on your GitHub account and is kept there. Trying setup again uses it instead of creating a new one.`;
 const APPS_KEPT_MESSAGE = 'Your two GitHub Apps for this repository, "Acme Forge builder" and "Acme Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
 let appsKeptCheckPasses = false;
 const appsKeptBegins = {};
@@ -354,6 +374,7 @@ assert(appsKeptPassed.at(-1).startsWith('Setup is complete for owner/apps-kept.'
 assert(!appsKeptPassed.includes(APPS_KEPT_MESSAGE));
 assert.deepEqual(appsKeptBegins, { 'Forge builder': 1, 'Forge release': 1 });
 
+testCase('a failing command keeps its output and its error text');
 await assert.rejects(
   runProcess(process.execPath, ['-e', 'process.stdout.write("partial"); process.stderr.write("check said no"); process.exit(1)']),
   error => error.message === `${process.execPath} failed.` && error.stderr === 'check said no' && error.stdout === 'partial'
@@ -406,6 +427,7 @@ const refusalCases = [
     `${found} the Python on this server is too old to run the build tools. Install Python 3.9 or newer before trying setup again.`]
 ];
 for (const [index, [report, expected]] of refusalCases.entries()) {
+  testCase(`final-check refusal ${index + 1} gets its own message`);
   const repository = `owner/check-${index}`;
   const outputs = [];
   let answer = 0;
@@ -441,6 +463,7 @@ for (const [index, [report, expected]] of refusalCases.entries()) {
   // No message names a server path.
   assert.deepEqual(outputs.at(-1).match(/\/\S*/g) ?? [], [], outputs.at(-1));
 }
+testCase('every final-check refusal has a different message');
 assert.equal(new Set(refusalCases.map(([, expected]) => expected)).size, 12);
 
 // When the final check finds the downloaded build tools missing, damaged or failing, trying setup again
@@ -459,6 +482,7 @@ const replaceCases = [
     folder => `Pinned source has changes (damaged). The pinned tree is verified byte for byte. Restore it with: rm -rf ${folder} && python3 bin/factory.py init from your repo.`, SOURCE_DAMAGED]
 ];
 for (const [name, damage, report, expected] of replaceCases) {
+  testCase(`trying again replaces a build tools download that is ${name}`);
   const repository = `owner/replace-${name}`;
   const caseRoot = join(root, `replace-${name}`);
   const download = join(caseRoot, 'cache/factory/archon/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb');
@@ -512,6 +536,7 @@ for (const [name, damage, report, expected] of replaceCases) {
   assert(!(await readdir(join(caseRoot, 'state'), { recursive: true })).some(entry => entry.endsWith('replace-build-tools.json')), name);
 }
 
+testCase('a refusal not about the download leaves it alone, and only download folders are deleted');
 // A refusal that is not about the download leaves the download alone on retry, and a recorded folder that is
 // not a download folder named with its revision is never deleted.
 {
@@ -556,6 +581,7 @@ for (const [name, damage, report, expected] of replaceCases) {
   assert((await stat(keep)).isDirectory());
 }
 
+testCase('a GitHub connection that fails stops before the final check');
 const githubFailureMessages = [];
 const githubFailureCalls = [];
 await assert.rejects(setupRepository('owner/failing-github', {
@@ -580,6 +606,7 @@ assert.deepEqual(githubFailureMessages.at(-1), 'Setup stopped because the GitHub
 assert(!githubFailureCalls.some(call => call.args.at(-1) === 'doctor' || call.args.includes('schedule')));
 await assert.rejects(stat(join(state, 'projects/owner/failing-github/registration.json')));
 
+testCase('leaving the builder App page unfinished stops plainly');
 // The two GitHub App stops with their own cause: the owner leaves the App page unfinished (the real
 // adapter receives an address without GitHub's code), and setup cannot save the App GitHub handed over.
 const appStepRun = (command, args, options = {}) => {
@@ -607,6 +634,7 @@ assert.deepEqual(abandonedOutputs, [
 ]);
 await assert.rejects(stat(join(state, 'projects/owner/abandoned-page/registration.json')));
 
+testCase('leaving the release App page unfinished stops after the builder App');
 // The builder App is created and installed, then the owner leaves the release App page unfinished.
 const abandonedReleaseOutputs = [];
 const abandonedReleaseAdapter = createGithubAdapter({
@@ -632,10 +660,12 @@ assert.deepEqual(abandonedReleaseOutputs, [
   'Using Claude Code to set up the Forge.',
   'Create the builder App in your browser: https://example.test/create',
   'Create the release App in your browser: https://example.test/create',
+  builderKept('Forge builder'),
   'Setup stopped because the GitHub page for creating its release App was left unfinished, so GitHub did not hand that App over. Try setup again, finish creating the release App on the GitHub page it opens, and paste the address your browser shows afterwards.'
 ]);
 await assert.rejects(stat(join(state, 'projects/owner/abandoned-release-page/registration.json')));
 
+testCase('a credential folder that stops accepting files stops plainly');
 // The folder accepts the pending record (#29) but stops accepting files once GitHub hands the App over.
 const unwritableCredentials = credentialPath(state, 'owner/unwritable-credentials');
 await mkdir(unwritableCredentials, { recursive: true, mode: 0o700 });
@@ -658,6 +688,7 @@ try {
 assert.deepEqual(unwritableOutputs, [
   'Using Claude Code to set up the Forge.',
   'Create the builder App in your browser: https://example.test/create',
+  builderKept('Forge builder'),
   'Setup stopped because it could not save the details of the GitHub App it just created on this server. Let setup write to the credentials folder in the Forge\'s private state folder before trying setup again.'
 ]);
 await assert.rejects(stat(join(unwritableCredentials, 'builder-app.json')));
@@ -673,6 +704,7 @@ for (const failure of [
     message: 'Setup stopped because the build tools it downloaded could not prepare the project on this server. Install the latest version of the Forge on this server before trying setup again.'
   }
 ]) {
+  testCase(`${failure.repository} stops with its own message`);
   const failureMessages = [];
   const failureCalls = [];
   await assert.rejects(setupRepository(failure.repository, {
@@ -697,6 +729,7 @@ for (const failure of [
 }
 
 for (const refusedKind of ['builder', 'release']) {
+  testCase(`a refused ${refusedKind} App stops App setup`);
   const refusedState = join(root, `refused-${refusedKind}`);
   await assert.rejects(createApps({
     repository: 'owner/repo', stateDirectory: refusedState,
@@ -710,6 +743,7 @@ for (const refusedKind of ['builder', 'release']) {
   await assert.rejects(stat(join(refusedState, `${refusedKind}-installation.json`)));
 }
 
+testCase('App keys GitHub returns incomplete are not saved');
 const incompleteCredentialsState = join(root, 'incomplete-credentials');
 await assert.rejects(createApps({
   repository: 'owner/repo', stateDirectory: incompleteCredentialsState,
@@ -722,6 +756,7 @@ await assert.rejects(createApps({
 }), /did not return the builder App credentials/);
 await assert.rejects(stat(join(incompleteCredentialsState, 'credentials/builder-app.json')));
 
+testCase('App keys saved by an earlier release are moved to the private folder');
 const completedLegacyState = join(root, 'completed-legacy');
 const completedLegacyCredentials = join(root, 'completed-legacy-credentials');
 for (const kind of ['builder', 'release']) {
@@ -743,6 +778,7 @@ for (const kind of ['builder', 'release']) {
   await assert.rejects(stat(join(completedLegacyState, `${kind}-app.json`)));
 }
 
+testCase('an interrupted move of earlier App keys resumes');
 const interruptedState = join(root, 'interrupted-legacy');
 const interruptedCredentials = join(root, 'interrupted-credentials');
 await writePrivateJson(join(interruptedState, 'builder-app.json'), credentials);
@@ -761,6 +797,7 @@ assert.deepEqual(resumed, ['builder', 'release']);
 assert.deepEqual(JSON.parse(await readFile(join(interruptedCredentials, 'builder-app.json'), 'utf8')), credentials);
 await assert.rejects(stat(join(interruptedState, 'builder-app.json')));
 
+testCase('a stale earlier App keys file next to the current one is removed');
 const duplicateState = join(root, 'duplicate-state');
 const duplicateCredentials = join(root, 'duplicate-credentials');
 const currentCredentials = { ...credentials, slug: 'current-slug' };
@@ -780,6 +817,7 @@ await assert.rejects(createApps({
 }), /Install the builder App/);
 await assert.rejects(stat(join(duplicateState, 'builder-app.json')));
 
+testCase('damaged earlier App keys stop as damaged and are removed');
 const malformedState = join(root, 'malformed-state');
 const malformedCredentials = join(root, 'malformed-credentials');
 await writePrivateJson(join(malformedState, 'builder-app.json'), { id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' });
@@ -791,6 +829,7 @@ await assert.rejects(createApps({
 await assert.rejects(stat(join(malformedState, 'builder-app.json')));
 await assert.rejects(stat(join(malformedCredentials, 'builder-app.json')));
 
+testCase('App keys setup cannot read are not created again');
 const inaccessibleState = join(root, 'inaccessible-state');
 const inaccessibleCredentials = join(root, 'inaccessible-credentials');
 await writePrivateJson(join(inaccessibleState, 'builder-installation.json'), {
@@ -811,6 +850,7 @@ try {
   await chmod(inaccessibleCredentials, 0o700);
 }
 
+testCase('with no agent signed in setup stops and writes nothing');
 const emptyRoot = join(root, 'no-agent');
 const stopped = [];
 await assert.rejects(setupRepository('owner/other', {
@@ -823,8 +863,12 @@ await assert.rejects(stat(emptyRoot));
 
 const isPresent = async path => { try { await stat(path); return true; } catch { return false; } };
 
+// deleted and uninstalled name the Apps GitHub answers for as gone from the account or from the repository;
+// unreachable names the Apps whose check fails as if GitHub could not be reached.
 function standInGithub(options = {}) {
   const counts = { builder: 0, release: 0 };
+  const installs = { builder: 0, release: 0 };
+  const onGithub = { deleted: new Set(), uninstalled: new Set(), unreachable: new Set() };
   const live = { builder: 0, release: 0 };
   const pending = { ...options };
   const usedCodes = new Set();
@@ -851,9 +895,14 @@ function standInGithub(options = {}) {
       usedCodes.add(code);
       return { ...credentials, slug: code };
     },
-    install: async () => true
+    install: async ({ kind }) => { installs[kind] += 1; return true; },
+    appStatus: async ({ kind }) => {
+      if (onGithub.unreachable.has(kind)) throw new Error('network unreachable');
+      if (onGithub.deleted.has(kind)) return 'app-missing';
+      return onGithub.uninstalled.has(kind) ? 'not-installed' : 'installed';
+    }
   };
-  return { counts, live, github };
+  return { counts, live, installs, onGithub, github };
 }
 
 async function setupAttempt(repository, stateDirectory, github) {
@@ -876,6 +925,7 @@ async function setupAttempt(repository, stateDirectory, github) {
 const pendingFiles = async directory => (await readdir(directory)).filter(name => name.endsWith('-app-pending.json'));
 const completedFor = repository => message => message.startsWith(`Setup is complete for ${repository}.`);
 
+testCase('an unwritable credential folder stops, and the retry finishes');
 {
   const retryState = join(root, 'retry-unwritable');
   const credentialDirectory = credentialPath(retryState, 'owner/unwritable');
@@ -898,6 +948,7 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
 }
 
+testCase('a lost connection while GitHub hands over the App keys is retried');
 {
   const retryState = join(root, 'retry-transport');
   const credentialDirectory = credentialPath(retryState, 'owner/transport');
@@ -915,6 +966,7 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   assert.deepEqual(await pendingFiles(credentialDirectory), []);
 }
 
+testCase('GitHub\'s answer lost on the way back: both stops agree and name deleting the App');
 {
   // GitHub uses the builder code but its answer is lost on the way back, so the retry's code is refused.
   // The first stop only says setup will try; the second names deleting the App, and the two agree.
@@ -941,6 +993,7 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   assert.deepEqual(await pendingFiles(credentialDirectory), []);
 }
 
+testCase('the credential folder stops accepting files after GitHub hands out the keys');
 {
   // The credential folder stops accepting new files right after GitHub hands out the builder keys.
   const retryState = join(root, 'retry-write-after-exchange');
@@ -975,6 +1028,7 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   assert.deepEqual(await pendingFiles(credentialDirectory), []);
 }
 
+testCase('the App keys file itself cannot be written');
 {
   // The keys file itself cannot be written (something else is in its place) while the folder can.
   const retryState = join(root, 'retry-keys-blocked');
@@ -994,6 +1048,7 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   assert.deepEqual(await pendingFiles(credentialDirectory), []);
 }
 
+testCase('App keys lost after the exchange: the owner deletes the App once and setup finishes');
 {
   // Nothing in the credential folder can be written after the exchange, not even the pending record:
   // the keys are lost. The owner is told to delete the App once, and following that finishes setup.
@@ -1031,6 +1086,7 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   assert.deepEqual(await pendingFiles(credentialDirectory), []);
 }
 
+testCase('GitHub refusing the App code once is retried');
 {
   const retryState = join(root, 'retry-refused');
   const standIn = standInGithub({ refuseExchangeOnce: 'builder' });
@@ -1045,6 +1101,7 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   assert.equal(standIn.counts.release, 1);
 }
 
+testCase('a leftover pending record without a code stops as a leftover');
 {
   const interruptedCredentialDirectory = join(root, 'retry-interrupted', 'credentials');
   const pendingPath = join(interruptedCredentialDirectory, 'builder-app-pending.json');
@@ -1057,6 +1114,7 @@ const completedFor = repository => message => message.startsWith(`Setup is compl
   assert.deepEqual(standIn.counts, { builder: 0, release: 0 });
   assert(!(await isPresent(pendingPath)));
 
+  testCase('an address without GitHub\'s code stops at the App page and the page opens again');
   // An address without GitHub's code means the App page was left unfinished (#44): the stop names that
   // page, the pending record goes, and the next run opens the page again.
   const noCallback = standInGithub({ noCallback: 'builder' });
@@ -1083,6 +1141,7 @@ for (const [kind, damage] of [
   ['builder', { file: 'legacy', text: JSON.stringify({ id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' }), name: 'old-keys' }],
   ['release', { file: 'stored', text: '{"id": 12345, "pem": "PRIV', name: 'cut-keys' }]
 ]) {
+  testCase(`a damaged ${kind} App file (${damage.name}) stops plainly, then the App page opens again`);
   const repository = `owner/${kind}-${damage.name}`;
   const retryState = join(root, `retry-damaged-${kind}-${damage.file}`);
   const credentialDirectory = credentialPath(retryState, repository);
@@ -1115,6 +1174,7 @@ for (const [kind, damage] of [
 // Stored App details damaged after that App was installed: on a finished setup, and on one that stopped
 // later. The next run still creates and installs that App again instead of skipping it.
 for (const [kind, finished] of [['builder', false], ['release', true]]) {
+  testCase(`${kind} App details damaged after install${finished ? ' on a finished setup' : ''} are created and installed again`);
   const repository = `owner/${kind}-damaged-${finished ? 'finished' : 'unfinished'}`;
   const retryState = join(root, `retry-damaged-installed-${kind}`);
   const stateDirectory = projectStatePath(retryState, repository);
@@ -1138,6 +1198,7 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   assert.deepEqual(third.messages, [`The Forge is already set up for ${repository}.`]);
 }
 
+testCase('a damaged file setup cannot remove stops as an unwritable private folder');
 {
   // A damaged file setup cannot remove gives the existing stop for an unwritable private folder.
   const repository = 'owner/damaged-locked';
@@ -1156,6 +1217,7 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   assert.equal(first.messages.at(-1), 'Setup stopped because this server would not let it save the GitHub App keys in its private folder. Allow setup to write to that folder before trying setup again.');
 }
 
+testCase('a pending record with incomplete keys is a leftover');
 {
   // A pending record whose saved keys lack a field is damaged too: GitHub created the App, so the owner deletes it.
   const credentialDirectory = join(root, 'retry-damaged-pending-keys', 'credentials');
@@ -1168,6 +1230,7 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   assert(!(await isPresent(pendingPath)));
 }
 
+testCase('a stored and installed builder App is not created again');
 {
   const retryState = join(root, 'retry-builder-stored');
   const credentialDirectory = join(retryState, 'credentials');
@@ -1180,6 +1243,7 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   assert.deepEqual(await pendingFiles(credentialDirectory), []);
 }
 
+testCase('a stop at the release App page finishes on retry');
 {
   const retryState = join(root, 'retry-release-stop');
   const standIn = standInGithub({ failBeginOnce: 'release' });
@@ -1192,12 +1256,185 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
 }
 
+// A rerun after a finished setup checks what setup made before saying it is set up (#60). Each missing
+// piece stops with one plain message naming it, and following that message gets setup complete again.
+const appGoneStops = {
+  missing: (kind, repository) => [`Setup stopped because the saved details of the ${kind} App on this server are missing. Delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again.`, 'missing-app-details'],
+  gone: (kind, repository) => [`Setup stopped because the ${kind} App for ${repository} is no longer on your GitHub account. Try setup again, which creates it again; if your GitHub App settings still list a ${kind} App for ${repository}, delete it first.`, 'app-missing'],
+  uninstalled: (kind, repository) => [`Setup stopped because the ${kind} App is no longer installed on ${repository}. Try setup again, which asks you to install it again.`, 'app-not-installed'],
+  unchecked: (kind, repository) => [`Setup stopped because GitHub could not be reached to check the ${kind} App for ${repository}. Restore this server's access to GitHub before trying setup again.`, 'github-check'],
+  buildTools: repository => [`Setup stopped because the build tools setup installed in the project folder for ${repository} on this server are missing. Try setup again, which installs them again.`, 'factory-missing']
+};
+
+async function finishedSetup(name) {
+  const repository = `owner/${name}`;
+  const retryState = join(root, `finished-${name}`);
+  const standIn = standInGithub();
+  const first = await setupAttempt(repository, retryState, standIn.github);
+  assert(completedFor(repository)(first.messages.at(-1)), name);
+  return {
+    repository, retryState, standIn,
+    stateDirectory: projectStatePath(retryState, repository),
+    credentialDirectory: credentialPath(retryState, repository),
+    checkout: join(projectsRoot, repository),
+    attempt: () => setupAttempt(repository, retryState, standIn.github)
+  };
+}
+
+function assertStopped(attempt, [message, reason], serverRoot) {
+  assert(attempt.error instanceof ReportedSetupError, message);
+  assert.equal(attempt.error.message, reason);
+  assert.equal(attempt.messages.at(-1), message);
+  assert(!attempt.messages.some(line => line.includes('already set up')));
+  for (const line of attempt.messages) {
+    assertNoInternalText(line, serverRoot);
+    assert(!/factory|archon|config|token/i.test(line), line);
+    for (const secret of Object.values(credentials)) assert(!line.includes(String(secret)), line);
+  }
+}
+
+for (const kind of ['builder', 'release']) {
+  const other = kind === 'builder' ? 'release' : 'builder';
+  testCase(`a finished setup whose ${kind} App was deleted on GitHub stops, then creates it again`);
+  {
+    // The App was deleted on GitHub.
+    const project = await finishedSetup(`${kind}-deleted`);
+    project.standIn.onGithub.deleted.add(kind);
+    assertStopped(await project.attempt(), appGoneStops.gone(kind, project.repository), project.retryState);
+    assert(!(await isPresent(join(project.credentialDirectory, `${kind}-app.json`))));
+    assert(!(await isPresent(join(project.stateDirectory, `${kind}-installation.json`))));
+    assert(await isPresent(join(project.credentialDirectory, `${other}-app.json`)));
+    assert(!(await isPresent(join(project.stateDirectory, 'registration.json'))));
+    project.standIn.onGithub.deleted.delete(kind);
+    const next = await project.attempt();
+    assert.equal(next.error, undefined);
+    assert(next.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
+    assert(completedFor(project.repository)(next.messages.at(-1)));
+    assert.equal(project.standIn.counts[kind], 2);
+    assert.equal(project.standIn.counts[other], 1);
+    assert.deepEqual((await project.attempt()).messages, [`The Forge is already set up for ${project.repository}.`]);
+  }
+  testCase(`a finished setup whose ${kind} App details were deleted from this server stops, then creates it again`);
+  {
+    // The App's saved details were deleted from this server.
+    const project = await finishedSetup(`${kind}-details-deleted`);
+    await rm(join(project.credentialDirectory, `${kind}-app.json`));
+    assertStopped(await project.attempt(), appGoneStops.missing(kind, project.repository), project.retryState);
+    assert(!(await isPresent(join(project.stateDirectory, `${kind}-installation.json`))));
+    assert(!(await isPresent(join(project.stateDirectory, 'registration.json'))));
+    const next = await project.attempt();
+    assert(next.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
+    assert(completedFor(project.repository)(next.messages.at(-1)));
+    assert.deepEqual(project.standIn.counts, { [kind]: 2, [other]: 1 });
+  }
+}
+
+testCase('a finished setup whose release App was uninstalled stops, then asks to install it again');
+{
+  // The App is still on GitHub but no longer installed on the repository: the next run asks to install it
+  // again and creates nothing.
+  const project = await finishedSetup('release-uninstalled');
+  project.standIn.onGithub.uninstalled.add('release');
+  assertStopped(await project.attempt(), appGoneStops.uninstalled('release', project.repository), project.retryState);
+  assert(await isPresent(join(project.credentialDirectory, 'release-app.json')));
+  assert(!(await isPresent(join(project.stateDirectory, 'release-installation.json'))));
+  project.standIn.onGithub.uninstalled.delete('release');
+  const next = await project.attempt();
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(project.standIn.installs, { builder: 1, release: 2 });
+}
+
+testCase('a finished setup with both Apps broken stops on the first, then repairs both');
+{
+  // Both Apps broken at once: the stop names the first, and the next run repairs both.
+  const project = await finishedSetup('both-broken');
+  project.standIn.onGithub.deleted.add('builder');
+  project.standIn.onGithub.uninstalled.add('release');
+  assertStopped(await project.attempt(), appGoneStops.gone('builder', project.repository), project.retryState);
+  assert(!(await isPresent(join(project.stateDirectory, 'release-installation.json'))));
+  project.standIn.onGithub.deleted.clear();
+  project.standIn.onGithub.uninstalled.clear();
+  const next = await project.attempt();
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 2, release: 1 });
+  assert.deepEqual(project.standIn.installs, { builder: 2, release: 2 });
+}
+
+testCase('a finished setup stops on an unreachable App check before repairing the other App');
+{
+  // GitHub answers that the release App is gone but cannot be reached for the builder App: the stop is the
+  // unreachable check, nothing is removed, and once GitHub answers for both the next runs repair the release
+  // App only after checking the builder App again.
+  const project = await finishedSetup('one-unchecked');
+  const before = await readTree(project.retryState);
+  project.standIn.onGithub.deleted.add('release');
+  project.standIn.onGithub.unreachable.add('builder');
+  assertStopped(await project.attempt(), appGoneStops.unchecked('builder', project.repository), project.retryState);
+  assert.deepEqual(await readTree(project.retryState), before);
+  project.standIn.onGithub.unreachable.clear();
+  project.standIn.onGithub.deleted.add('builder');
+  assertStopped(await project.attempt(), appGoneStops.gone('builder', project.repository), project.retryState);
+  project.standIn.onGithub.deleted.clear();
+  const next = await project.attempt();
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 2, release: 2 });
+}
+
+for (const removed of ['settings', 'folder']) {
+  testCase(`a finished setup whose build tools ${removed} are gone stops, then installs them again`);
+  // The build tools' settings, or the whole project folder, are gone from this server.
+  const project = await finishedSetup(`build-tools-${removed}`);
+  await rm(removed === 'settings' ? join(project.checkout, '.factory/consumer.json') : project.checkout, { recursive: true });
+  assertStopped(await project.attempt(), appGoneStops.buildTools(project.repository), project.retryState);
+  assert(!(await isPresent(join(project.stateDirectory, 'registration.json'))));
+  const next = await project.attempt();
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert(await isPresent(join(project.checkout, '.factory/consumer.json')));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+}
+
+testCase('a finished setup with GitHub unreachable changes nothing, and with nothing missing says it is set up');
+{
+  // GitHub cannot be reached: nothing is changed and the next run checks again. With nothing missing a rerun
+  // says it is set up, creates nothing and changes no saved file.
+  const project = await finishedSetup('nothing-missing');
+  const saved = async () => [await readTree(project.retryState), await readTree(project.checkout)];
+  const before = await saved();
+  project.standIn.onGithub.unreachable.add('builder').add('release');
+  assertStopped(await project.attempt(), appGoneStops.unchecked('builder', project.repository), project.retryState);
+  assert.deepEqual(await saved(), before);
+  project.standIn.onGithub.unreachable.clear();
+  const again = await project.attempt();
+  assert.equal(again.error, undefined);
+  assert.deepEqual(again.messages, [`The Forge is already set up for ${project.repository}.`]);
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(project.standIn.installs, { builder: 1, release: 1 });
+  assert.deepEqual(await saved(), before);
+}
+
+testCase('an unfinished setup whose App details are gone does not skip that App');
+{
+  // An unfinished setup whose App details are gone while the App's install record stays does not skip that App.
+  const stateDirectory = join(root, 'details-gone-installed');
+  const credentialDirectory = join(stateDirectory, 'credentials');
+  const installationPath = join(stateDirectory, 'builder-installation.json');
+  await writePrivateJson(installationPath, { repository: 'owner/repo', confirmed: true });
+  const standIn = standInGithub();
+  await assert.rejects(createApps({ repository: 'owner/repo', stateDirectory, credentialDirectory, github: standIn.github, output: () => {} }),
+    error => error instanceof AppSetupStop && error.reason === 'missing' && error.kind === 'builder');
+  assert(!(await isPresent(installationPath)));
+  assert.deepEqual(standIn.counts, { builder: 0, release: 0 });
+}
+
+testCase('a finished setup\'s Apps are not created again');
 await createApps({
   repository: 'owner/repo', stateDirectory: projectStatePath(state, 'owner/repo'),
   credentialDirectory: credentialPath(state, 'owner/repo'), output: () => {},
   github: { exists: isPresent, begin: async () => { throw new Error('must not create'); } }
 });
 
+testCase('the GitHub adapter reads the App code and tells refused exchanges from failed ones');
 {
   const requests = [];
   const responses = [];
@@ -1227,6 +1464,49 @@ await createApps({
   assert(requests.every(request => request.url === 'https://api.github.com/app-manifests/abc/conversions' && request.method === 'POST'));
 }
 
+testCase('the GitHub adapter checks an App as the App itself and tells gone, uninstalled and unreachable apart');
+{
+  // appStatus asks GitHub as the App itself, signed with the App's saved key.
+  const requests = [];
+  const responses = [];
+  const adapter = createGithubAdapter({
+    input: { question: async () => '' },
+    fetch: async (url, init) => {
+      requests.push({ url, method: init.method, authorization: init.headers.authorization });
+      const next = responses.shift();
+      if (next instanceof Error) throw next;
+      return { status: next };
+    }
+  });
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const app = { ...credentials, pem: privateKey.export({ type: 'pkcs1', format: 'pem' }) };
+  const status = async (...answers) => {
+    requests.length = 0;
+    responses.push(...answers);
+    return adapter.appStatus({ credentials: app, repository: 'owner/repo', kind: 'builder' });
+  };
+  assert.equal(await status(200, 200), 'installed');
+  assert.deepEqual(requests.map(request => [request.method, request.url]), [
+    ['GET', 'https://api.github.com/app'], ['GET', 'https://api.github.com/repos/owner/repo/installation']
+  ]);
+  for (const { authorization } of requests) {
+    const [header, payload, signature] = authorization.replace(/^Bearer /, '').split('.');
+    assert.equal(JSON.parse(Buffer.from(payload, 'base64url')).iss, String(credentials.id));
+    assert(verify('sha256', Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature, 'base64url')));
+  }
+  assert.equal(await status(404), 'app-missing');
+  assert.equal(await status(401), 'app-missing');
+  assert.equal(requests.length, 1);
+  assert.equal(await status(200, 404), 'not-installed');
+  for (const answers of [[502], [200, 500], [new TypeError('fetch failed')]]) {
+    await assert.rejects(status(...answers), error => error.message === 'GitHub could not be reached to check the App.');
+    responses.length = 0;
+  }
+  requests.length = 0;
+  assert.equal(await adapter.appStatus({ credentials, repository: 'owner/repo', kind: 'builder' }), 'app-missing');
+  assert.equal(requests.length, 0);
+}
+
 async function retryProject(repository) {
   const record = { prompts: [], begins: 0, calls: [], messages: [] };
   const retryState = join(root, 'retry-state');
@@ -1244,6 +1524,8 @@ async function retryProject(repository) {
           try { await stat(join(runOptions.cwd, 'MISSION.md')); } catch {
             await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n\nFactory template.\n');
           }
+          await mkdir(join(runOptions.cwd, '.factory'), { recursive: true });
+          await writeFile(join(runOptions.cwd, '.factory/consumer.json'), '{}\n');
         }
         if (command === 'python3' && args.at(-1) === 'doctor' && failAt === 'final-check') throw new Error('doctor failed');
         return { stdout: '' };
@@ -1258,7 +1540,8 @@ async function retryProject(repository) {
       },
       callback: async () => 'code',
       exchange: async () => credentials,
-      install: async () => true
+      install: async () => true,
+      appStatus: async () => 'installed'
     },
     prompt: async question => { record.prompts.push(question); return answers[record.prompts.length - 1] ?? 'Other.'; },
     output: value => record.messages.push(value)
@@ -1270,6 +1553,7 @@ async function retryProject(repository) {
   } };
 }
 
+testCase('a stop after the mission answers does not ask them again on retry');
 // A stop after the mission answers: the retry does not ask them again.
 {
   const project = await retryProject('owner/stopped-after-mission');
@@ -1288,6 +1572,7 @@ async function retryProject(repository) {
   assert.match(project.record.messages.at(-1), /^Setup is complete for owner\/stopped-after-mission\./);
 }
 
+testCase('a stop before the mission answers asks them once on retry');
 // A stop before the mission answers: the retry asks them once.
 {
   const project = await retryProject('owner/stopped-before-mission');
@@ -1301,6 +1586,7 @@ async function retryProject(repository) {
   assert.match(await readFile(project.missionPath, 'utf8'), /\n## Project mission\n\nWhat this software is for: First purpose\.\n\nWho uses it: First users\.\n$/);
 }
 
+testCase('setup on a project that is already set up says so and changes nothing');
 // Setup on a project that is already set up says so and changes nothing.
 {
   const project = await retryProject('owner/already-set-up');
@@ -1320,16 +1606,26 @@ async function retryProject(repository) {
   assert.deepEqual(project.record.messages, ['The Forge is already set up for owner/already-set-up.']);
 }
 
+testCase('a project set up by an earlier release has its credentials moved');
 // An already set-up project from an earlier release still has its credentials moved by asking for setup again.
 {
   const project = await retryProject('owner/legacy-set-up');
   const legacyState = join(root, 'retry-state/projects/owner/legacy-set-up');
-  await writePrivateJson(join(legacyState, 'registration.json'), { repository: 'owner/legacy-set-up', checkout: 'unused', completed: true });
-  await writePrivateJson(join(legacyState, 'builder-app.json'), credentials);
+  const legacyCheckout = join(root, 'retry-projects/owner/legacy-set-up');
+  await mkdir(join(legacyCheckout, '.git'), { recursive: true });
+  await mkdir(join(legacyCheckout, '.factory'), { recursive: true });
+  await writeFile(join(legacyCheckout, '.factory/consumer.json'), '{}\n');
+  await writePrivateJson(join(legacyState, 'registration.json'), { repository: 'owner/legacy-set-up', checkout: legacyCheckout, completed: true });
+  for (const kind of ['builder', 'release']) {
+    await writePrivateJson(join(legacyState, `${kind}-app.json`), credentials);
+    await writePrivateJson(join(legacyState, `${kind}-installation.json`), { repository: 'owner/legacy-set-up', confirmed: true });
+  }
   await setupRepository('owner/legacy-set-up', project.options());
   assert.deepEqual(project.record.messages, ['The Forge is already set up for owner/legacy-set-up.']);
-  await assert.rejects(stat(join(legacyState, 'builder-app.json')));
-  assert.deepEqual(JSON.parse(await readFile(join(root, 'retry-state/credentials/owner/legacy-set-up/builder-app.json'), 'utf8')), credentials);
+  for (const kind of ['builder', 'release']) {
+    await assert.rejects(stat(join(legacyState, `${kind}-app.json`)));
+    assert.deepEqual(JSON.parse(await readFile(join(root, `retry-state/credentials/owner/legacy-set-up/${kind}-app.json`), 'utf8')), credentials);
+  }
 }
 
 // Each stop below prints one plain message with one action, and setup completes once the cause is fixed,
@@ -1342,6 +1638,7 @@ function assertPlainStop(printed, expected, serverRoot) {
   }
 }
 
+testCase('an unwritable settings folder stops plainly and the defaults still load');
 {
   const settingsRoot = join(root, 'unwritable-settings');
   await mkdir(settingsRoot, { mode: 0o500 });
@@ -1359,6 +1656,7 @@ function assertPlainStop(printed, expected, serverRoot) {
 }
 
 async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPrompt = async () => {}, answers = ['Purpose.', 'Users.'], undo = async () => {}, reason, before = [], message }) {
+  testCase(`stop and retry: ${name}`);
   const repository = `owner/${name}`;
   const stopRoot = join(root, 'stops', name);
   const options = { projectsRoot: join(stopRoot, 'projects'), state: join(stopRoot, 'state') };
@@ -1481,6 +1779,7 @@ for (const [file, stopAt, damagedMessage] of [
   ['mission.json', 'final-check', repository => `Setup stopped because the Forge's saved settings for ${repository} on this server are damaged: its saved answers to the mission questions cannot be read. Delete the file projects/${repository}/mission.json in the Forge's private state folder before trying setup again, and setup asks those questions again.`],
   ['registration.json', undefined, repository => `Setup stopped because the Forge's saved settings for ${repository} on this server are damaged: its record of whether setup finished cannot be read. Delete the file projects/${repository}/registration.json in the Forge's private state folder before trying setup again.`]
 ]) {
+  testCase(`a damaged ${file} stops before changing anything, and deleting it lets setup finish`);
   const repository = `owner/damaged-${file.replace('.json', '')}`;
   const project = await retryProject(repository);
   const retryState = join(root, 'retry-state');
@@ -1497,7 +1796,8 @@ for (const [file, stopAt, damagedMessage] of [
   project.reset();
   await assert.rejects(setupRepository(repository, project.options()),
     error => error instanceof ReportedSetupError && error.message === 'damaged-settings');
-  assert.deepEqual(project.record.messages, ['Using Claude Code to set up the Forge.', damagedMessage(repository)]);
+  // Both Apps exist from the earlier run, so the stop says they are kept (issue #56).
+  assert.deepEqual(project.record.messages, ['Using Claude Code to set up the Forge.', FORGE_APPS_KEPT, damagedMessage(repository)]);
   for (const message of project.record.messages) {
     assert(!/JSON|position|line \d+ column|SyntaxError|Expected property|\bat \w/.test(message), message);
     assert(!message.includes(root), message);
@@ -1573,6 +1873,7 @@ for (const [name, prepareFolder, message] of [
   });
 }
 
+testCase('a git that cannot start is an error, not a stop');
 await gitInit(join(root, 'git-missing', 'owner', 'existing'));
 await assert.rejects(
   prepareCheckout('owner/existing', join(root, 'git-missing'), { names: { git: join(root, 'no-such-git') }, run: runProcess },
@@ -1624,6 +1925,7 @@ await stopThenRetry('damaged-build-tools', {
   },
   reason: 'preparation', message: DOWNLOAD_STOPS.revision
 });
+testCase('a damaged build tools folder is replaced and setup finishes');
 {
   const healRoot = join(root, 'stops', 'heal');
   const healState = join(healRoot, 'state');

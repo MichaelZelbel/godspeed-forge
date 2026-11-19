@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { ReportedSetupError, setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults } from '../lib/config.mjs';
+import { testCase } from './cases.mjs';
 
 const credentials = {
   id: 12345, slug: 'forge-app', pem: 'PRIVATE KEY', client_secret: 'CLIENT SECRET', webhook_secret: 'WEBHOOK SECRET'
@@ -39,6 +40,8 @@ function standIn(root, { manifests = [], beforeAgent = async () => {}, page = as
         if (command === 'python3' && args.at(-1) === 'init') {
           await mkdir(join(runOptions.cwd, 'factory'), { recursive: true });
           await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
+          await mkdir(join(runOptions.cwd, '.factory'), { recursive: true });
+          await writeFile(join(runOptions.cwd, '.factory/consumer.json'), '{}\n');
         }
         return { stdout: '' };
       }
@@ -47,7 +50,8 @@ function standIn(root, { manifests = [], beforeAgent = async () => {}, page = as
       begin: async manifest => { manifests.push(manifest.name); return { url: `https://example.test/${manifest.name}` }; },
       callback: async flow => { await page(flow); return 'app-code'; },
       exchange: async () => credentials,
-      install: async () => true
+      install: async () => true,
+      appStatus: async () => 'installed'
     },
     prompt: async () => ['Keep releases dependable.', 'Small teams.'][answer++ % 2],
     output: value => record.messages.push(value)
@@ -76,6 +80,7 @@ if (process.argv[2] === 'waiting-setup') {
   options.github.begin = async manifest => { process.stdout.write('ready\n'); return begin(manifest); };
   await setupRepository('owner/repo', options);
 } else {
+  testCase('two setups for the same repository at once: one runs, the other stops');
   // Two setups for the same repository at once: one runs, the other stops before doing or writing anything.
   {
     const root = await mkdtemp(join(tmpdir(), 'forge-concurrent-'));
@@ -122,6 +127,7 @@ if (process.argv[2] === 'waiting-setup') {
     assert.deepEqual(again.record.messages, ['The Forge is already set up for owner/repo.']);
   }
 
+  testCase('a setup killed part-way does not keep the repository blocked');
   // A setup killed part-way does not keep the repository blocked.
   {
     const root = await mkdtemp(join(tmpdir(), 'forge-killed-'));
@@ -153,6 +159,7 @@ if (process.argv[2] === 'waiting-setup') {
     assert(after.record.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
   }
 
+  testCase('a second setup while the first waits on the App page stops and leaves the first alone');
   // A second setup while the first waits on the builder App page (#29 with #35): the second stops with the
   // already-running message, gives no advice to delete an App, and leaves the first setup's pending record
   // alone; the first then finishes with one App per role.
@@ -181,6 +188,7 @@ if (process.argv[2] === 'waiting-setup') {
     await assert.rejects(readFile(pending, 'utf8'));
   }
 
+  testCase('setups for two different repositories run at the same time');
   // Setups for two different repositories run at the same time.
   {
     const root = await mkdtemp(join(tmpdir(), 'forge-two-repositories-'));
