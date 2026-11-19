@@ -2350,7 +2350,7 @@ for (const { name, mission, sentence, recovered, prompts, final } of [
   await assert.rejects(setupRepository(repository, project.options({ answers: ['Second purpose.', 'Second users.'] })),
     error => error instanceof ReportedSetupError && error.message === 'unreadable-mission-answers');
   assert.deepEqual(project.record.messages.slice(-2), [
-    'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.',
+    'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.',
     sentence
   ]);
   assert.equal(project.record.messages.filter(message => message.startsWith('Setup stopped because')).length, 1);
