@@ -1,7 +1,8 @@
 // Runs setup from every combination of what this server has saved about each App and whether GitHub still has
-// it, with an owner who, after each stop, deletes on GitHub every App role the stop asks them to delete and
-// tries again, up to three times. GitHub must never hold more than one App per role at any point, and setup must
-// end complete or already set up, using, for each role whose App the owner deleted, an App that is on GitHub.
+// it, with an owner who, after each stop, asks setup to start afresh the saved file the stop names, or else deletes
+// on GitHub every App role the stop asks them to delete, and tries again, up to three times. GitHub must never hold more than one App per role at any point, and setup must
+// end complete or already set up, using, for each role whose App the owner deleted, an App that is on GitHub, and
+// never change a details file it could not read unless the owner asked to start it afresh.
 // Each combination starts from a real finished setup, then changes per App: its details file (kept, deleted,
 // empty, a link to a removed file, or damaged), whether a pending record still holds its keys, whether the
 // record that it is installed stays, and whether it is still on GitHub; and whether the record that setup
@@ -17,6 +18,7 @@ import { join } from 'node:path';
 import { setupRepository, UNEXPECTED_MESSAGE } from '../lib/setup.mjs';
 import { credentialPath, defaults, projectStatePath } from '../lib/config.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
+import { afreshPart } from './afresh.mjs';
 import { testCase } from './cases.mjs';
 
 const root = await mkdtemp(join(tmpdir(), 'forge-combinations-'));
@@ -61,7 +63,7 @@ function standInGithub() {
   return world;
 }
 
-async function attempt(repository, folder, github) {
+async function attempt(repository, folder, github, startAfresh) {
   const output = [];
   let answer = 0;
   const run = async (command, args, options = {}) => {
@@ -84,7 +86,7 @@ async function attempt(repository, folder, github) {
   try {
     await setupRepository(repository, {
       config: { ...defaults(folder), projectsRoot: join(folder, 'projects') }, paths: { state: join(folder, 'state') },
-      commands: { run }, github, prompt: async () => ['Purpose.', 'Users.'][answer++ % 2], output: line => output.push(line)
+      commands: { run }, github, startAfresh, prompt: async () => ['Purpose.', 'Users.'][answer++ % 2], output: line => output.push(line)
     });
     return { output, completed: true };
   } catch {
@@ -134,24 +136,44 @@ async function combination(name, finished, roles) {
   const context = { stateDirectory, credentialDirectory: credentialPath(join(folder, 'state'), repository), world };
   for (const [kind, { state, onGithub }] of Object.entries(roles)) await arrange(kind, state, onGithub, context);
   if (!finished) await rm(join(stateDirectory, 'registration.json'));
+  const details = kind => readFile(join(context.credentialDirectory, `${kind}-app.json`), 'utf8').catch(error => error.code);
+  const before = { builder: await details('builder'), release: await details('release') };
+  const problems = [];
+  const startedAfresh = new Set();
+  // A details file setup could not read stays as it was until the owner asks setup to start it afresh.
+  const checkUnchanged = async () => {
+    for (const kind of KINDS) {
+      const unreadable = ['empty', 'broken link', 'damaged'].includes(roles[kind].state.details);
+      const replaced = startedAfresh.has(`${kind}-app`) || startedAfresh.has('both-apps');
+      if (unreadable && !replaced && await details(kind) !== before[kind]) {
+        problems.push(`setup changed the ${kind} details file it could not read`);
+      }
+    }
+  };
   let last = await attempt(repository, folder, world.github);
+  await checkUnchanged();
   const lines = [...last.output];
   for (let retry = 0; !last.completed && retry < RETRIES; retry += 1) {
     const stop = last.output.at(-1) ?? '';
-    if (/delete/i.test(stop)) deleteNamed(stop, world);
-    last = await attempt(repository, folder, world.github);
+    const startAfresh = afreshPart(stop);
+    startedAfresh.add(startAfresh);
+    if (!startAfresh && /delete/i.test(stop)) deleteNamed(stop, world);
+    last = await attempt(repository, folder, world.github, startAfresh);
+    await checkUnchanged();
     lines.push(...last.output);
   }
-  const problems = [...world.violations];
+  problems.push(...world.violations);
   const end = last.output.at(-1) ?? '';
   if (!end.startsWith(`Setup is complete for ${repository}.`) && end !== `The Forge is already set up for ${repository}.`) {
     problems.push(`setup did not end complete: ${end}`);
   }
   if (lines.includes(UNEXPECTED_MESSAGE)) problems.push('setup stopped for a reason it could not identify');
   // A complete setup uses, for each role, an App that is on GitHub, whether the owner deleted one or it was
-  // already gone.
+  // already gone: the App of its saved details, or of the keys in its pending record when it cannot read them.
+  const savedJson = async path => { try { return JSON.parse(await readFile(path, 'utf8')); } catch { return null; } };
   for (const kind of KINDS) {
-    const held = await readFile(join(context.credentialDirectory, `${kind}-app.json`), 'utf8').then(JSON.parse, () => null);
+    const saved = await savedJson(join(context.credentialDirectory, `${kind}-app.json`));
+    const held = saved?.slug ? saved : (await savedJson(join(context.credentialDirectory, `${kind}-app-pending.json`)))?.credentials;
     if (last.completed && !world.apps[kind].has(held?.slug)) {
       problems.push(world.deleted.has(kind)
         ? `after the owner deleted the ${kind} App, setup ended using one that is not on GitHub`
