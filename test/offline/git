@@ -4,15 +4,19 @@
 # connects, and is written to $FORGE_TEST_NETWORK_LOG so test/run.sh fails the test file that ran it, even
 # when the code under test turns the refusal into an ordinary stop.
 set -eu
-here="$(cd "$(dirname "$0")" && pwd)"
-real=""
-IFS=: read -ra dirs <<<"$PATH"
-for dir in "${dirs[@]}"; do
-  if [ -n "$dir" ] && [ -x "$dir/git" ] && [ "$(cd "$dir" 2>/dev/null && pwd)" != "$here" ]; then
-    real="$dir/git"
-    break
-  fi
-done
+# The real git: the one test/run.sh found before it put this folder on PATH, or else the first git on PATH
+# that is not a stand-in like this one (a run of test/run.sh inside a test puts a second copy on PATH).
+# forge-offline-git
+real="${FORGE_TEST_REAL_GIT:-}"
+if [ -z "$real" ]; then
+  IFS=: read -ra dirs <<<"$PATH"
+  for dir in "${dirs[@]}"; do
+    if [ -n "$dir" ] && [ -x "$dir/git" ] && ! grep -q '^# forge-offline-git$' "$dir/git"; then
+      real="$dir/git"
+      break
+    fi
+  done
+fi
 if [ -z "$real" ]; then
   echo "The test suite's git stand-in found no git on PATH." >&2
   exit 127

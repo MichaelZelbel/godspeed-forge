@@ -24,6 +24,8 @@ output="$(mktemp)"
 network="$(mktemp)"
 trap 'rm -f "$output" "$network"' EXIT
 export FORGE_TEST_NETWORK_LOG="$network"
+# The real git, found before the stand-in goes on PATH; a run inside a test keeps the outer run's.
+export FORGE_TEST_REAL_GIT="${FORGE_TEST_REAL_GIT:-$(command -v git || true)}"
 export PATH="$offline:$PATH"
 export GIT_ALLOW_PROTOCOL=file
 export NODE_OPTIONS="--import \"$offline/no-network.mjs\"${NODE_OPTIONS:+ $NODE_OPTIONS}"
