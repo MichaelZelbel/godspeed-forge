@@ -1,11 +1,12 @@
 // The command itself, run as the owner runs it: every stop exits 1 and prints only the plain sentence.
-// test cases: 4
+// test cases: 5
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AFRESH_PARTS } from '../lib/setup.mjs';
 import { testCase } from './cases.mjs';
 
 const command = fileURLToPath(new URL('../bin/godspeed-forge.mjs', import.meta.url));
@@ -43,5 +44,12 @@ const afresh = forge('setup', 'bad name', '--start-afresh', 'settings');
 assert.deepEqual([afresh.status, afresh.stdout, afresh.stderr], [1,
   'Setup stopped because the repository name is not in the form owner/repository. Try setup again with a name in that form.\n', '']);
 assert.equal(JSON.parse(await readFile(settings, 'utf8')).projectsRoot, join(home, 'projects'));
+
+testCase('the forge-setup skill maps the words of each stop to every part setup can start afresh, and to no other');
+{
+  const skill = await readFile(new URL('../skills/forge-setup/SKILL.md', import.meta.url), 'utf8');
+  const rows = [...skill.matchAll(/^\| (.+) \| `([\w-]+)` \|$/gm)].map(([, words, part]) => [part, words]);
+  assert.deepEqual(rows, Object.entries(AFRESH_PARTS).map(([part, { words }]) => [part, words]));
+}
 
 await rm(home, { recursive: true, force: true });
