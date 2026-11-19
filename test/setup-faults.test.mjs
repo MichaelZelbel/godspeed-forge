@@ -5,7 +5,7 @@
 // code (as real network failures do), and GitHub calls and questions as if the input closed. Every place in lib/ that reads or writes a file, runs a command, calls GitHub, asks a question
 // or takes that hold must be made to fail by some scenario here, so a new step that no scenario reaches fails
 // this test.
-// test cases: 13
+// test cases: 14
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -229,7 +229,12 @@ const SCENARIOS = [
     await setup(world);
     await writeJson(join(credentialFolder, 'release-app.json'), '{"id": 1, "pem": "PRIV');
   } },
-  { name: 'abandoned page', finish: 'complete', behaviour: { noCallback: 'release' } }
+  { name: 'abandoned page', finish: 'complete', behaviour: { noCallback: 'release' } },
+  // #80: an empty saved answers file, found after the Apps exist, and recovered from the project's mission.
+  { name: 'empty mission answers', finish: 'complete', arrange: async world => {
+    await setup(world, { behaviour: { doctor: 'fail' } });
+    await writeJson(join(projectState, 'mission.json'), '');
+  } }
 ];
 
 async function prepare(scenario) {
