@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # test/run.sh itself: a file that fails at an early case keeps the full total and says how many cases
-# were not run, and a file whose stated case count is wrong fails the run.
+# were not run, a file whose stated case count is wrong fails the run, and a file that reaches for the
+# network fails the run.
 set -eu
 cd "$(dirname "$0")/.."
 . test/cases.sh
-# test cases: 5
+# test cases: 7
 scratch="$(mktemp -d)"
 trap 'test_cases_end; rm -rf "$scratch"' EXIT
 trap 'exit 1' HUP INT TERM
@@ -13,6 +14,7 @@ trap 'exit 1' HUP INT TERM
 runner() {
   mkdir -p "$1/test"
   cp test/run.sh test/cases.sh test/cases.mjs "$1/test/"
+  cp -R test/offline "$1/test/"
 }
 node_file() { # <path> <declared> <cases> [failing case]
   {
@@ -79,3 +81,56 @@ status=0; bash "$scratch/count/test/run.sh" >"$scratch/count.out" 2>&1 || status
 expect "$scratch/count.out" "7 of 9 pass"
 expect "$scratch/count.out" "failed: test/a.test.mjs: says it has 4 cases but ran 5"
 expect "$scratch/count.out" 'failed: test/b.test.mjs: does not say how many cases it has (add a "test cases: <n>" comment line)'
+
+# The network guard refuses before anything leaves this machine: git is allowed only local repositories,
+# and node refuses the connection (and the name lookup) before making it.
+test_case "a test that reaches for the network with git fails the run, even when it ignores the refusal"
+runner "$scratch/git-network"
+git init -q --bare "$scratch/git-network/local.git"
+cat >"$scratch/git-network/test/a.test.sh" <<CASE
+#!/usr/bin/env bash
+set -eu
+. test/cases.sh
+# test cases: 2
+test_case "a local repository is fine"
+git ls-remote "$scratch/git-network/local.git" >/dev/null
+test_case "a repository on GitHub is refused"
+git ls-remote https://github.com/coleam00/ai-software-factory >/dev/null 2>&1 || true
+git -c url.git@github.com:.insteadOf=gh: ls-remote gh:owner/repo >/dev/null 2>&1 || true
+CASE
+status=0; bash "$scratch/git-network/test/run.sh" >"$scratch/git-network.out" 2>&1 || status=$?
+[ "$status" -eq 1 ] || { echo "run exited $status"; cat "$scratch/git-network.out"; exit 1; }
+expect "$scratch/git-network.out" "2 of 3 pass"
+expect "$scratch/git-network.out" "failed: test/a.test.sh: reached for the network: git ls-remote https://github.com/coleam00/ai-software-factory"
+expect "$scratch/git-network.out" "failed: test/a.test.sh: reached for the network: git -c url.git@github.com:.insteadOf=gh: ls-remote gh:owner/repo"
+
+test_case "a test that reaches for the network from node fails the run, and this machine is still allowed"
+runner "$scratch/node-network"
+cat >"$scratch/node-network/test/a.test.mjs" <<'CASE'
+import assert from 'node:assert/strict';
+import { createServer, connect } from 'node:net';
+import { execFileSync } from 'node:child_process';
+import { testCase } from './cases.mjs';
+// test cases: 3
+testCase('a server on this machine is fine');
+const server = createServer(socket => socket.end('hello')).listen(0, '127.0.0.1');
+await new Promise(resolve => server.once('listening', resolve));
+const reply = await new Promise((resolve, reject) => {
+  const socket = connect(server.address().port, '127.0.0.1');
+  let data = '';
+  socket.on('data', chunk => { data += chunk; }).on('end', () => resolve(data)).on('error', reject);
+});
+assert.equal(reply, 'hello');
+server.close();
+testCase('a fetch from GitHub is refused');
+await assert.rejects(fetch('https://api.github.com/'));
+testCase('a node process the test starts is guarded too');
+try { execFileSync(process.execPath, ['-e', "require('node:net').connect(443, '192.0.2.1').on('error', () => {})"], { stdio: 'ignore' }); } catch {}
+CASE
+status=0; bash "$scratch/node-network/test/run.sh" >"$scratch/node-network.out" 2>&1 || status=$?
+[ "$status" -eq 1 ] || { echo "run exited $status"; cat "$scratch/node-network.out"; exit 1; }
+expect "$scratch/node-network.out" "3 of 4 pass"
+grep -qE '^failed: test/a\.test\.mjs: reached for the network: connect to api\.github\.com:443 ' "$scratch/node-network.out" \
+  || { echo "the fetch was not named"; cat "$scratch/node-network.out"; exit 1; }
+grep -qE '^failed: test/a\.test\.mjs: reached for the network: connect to 192\.0\.2\.1:443 ' "$scratch/node-network.out" \
+  || { echo "the child process was not named"; cat "$scratch/node-network.out"; exit 1; }

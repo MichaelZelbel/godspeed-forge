@@ -20,7 +20,7 @@ import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 190
+// test cases: 196
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -191,6 +191,66 @@ for (const [manifest, answer, action, permissions] of [
   const encodedManifest = page.match(/name="manifest" value="([^"]+)"/)[1];
   const submittedManifest = JSON.parse(encodedManifest.replaceAll('&quot;', '"').replaceAll('&amp;', '&'));
   assert.deepEqual(submittedManifest.default_permissions, permissions);
+}
+
+// The organization question takes only yes or no, in any case and with spaces around it; any other answer is
+// asked again with one sentence, and opens no App page (#103).
+const appPageAction = flow => Buffer.from(flow.url.split(',')[1], 'base64').toString('utf8').match(/action="([^"]+)"/)[1];
+for (const [answers, action, retries] of [
+  [[' YES '], 'https://github.com/organizations/owner/settings/apps/new', 0],
+  [['No'], 'https://github.com/settings/apps/new', 0],
+  [['y', 'yes'], 'https://github.com/organizations/owner/settings/apps/new', 1],
+  [['n', 'maybe', '', '  ', 'no'], 'https://github.com/settings/apps/new', 4]
+]) {
+  testCase(`the organization answers ${JSON.stringify(answers)} open ${action} after ${retries} repeated questions`);
+  const asked = [];
+  const said = [];
+  const queue = [...answers];
+  const github = createGithubAdapter({
+    input: { question: async text => { asked.push(text); return queue.shift(); } },
+    output: line => said.push(line)
+  });
+  assert.equal(appPageAction(await github.begin(builderManifest('owner/repo'))), action);
+  assert.equal(queue.length, 0);
+  assert.deepEqual(asked, Array(retries + 1).fill('Type yes if owner is a GitHub organization, or no if it is your personal account: '));
+  assert.deepEqual(said, Array(retries).fill('Setup expects yes or no here, so it asks again.'));
+}
+
+testCase('a typed y then yes at the organization question opens the organization App page');
+{
+  const typed = new PassThrough();
+  const shown = new PassThrough();
+  let screen = '';
+  shown.on('data', data => { screen += data; });
+  const readline = createInterface({ input: typed, output: shown, terminal: true });
+  const said = [];
+  const github = createGithubAdapter({ input: answersFrom(readline), output: line => said.push(line) });
+  const flow = github.begin(builderManifest('owner/repo'));
+  const typedAnswers = ['y', 'yes'];
+  const typeNext = async () => {
+    for (let wait = 0; wait < 200 && !screen.trimEnd().endsWith('personal account:'); wait += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    screen = '';
+    typed.write(`${typedAnswers.shift()}\r`);
+  };
+  await typeNext();
+  await typeNext();
+  assert.equal(appPageAction(await flow), 'https://github.com/organizations/owner/settings/apps/new');
+  assert.deepEqual(said, ['Setup expects yes or no here, so it asks again.']);
+  readline.close();
+}
+
+testCase('input that ends while the organization question waits for yes or no stops it and opens no App page');
+{
+  const said = [];
+  const queue = ['maybe'];
+  let asked = 0;
+  const github = createGithubAdapter({
+    input: { question: async () => { asked += 1; if (queue.length) return queue.shift(); throw new InputClosed(); } },
+    output: line => said.push(line)
+  });
+  await assert.rejects(github.begin(builderManifest('owner/repo')), error => error instanceof InputClosed);
+  assert.equal(asked, 2);
+  assert.deepEqual(said, ['Setup expects yes or no here, so it asks again.']);
 }
 
 testCase('repository names are read from every GitHub remote form and kept apart in state');
