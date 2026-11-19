@@ -174,11 +174,12 @@ if (process.argv[2] === 'command') {
     assert(!result.lines.some(line => /Error|at .*:\d+:\d+|Errno|ENOENT|EACCES/.test(line)));
   }
 
-  async function nextSetup(root, answers, { spentCodes } = {}) {
+  async function nextSetup(root, answers, { spentCodes, startAfresh } = {}) {
     const manifests = [];
     const questions = [];
     const next = standIn(root, { manifests, questions, answers, spentCodes });
     next.options.output = value => next.messages.push(value);
+    next.options.startAfresh = startAfresh;
     try {
       const result = await setupRepository('owner/repo', next.options);
       return { manifests, questions, messages: next.messages, result };
@@ -253,7 +254,9 @@ if (process.argv[2] === 'command') {
   }
 
   // A pending record that cannot be parsed when the signal comes: the next run cannot tell whether GitHub
-  // made the App, so it asks for the leftover to be deleted, and the signal's sentence says so first.
+  // made the App. It stops without touching the record; asked to start connecting that App afresh, setup
+  // replaces only the record and asks for any App the earlier page made to be deleted before it opens the page
+  // again, and the signal's sentence says so first.
   {
     testCase('SIGINT after the builder App page was shown, with a pending record that cannot be parsed');
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-cut-record-'));
@@ -266,14 +269,14 @@ if (process.argv[2] === 'command') {
     const result = await interrupt(root, 'builder-callback', 'SIGINT', { until: cutRecord });
     assertStopped(result, { code: 130, kept: null,
       sentence: 'Setup stopped because it was interrupted before it finished connecting the builder App; if GitHub created a builder App for owner/repo, delete it in your GitHub App settings before you try setup again, as the next setup will ask you to.' });
-    const leftover = await nextSetup(root);
-    assert.equal(leftover.error?.message, 'leftover-app');
-    assert.equal(leftover.messages.at(-1), LEFTOVER_BUILDER);
-    assert.deepEqual(leftover.manifests, []);
-    assert(!(await isPresent(pendingPath)));
-    const next = await nextSetup(root);
+    const unreadable = await nextSetup(root);
+    assert.equal(unreadable.error?.message, 'unreadable-app-connection');
+    assert.equal(unreadable.messages.at(-1), 'Setup stopped because setup\'s record of connecting the builder App for owner/repo on this server cannot be read. Ask me to start connecting the builder App afresh, and setup replaces only that record and opens the GitHub page for that App again.');
+    assert.deepEqual(unreadable.manifests, []);
+    assert.equal(await readFile(pendingPath, 'utf8'), '{');
+    const next = await nextSetup(root, undefined, { startAfresh: 'builder-connection' });
     assert.equal(next.error, undefined);
-    assert(!next.messages.includes(reopened('builder')));
+    assert(next.messages.includes(reopened('builder')));
     assert.deepEqual(next.manifests, ['Forge builder', 'Forge release']);
     assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
   }
