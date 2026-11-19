@@ -74,7 +74,8 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = 
         if (waitAt === 'builder-details') onWait();
         return credentials;
       },
-      install: async ({ kind }) => { await wait(`${kind}-install`); return true; }
+      install: async ({ kind }) => { await wait(`${kind}-install`); return true; },
+      appStatus: async () => 'installed'
     },
     prompt: async question => {
       questions.push(question);

@@ -1049,6 +1049,80 @@ testCase('the App keys file itself cannot be written');
   assert.deepEqual(await pendingFiles(credentialDirectory), []);
 }
 
+// Keys left in the pending record by a run that could not save them belong to an App the owner may delete on
+// GitHub before the retry (#77). The retry asks GitHub first: a deleted App stops it before any install link,
+// and the run after that creates a new App; while GitHub cannot be asked, the keys stay for the next run.
+async function keysKeptSetup(name) {
+  const repository = `owner/${name}`;
+  const retryState = join(root, `kept-keys-${name}`);
+  const credentialDirectory = credentialPath(retryState, repository);
+  const blockedPath = join(credentialDirectory, 'builder-app.json');
+  let blockOnce = true;
+  const standIn = standInGithub({
+    onExchange: async () => { if (blockOnce) { blockOnce = false; await mkdir(join(blockedPath, 'blocked'), { recursive: true }); } }
+  });
+  const first = await setupAttempt(repository, retryState, standIn.github);
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'github');
+  await rm(blockedPath, { recursive: true });
+  const pendingPath = join(credentialDirectory, 'builder-app-pending.json');
+  assert.equal(JSON.parse(await readFile(pendingPath, 'utf8')).credentials.slug, 'code-builder-1');
+  return {
+    repository, retryState, standIn, credentialDirectory, pendingPath,
+    registrationPath: join(projectStatePath(retryState, repository), 'registration.json'),
+    attempt: () => setupAttempt(repository, retryState, standIn.github)
+  };
+}
+
+testCase('kept App keys whose App is still on GitHub finish that App');
+{
+  const project = await keysKeptSetup('kept-on-github');
+  const second = await project.attempt();
+  assert.equal(second.error, undefined);
+  assert(completedFor(project.repository)(second.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(project.standIn.installs, { builder: 1, release: 1 });
+  assert.equal(JSON.parse(await readFile(join(project.credentialDirectory, 'builder-app.json'), 'utf8')).slug, 'code-builder-1');
+  assert.deepEqual(await pendingFiles(project.credentialDirectory), []);
+}
+
+testCase('kept App keys whose App was deleted on GitHub stop before the install link, and the retry creates it again');
+{
+  const project = await keysKeptSetup('kept-deleted');
+  project.standIn.onGithub.deleted.add('builder');
+  project.standIn.live.builder -= 1;
+  const second = await project.attempt();
+  assertStopped(second, [`Setup stopped because the builder App for ${project.repository} is no longer on your GitHub account. Try setup again, which creates it again; if your GitHub App settings still list a builder App for ${project.repository}, delete it first.`, 'app-missing'], project.retryState);
+  assert(!second.messages.some(completedFor(project.repository)));
+  assert.deepEqual(project.standIn.installs, { builder: 0, release: 0 });
+  await assert.rejects(stat(project.registrationPath));
+  assert.deepEqual(await pendingFiles(project.credentialDirectory), []);
+  await assert.rejects(stat(join(project.credentialDirectory, 'builder-app.json')));
+  project.standIn.onGithub.deleted.clear();
+  const third = await project.attempt();
+  assert.equal(third.error, undefined);
+  assert(completedFor(project.repository)(third.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 2, release: 1 });
+  assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
+  assert.equal(JSON.parse(await readFile(join(project.credentialDirectory, 'builder-app.json'), 'utf8')).slug, 'code-builder-2');
+}
+
+testCase('kept App keys GitHub could not be asked about stay for the next run');
+{
+  const project = await keysKeptSetup('kept-unchecked');
+  const kept = await readFile(project.pendingPath, 'utf8');
+  project.standIn.onGithub.unreachable.add('builder');
+  const second = await project.attempt();
+  assertStopped(second, [`Setup stopped because GitHub could not be reached to check the builder App for ${project.repository}. Restore this server's access to GitHub before trying setup again.`, 'github-check'], project.retryState);
+  assert.deepEqual(project.standIn.installs, { builder: 0, release: 0 });
+  assert.equal(await readFile(project.pendingPath, 'utf8'), kept);
+  project.standIn.onGithub.unreachable.clear();
+  const third = await project.attempt();
+  assert.equal(third.error, undefined);
+  assert(completedFor(project.repository)(third.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.equal(JSON.parse(await readFile(join(project.credentialDirectory, 'builder-app.json'), 'utf8')).slug, 'code-builder-1');
+}
+
 testCase('App keys lost after the exchange: the owner deletes the App once and setup finishes');
 {
   // Nothing in the credential folder can be written after the exchange, not even the pending record:
