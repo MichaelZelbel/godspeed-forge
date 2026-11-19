@@ -35,6 +35,9 @@ per repository runs at a time; asking again while one is running says so and cha
 Asking for setup again after it completed checks that both Apps are still on GitHub and installed on
 the repository, that their saved details are still on this server and that the project's build tools
 are still in place; when something is missing it says what, instead of reporting the repository set up.
+It also checks that the project's mission is still in `MISSION.md` and that the final check still passes;
+when either is not, it sets the project up again with the same Apps and saved mission answers, asking
+nothing, and either completes or stops the way a first setup would.
 
 Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 `~/.godspeed/forge/state/` for private state. Root Linux installs use
