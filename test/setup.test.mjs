@@ -20,7 +20,7 @@ import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 164
+// test cases: 166
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -865,11 +865,12 @@ assert.deepEqual(stopped, ['Setup stopped because neither Claude Code nor Codex 
 await assert.rejects(stat(emptyRoot));
 
 // deleted and uninstalled name the Apps GitHub answers for as gone from the account or from the repository;
-// unreachable names the Apps whose check fails as if GitHub could not be reached.
+// unreachable names the Apps whose check fails as if GitHub could not be reached; refused those whose check
+// GitHub refuses.
 function standInGithub(options = {}) {
   const counts = { builder: 0, release: 0 };
   const installs = { builder: 0, release: 0 };
-  const onGithub = { deleted: new Set(), clockRejected: new Set(), keyRejected: new Set(), uninstalled: new Set(), unreachable: new Set() };
+  const onGithub = { deleted: new Set(), clockRejected: new Set(), keyRejected: new Set(), uninstalled: new Set(), unreachable: new Set(), refused: new Set() };
   const live = { builder: 0, release: 0 };
   const pending = { ...options };
   const usedCodes = new Set();
@@ -899,6 +900,7 @@ function standInGithub(options = {}) {
     install: async ({ kind }) => { installs[kind] += 1; return true; },
     appStatus: async ({ kind }) => {
       if (onGithub.unreachable.has(kind)) throw new Error('network unreachable');
+      if (onGithub.refused.has(kind)) throw Object.assign(new Error('refused'), { refused: true });
       if (onGithub.deleted.has(kind)) return 'app-missing';
       if (onGithub.clockRejected.has(kind)) return 'clock-rejected';
       if (onGithub.keyRejected.has(kind)) return 'key-rejected';
@@ -1426,6 +1428,7 @@ const appGoneStops = {
   gone: (kind, repository) => [`Setup stopped because the ${kind} App for ${repository} is no longer on your GitHub account. Try setup again, which creates it again; if your GitHub App settings still list a ${kind} App for ${repository}, delete it first.`, 'app-missing'],
   uninstalled: (kind, repository) => [`Setup stopped because the ${kind} App is no longer installed on ${repository}. Try setup again, which asks you to install it again.`, 'app-not-installed'],
   unchecked: (kind, repository) => [`Setup stopped because GitHub could not be reached to check the ${kind} App for ${repository}. Restore this server's access to GitHub before trying setup again.`, 'github-check'],
+  refused: (kind, repository) => [`Setup stopped because GitHub refused setup's request to check the ${kind} App for ${repository}, so setup changed nothing. Try setup again; if GitHub refuses again, check in your GitHub settings that the ${kind} App is still installed on ${repository}.`, 'github-refused'],
   clock: CLOCK_STOP,
   keyRejected: KEY_REJECTED_STOP,
   buildTools: repository => [`Setup stopped because the build tools setup installed in the project folder for ${repository} on this server are missing. Try setup again, which installs them again.`, 'factory-missing']
@@ -1819,6 +1822,37 @@ testCase('a finished setup with GitHub unreachable changes nothing, and with not
   assert.deepEqual(await saved(), before);
 }
 
+testCase('a finished setup whose App check GitHub refuses keeps every saved file, then says it is set up');
+{
+  // GitHub refuses the request to check the builder App (#82): the stop says so instead of calling GitHub
+  // unreachable, nothing is changed, and once GitHub answers the next run says it is set up.
+  const project = await finishedSetup('check-refused');
+  const before = await readTree(project.retryState);
+  project.standIn.onGithub.refused.add('builder');
+  assertStopped(await project.attempt(), appGoneStops.refused('builder', project.repository), project.retryState);
+  assert.deepEqual(await readTree(project.retryState), before);
+  project.standIn.onGithub.refused.clear();
+  const again = await project.attempt();
+  assert.equal(again.error, undefined);
+  assert.deepEqual(again.messages, [`The Forge is already set up for ${project.repository}.`]);
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+}
+
+testCase('kept App keys whose check GitHub refuses stay for the next run');
+{
+  const project = await keysKeptSetup('kept-refused');
+  const kept = await readFile(project.pendingPath, 'utf8');
+  project.standIn.onGithub.refused.add('builder');
+  assertStopped(await project.attempt(), appGoneStops.refused('builder', project.repository), project.retryState);
+  assert.deepEqual(project.standIn.installs, { builder: 0, release: 0 });
+  assert.equal(await readFile(project.pendingPath, 'utf8'), kept);
+  project.standIn.onGithub.refused.clear();
+  const next = await project.attempt();
+  assert.equal(next.error, undefined);
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+}
+
 testCase('an unfinished setup whose App details are gone does not skip that App');
 {
   // An unfinished setup whose App details are gone while the App's install record stays does not skip that App.
@@ -1870,7 +1904,7 @@ testCase('the GitHub adapter reads the App code and tells refused exchanges from
   assert(requests.every(request => request.url === 'https://api.github.com/app-manifests/abc/conversions' && request.method === 'POST'));
 }
 
-testCase('the GitHub adapter checks an App as the App itself and tells gone, clock-refused, key-refused, uninstalled and unreachable apart');
+testCase('the GitHub adapter checks an App as the App itself and tells gone, clock-refused, key-refused, uninstalled, refused and unreachable apart');
 {
   // appStatus asks GitHub as the App itself, signed with the App's saved key.
   const requests = [];
@@ -1917,8 +1951,13 @@ testCase('the GitHub adapter checks an App as the App itself and tells gone, clo
   assert.equal(await status(401), 'key-rejected');
   assert.equal(requests.length, 1);
   assert.equal(await status(200, 404), 'not-installed');
-  for (const answers of [[502], [200, 500], [new TypeError('fetch failed')]]) {
-    await assert.rejects(status(...answers), error => error.message === 'GitHub could not be reached to check the App.');
+  for (const answers of [[502], [200, 500], [200, 429], [new TypeError('fetch failed')]]) {
+    await assert.rejects(status(...answers), error => error.message === 'GitHub could not be reached to check the App.' && !error.refused);
+    responses.length = 0;
+  }
+  // A request GitHub refuses is not called a network problem (#82).
+  for (const answers of [[200, 401], [200, 403], [403]]) {
+    await assert.rejects(status(...answers), error => error.message === 'GitHub refused the request to check the App.' && error.refused === true);
     responses.length = 0;
   }
   requests.length = 0;
@@ -2629,7 +2668,7 @@ async function closedInputSetup(name, start) {
   assert.equal(UNEXPECTED_MESSAGE, 'Setup stopped because of a problem on this server that setup could not identify. Try setup again.');
 }
 
-// A repository name setup cannot use, and a settings file that is damaged or holds a secret.
+// A repository name setup cannot use, and a settings file that is damaged, empty or holds a secret.
 {
   const commandRoot = join(root, 'settings-stops');
   const config = join(commandRoot, 'config.json');
@@ -2645,10 +2684,12 @@ async function closedInputSetup(name, start) {
   assert.deepEqual(await command('owner/bad/name'), { code: 1, printed: [
     'Setup stopped because the repository name is not in the form owner/repository. Try setup again with a name in that form.'
   ] });
-  await writeFile(config, '{ damaged');
-  assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
-    'Setup stopped because the Forge\'s settings file on this server is damaged. Delete config.json in the folder where the Forge keeps its settings before trying setup again, and setup writes a fresh one.'
-  ] });
+  for (const damaged of ['{ damaged', '', '\n']) {
+    await writeFile(config, damaged);
+    assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
+      'Setup stopped because the Forge\'s settings file on this server is damaged. Delete config.json in the folder where the Forge keeps its settings before trying setup again, and setup writes a fresh one.'
+    ] });
+  }
   await writeFile(config, JSON.stringify({ commands: { github_token: 'ghs_secret' } }));
   assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
     'Setup stopped because the Forge\'s settings file on this server contains commands.github_token, which must never be kept there. Remove commands.github_token from config.json in the folder where the Forge keeps its settings before trying setup again.'
