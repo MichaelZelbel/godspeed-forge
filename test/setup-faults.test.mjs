@@ -27,8 +27,8 @@ const projectsRoot = join(root, 'projects');
 const projectState = join(paths.state, 'projects', repository);
 const credentialFolder = join(paths.state, 'credentials', repository);
 const buildToolsSource = join(root, 'build-tools', FACTORY_REVISION);
-const KEPT_BOTH = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
-const keptOne = name => `Your GitHub App "${name}" for this repository is already on your GitHub account and is kept there. Trying setup again uses it instead of creating a new one.`;
+const KEPT_BOTH = 'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.';
+const keptOne = name => `Setup kept the details of your GitHub App "${name}" for this repository on this server. Trying setup again checks whether it is still on your GitHub account and uses it if it is, instead of creating a new one.`;
 const credentialsFor = code => ({ id: 1, pem: 'PRIVATE KEY', slug: code });
 
 // Every line in lib/ that calls one of the points this test makes fail.
@@ -299,7 +299,7 @@ async function checkRun(label, run) {
   assert.equal(run.code, 1, `${label}: stopped with exit code ${run.code}`);
   assert.equal(stops.length, 1, `${label}: ${stops.length} stop lines: ${run.output.join(' | ')}`);
   assert(run.output.at(-1).startsWith(STOP), `${label}: the stop line is not the last line`);
-  const kept = run.output.filter(line => / kept there\./.test(line));
+  const kept = run.output.filter(line => /^Setup kept the details of your /.test(line));
   const expected = await expectedKept(run);
   assert.deepEqual(kept, expected ? [expected] : [], `${label}: wrong kept-Apps line: ${run.output.join(' | ')}`);
   if (expected) assert.equal(run.output.at(-2), expected, `${label}: the kept-Apps line is not just before the stop`);

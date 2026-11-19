@@ -12,15 +12,15 @@ import { answersFrom, setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 24
+// test cases: 25
 
 const credentials = {
   id: 12345, slug: 'forge-app', pem: 'PRIVATE KEY', client_secret: 'CLIENT SECRET', webhook_secret: 'WEBHOOK SECRET'
 };
 const INTERRUPTED = 'Setup stopped because it was interrupted; try setup again to pick up from what it had already done.';
 const TERMINATED = 'Setup stopped because this server told it to stop; try setup again to pick up from what it had already done.';
-const APPS_KEPT = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
-const BUILDER_KEPT = 'Your GitHub App "Forge builder" for this repository is already on your GitHub account and is kept there. Trying setup again uses it instead of creating a new one.';
+const APPS_KEPT = 'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.';
+const BUILDER_KEPT = 'Setup kept the details of your GitHub App "Forge builder" for this repository on this server. Trying setup again checks whether it is still on your GitHub account and uses it if it is, instead of creating a new one.';
 const INPUT_CLOSED = 'Setup stopped because the place it was reading your answers from closed before you answered. Try setup again and answer each question it asks.';
 const LEFTOVER_BUILDER = 'Setup stopped because it could not finish connecting the builder App. If GitHub created a builder App for owner/repo, delete it in your GitHub App settings, then try setup again.';
 const isPresent = async path => { try { await access(path); return true; } catch { return false; } };
@@ -31,8 +31,9 @@ const builderDetails = root => join(credentialPath(join(root, 'state'), 'owner/r
 // `waitAt` names the point where the run waits forever: a question, or a command that is still running.
 // `questions` records the mission questions asked; `answers` gives the purpose and users answers. With `ask`, the
 // address question of the App page at waitAt is asked through it. GitHub refuses the App codes in `spentCodes`, as
-// it does a code it already turned into keys.
-function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = [], answers = ['Keep releases dependable.', 'Small teams.'], ask, spentCodes = [] } = {}) {
+// it does a code it already turned into keys. The Apps of the kinds in `deleted` are gone from GitHub: asking about
+// one answers that it is missing and says on stderr that it was asked.
+function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = [], answers = ['Keep releases dependable.', 'Small teams.'], ask, spentCodes = [], deleted = [] } = {}) {
   const messages = [];
   const wait = point => {
     if (point !== waitAt) return null;
@@ -78,7 +79,11 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = 
         return credentials;
       },
       install: async ({ kind }) => { await wait(`${kind}-install`); return true; },
-      appStatus: async () => 'installed'
+      appStatus: async ({ kind }) => {
+        if (!deleted.includes(kind)) return 'installed';
+        process.stderr.write(`asked GitHub about the deleted ${kind} App\n`);
+        return 'app-missing';
+      }
     },
     prompt: async question => {
       questions.push(question);
@@ -97,7 +102,7 @@ if (process.argv[2] === 'command') {
   // on stderr once it waits; with "terminal", the wait ends with Ctrl-C typed at the question instead.
   // With "closes", the question is asked on real input that then closes: no answer ever comes, as when the
   // owner's input ends, and nothing keeps the process alive but setup itself.
-  const [, , , root, waitAt, mode] = process.argv;
+  const [, , , root, waitAt, mode, deleted = ''] = process.argv;
   // A named pipe where the builder App's details file is first written: that write waits until it is killed.
   if (waitAt === 'builder-details') {
     await mkdir(join(builderDetails(root), '..'), { recursive: true, mode: 0o700 });
@@ -115,6 +120,7 @@ if (process.argv[2] === 'command') {
   runSetupCommand('owner/repo', async () => ({
     ...standIn(root, {
       waitAt,
+      deleted: deleted.split(',').filter(Boolean),
       ask: closes ? question => { const answer = answers.question(`${question} `); stream.end(); return answer; } : undefined,
       onWait: () => {
         process.stderr.write('ready\n');
@@ -127,9 +133,10 @@ if (process.argv[2] === 'command') {
   // Runs the command until it waits at waitAt and until() holds, sends the signal, and returns what it printed
   // and its exit code. SIGKILL ends it with no word of its own; any other signal it must stop on itself.
   // afterStop runs once the command has printed its stop sentence, to let go of whatever it still waits on.
-  async function interrupt(root, waitAt, signal, { until = async () => true, afterStop } = {}) {
+  // deleted names the Apps that are gone from GitHub during this run.
+  async function interrupt(root, waitAt, signal, { until = async () => true, afterStop, deleted = [] } = {}) {
     const mode = signal === 'terminal' || signal === 'closes' ? signal : '';
-    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'command', root, waitAt, mode],
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'command', root, waitAt, mode, deleted.join(',')],
       { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
@@ -166,7 +173,7 @@ if (process.argv[2] === 'command') {
     assert.equal(result.lines.at(-1), sentence);
     assert.equal(result.lines.filter(line => line.startsWith('Setup stopped because')).length, 1);
     if (kept) assert.equal(result.lines.at(-2), kept);
-    assert.equal(result.lines.filter(line => /GitHub Apps?\b.*kept/.test(line)).length, kept ? 1 : 0);
+    assert.equal(result.lines.filter(line => /Setup kept the details of your (two )?GitHub Apps?\b/.test(line)).length, kept ? 1 : 0);
     assert.equal(result.stderr, '');
     assert(!result.lines.some(line => /Error|at .*:\d+:\d+|Errno|ENOENT|EACCES/.test(line)));
   }
@@ -341,6 +348,29 @@ if (process.argv[2] === 'command') {
     assert.equal(next.error, undefined);
     assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
     assert.deepEqual(next.manifests, []);
+  }
+
+  // The builder App is made, then input closes at the release App's address question. The owner deletes the
+  // builder App on GitHub, and the next run stops the same way before it asks GitHub about that App (#90). Its
+  // kept-Apps line says only that setup kept the App's details and checks whether the App is still on the
+  // owner's GitHub account, never that the deleted App is there.
+  {
+    testCase('a stop after the owner deleted a saved App on GitHub does not say that App is there');
+    const root = await mkdtemp(join(tmpdir(), 'forge-signal-deleted-app-'));
+    const first = await interrupt(root, 'release-callback', 'closes');
+    assertStopped(first, { code: 1, sentence: INPUT_CLOSED, kept: BUILDER_KEPT });
+    const second = await interrupt(root, 'release-callback', 'closes', { deleted: ['builder'] });
+    assert.equal(second.stderr, '', 'setup asked GitHub about the deleted App before it stopped');
+    assert.equal(second.code, 1);
+    assert.deepEqual(second.lines, [
+      'Using Claude Code to set up the Forge.',
+      reopened('release'),
+      'Create the release App in your browser: https://example.test/Forge release',
+      'Paste the address your browser shows: ',
+      BUILDER_KEPT,
+      INPUT_CLOSED
+    ]);
+    assert(!second.lines.some(line => /already on your GitHub account|kept there/.test(line)));
   }
 
   // Stopped at the mission question, both Apps on GitHub: the kept-Apps line, then the stop sentence. The next
