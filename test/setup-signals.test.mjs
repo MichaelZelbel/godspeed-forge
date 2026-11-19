@@ -12,6 +12,7 @@ import { answersFrom, setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
+// test cases: 24
 
 const credentials = {
   id: 12345, slug: 'forge-app', pem: 'PRIVATE KEY', client_secret: 'CLIENT SECRET', webhook_secret: 'WEBHOOK SECRET'

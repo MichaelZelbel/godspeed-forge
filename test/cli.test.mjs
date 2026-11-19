@@ -1,4 +1,5 @@
 // The command itself, run as the owner runs it: every stop exits 1 and prints only the plain sentence.
+// test cases: 2
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';

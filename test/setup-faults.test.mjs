@@ -5,6 +5,7 @@
 // code (as real network failures do), and GitHub calls and questions as if the input closed. Every place in lib/ that reads or writes a file, runs a command, calls GitHub, asks a question
 // or takes that hold must be made to fail by some scenario here, so a new step that no scenario reaches fails
 // this test.
+// test cases: 13
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -252,19 +253,21 @@ async function savedJson(path) {
 }
 
 // The kept-Apps line a stop must print, or null: it names every App whose details this server holds after
-// the run, saved or waiting in a pending record. Details setup was kept from reading when it looked for them
-// at the stop (a fault fired there) count too: setup knows they are there, only not what they hold.
+// the run, saved or waiting in a pending record. Details files setup was kept from reading when it looked for
+// them at the stop (a fault fired there) count too: one is written only once GitHub made its App. A pending
+// record setup was kept from reading there does not: it may hold no App yet, so its keys are not held.
 async function expectedKept(run) {
   const names = {};
+  const failedAtStop = path => run.fired.some(index => {
+    const event = run.events[index];
+    return event.functions.includes('savedApps') && event.path === path;
+  });
   for (const kind of ['builder', 'release']) {
     const detailFiles = [join(credentialFolder, `${kind}-app.json`), join(projectState, `${kind}-app.json`)];
     const pendingFile = join(credentialFolder, `${kind}-app-pending.json`);
     const held = (await Promise.all(detailFiles.map(savedJson))).some(validDetails)
-      || validDetails((await savedJson(pendingFile))?.credentials)
-      || run.fired.some(index => {
-        const event = run.events[index];
-        return event.functions.includes('savedApps') && [...detailFiles, pendingFile].includes(event.path);
-      });
+      || detailFiles.some(failedAtStop)
+      || (!failedAtStop(pendingFile) && validDetails((await savedJson(pendingFile))?.credentials));
     if (held) names[kind] = kind === 'builder' ? 'Forge builder' : 'Forge release';
   }
   if (names.builder && names.release) return KEPT_BOTH;
@@ -284,7 +287,12 @@ async function checkRun(label, run) {
     const last = run.output.at(-1);
     assert(last.startsWith(finished.complete) || last === finished.already, `${label}: completed without saying so: ${last}`);
     for (const index of run.faults.keys()) {
-      assert(absorbed(run.events[index]), `${label}: setup completed after a failure no step absorbs by design`);
+      const event = run.events[index];
+      assert(absorbed(event), `${label}: setup completed after a failure no step absorbs by design`);
+      // A finished setup that cannot be confirmed is set up again, so it must not be called already set up.
+      if (event.functions.includes('finishedProjectWorks')) {
+        assert(last.startsWith(finished.complete), `${label}: a finished setup that could not be confirmed was not set up again: ${last}`);
+      }
     }
     return;
   }
