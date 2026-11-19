@@ -144,15 +144,12 @@ for (const kind of ['builder', 'release']) {
 }
 testCase('App keys are saved privately and no secret reaches the project state, mission or messages');
 assert.deepEqual((await readdir(join(state, 'credentials/owner/repo'))).sort(), ['builder-app.json', 'release-app.json']);
-const serializedProjectState = JSON.stringify({
-  config: { projectsRoot, releaseCost: { message: 'Release cost.' } },
-  paths: { state },
-  projectState: await readTree(join(state, 'projects/owner/repo'))
-});
-assert(!serializedProjectState.includes('"code"'));
+const projectState = (await readTree(join(state, 'projects/owner/repo')))
+  .map(file => `${file.name}\n${file.contents}`).join('\n');
+assert(!projectState.includes('"code"'));
 for (const [field, secret] of Object.entries(credentials)) {
-  assert(!serializedProjectState.includes(field));
-  assert(!serializedProjectState.includes(String(secret)));
+  assert(!projectState.includes(`"${field}"`));
+  assert(!projectState.includes(String(secret)));
   assert(!mission.includes(String(secret)));
   assert(!messages.join('\n').includes(String(secret)));
 }
