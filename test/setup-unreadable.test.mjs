@@ -6,7 +6,7 @@
 // at a refused final check, or finished), makes one saved file there unreadable in one way, and runs setup
 // with an owner who does what each stop asks, with stand-ins for GitHub and every command. Cases run 16 at a
 // time, each in its own folders.
-// test cases: 12
+// test cases: 13
 import assert from 'node:assert/strict';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -143,17 +143,21 @@ async function setup(p, { at, startAfresh } = {}) {
   return { code, output, pages: p.world.pages - pagesBefore };
 }
 
+// A point, with the builder App's keys also left in its pending record, as a run that stopped after saving them
+// leaves them.
+const withKeysWaiting = at => async p => {
+  await setup(p, { at });
+  const details = await readFile(p.files['builder details'], 'utf8');
+  await writeFile(p.files['builder connection'], JSON.stringify({ code: 'spent', credentials: JSON.parse(details) }), { mode: 0o600 });
+};
 // Points in setup, each reached from nothing.
 const POINTS = {
   connecting: p => setup(p, { at: 'connecting' }),
   question: p => setup(p, { at: 'question' }),
   'final check': p => setup(p, { at: 'final check' }),
   finished: p => setup(p),
-  'finished with keys waiting': async p => {
-    await setup(p);
-    const details = await readFile(p.files['builder details'], 'utf8');
-    await writeFile(p.files['builder connection'], JSON.stringify({ code: 'spent', credentials: JSON.parse(details) }), { mode: 0o600 });
-  }
+  'finished with keys waiting': withKeysWaiting(),
+  'final check with keys waiting': withKeysWaiting('final check')
 };
 // The files each point leaves.
 const AT = {
@@ -225,11 +229,11 @@ async function unreadableCase({ name, point, file, kind, prepare }) {
     if (run.code === 0 || next === 2) break;
     const stop = run.output.at(-1);
     const startAfresh = afreshPart(stop);
+    // The list's stop asks to delete only Apps setup is not using, and here setup uses every App there is.
+    if (/delete/i.test(stop) && !/that setup is not using/.test(stop)) deleteNamed(stop, p.world);
     if (startAfresh) {
       if (!AFRESH[file]?.includes(startAfresh)) problems.push(`${label}: the stop names another file: ${stop}`);
       replaced = true;
-    } else if (/delete/i.test(stop)) {
-      deleteNamed(stop, p.world);
     }
     run = await setup(p, { startAfresh });
     runs.push(run);
@@ -293,6 +297,44 @@ testCase('the four cases #96 started from');
   assert.deepEqual(emptyInstall.problems, []);
   assert.equal(emptyInstall.p.world.installs, 3);
   assert(emptyInstall.runs[0].output.at(-1).startsWith('Setup is complete for '));
+}
+
+testCase('an App GitHub no longer has or accepts, whose keys setup took from one file while it cannot read the other');
+{
+  // Setup removes the records of that App and the file it could read; the one it cannot read is then all that
+  // keeps the next run from creating the App again, so the one stop asks for that file to be started afresh,
+  // after deleting the App on GitHub, and the next run is complete.
+  const github = {
+    gone: p => { p.world.apps.builder.clear(); },
+    'key rejected': p => {
+      const rejected = [...p.world.apps.builder][0];
+      const appStatus = p.world.github.appStatus;
+      p.world.github.appStatus = async request => (request.credentials?.slug === rejected ? 'key-rejected' : appStatus(request));
+    }
+  };
+  const cases = [];
+  for (const point of ['finished with keys waiting', 'final check with keys waiting']) {
+    for (const file of ['builder details', 'builder connection']) {
+      for (const kind of ['empty', 'damaged', 'a folder']) {
+        for (const [app, prepare] of Object.entries(github)) cases.push({ name: `u${caseNumber++}`, point, file, kind, app, prepare });
+      }
+    }
+  }
+  const failures = [];
+  await Promise.all(cases.map(async one => {
+    const { problems, runs } = await unreadableCase(one);
+    const label = `${one.app}, ${one.file} ${one.kind} at ${one.point}`;
+    failures.push(...problems);
+    const repository = `owner/${one.name}`;
+    const why = one.app === 'gone' ? `the builder App for ${repository} is no longer on your GitHub account` : `GitHub no longer accepts the saved key of the builder App for ${repository}`;
+    const afresh = one.file === 'builder details'
+      ? `the saved details of the builder App for ${repository} on this server cannot be read. Delete any builder App for ${repository} that your GitHub App settings still list, then ask me to start the builder App's saved details afresh, and setup replaces only that file and then says what else the builder App needs.`
+      : `setup's record of connecting the builder App for ${repository} on this server cannot be read. Delete any builder App for ${repository} that your GitHub App settings still list, then ask me to start connecting the builder App afresh, and setup replaces only that record and opens the GitHub page for that App again.`;
+    if (runs[0].output.at(-1) !== `Setup stopped because ${why}, and ${afresh}` || runs.length !== 2) {
+      failures.push(`${label}: ${runs.map(r => r.output.at(-1)).join(' | ')}`);
+    }
+  }));
+  assert.deepEqual(failures.slice(0, 5), [], `${failures.length} problems in ${cases.length} cases`);
 }
 
 await rm(root, { recursive: true, force: true });
