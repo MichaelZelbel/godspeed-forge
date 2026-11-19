@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { generateKeyPairSync, verify } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -912,6 +912,10 @@ async function setupAttempt(repository, stateDirectory, github) {
   }
 }
 
+const REOPENED = (kind, repository) => `If you finished the GitHub page for the ${kind} App during an earlier setup, delete the ${kind} App it made for ${repository} in your GitHub App settings before you create it again.`;
+const UNUSABLE = (kind, repository, reason) => `Setup stopped because the saved details of the ${kind} App on this server are ${reason}, so setup can no longer use that App; delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again, which creates a new ${kind} App.`;
+const BOTH_UNUSABLE = (clause, repository) => `Setup stopped because ${clause}, so setup can no longer use either App; delete any builder or release App for ${repository} that your GitHub App settings still list, then try setup again, which creates both Apps again.`;
+
 const pendingFiles = async directory => (await readdir(directory)).filter(name => name.endsWith('-app-pending.json'));
 const completedFor = repository => message => message.startsWith(`Setup is complete for ${repository}.`);
 
@@ -1091,18 +1095,26 @@ testCase('GitHub refusing the App code once is retried');
   assert.equal(standIn.counts.release, 1);
 }
 
-testCase('a leftover pending record without a code stops as a leftover');
+testCase('a leftover pending record without a code opens the App page again');
 {
+  // The page was shown but no address came back (#61): GitHub made no App unless the owner finished the page,
+  // so the page opens again, after a line asking for the App to be deleted only in that case.
   const interruptedCredentialDirectory = join(root, 'retry-interrupted', 'credentials');
   const pendingPath = join(interruptedCredentialDirectory, 'builder-app-pending.json');
   await writePrivateJson(pendingPath, { code: null });
   const standIn = standInGithub();
-  await assert.rejects(createApps({
+  const printed = [];
+  await createApps({
     repository: 'owner/repo', stateDirectory: join(root, 'retry-interrupted'),
-    credentialDirectory: interruptedCredentialDirectory, github: standIn.github, output: () => {}
-  }), error => error instanceof AppSetupStop && error.reason === 'leftover' && error.kind === 'builder');
-  assert.deepEqual(standIn.counts, { builder: 0, release: 0 });
-  assert(!(await isPresent(pendingPath)));
+    credentialDirectory: interruptedCredentialDirectory, github: standIn.github, output: value => printed.push(value)
+  });
+  assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(printed, [
+    REOPENED('builder', 'owner/repo'),
+    'Create the builder App in your browser: https://example.test/Forge builder',
+    'Create the release App in your browser: https://example.test/Forge release'
+  ]);
+  assert.deepEqual(await pendingFiles(interruptedCredentialDirectory), []);
 
   testCase('an address without GitHub\'s code stops at the App page and the page opens again');
   // An address without GitHub's code means the App page was left unfinished (#44): the stop names that
@@ -1146,7 +1158,7 @@ for (const [kind, damage] of [
   const first = await setupAttempt(repository, retryState, standIn.github);
   const expected = damage.file === 'pending'
     ? [`Setup stopped because it could not finish connecting the ${kind} App. If GitHub created a ${kind} App for ${repository}, delete it in your GitHub App settings, then try setup again.`, 'leftover-app']
-    : [`Setup stopped because the saved details of the ${kind} App on this server are damaged. Delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again.`, 'damaged-app'];
+    : [UNUSABLE(kind, repository, 'damaged'), 'damaged-app'];
   assert(first.error instanceof ReportedSetupError && first.error.message === expected[1], `${kind} ${damage.file}`);
   assert.equal(first.messages.at(-1), expected[0]);
   assert(!first.messages.some(message => message.includes('Complete the GitHub page')));
@@ -1174,7 +1186,7 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   await writeFile(join(credentialPath(retryState, repository), `${kind}-app.json`), '{"id": 12345, "pem": "PRIV');
   const first = await setupAttempt(repository, retryState, standIn.github);
   assert(first.error instanceof ReportedSetupError && first.error.message === 'damaged-app', `${kind} ${finished}`);
-  assert.equal(first.messages.at(-1), `Setup stopped because the saved details of the ${kind} App on this server are damaged. Delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again.`);
+  assert.equal(first.messages.at(-1), UNUSABLE(kind, repository, 'damaged'));
   assertNoInternalText(first.messages.at(-1), retryState);
   assert(!(await isPresent(join(stateDirectory, `${kind}-installation.json`))));
   const second = await setupAttempt(repository, retryState, standIn.github);
@@ -1249,7 +1261,7 @@ testCase('a stop at the release App page finishes on retry');
 // A rerun after a finished setup checks what setup made before saying it is set up (#60). Each missing
 // piece stops with one plain message naming it, and following that message gets setup complete again.
 const appGoneStops = {
-  missing: (kind, repository) => [`Setup stopped because the saved details of the ${kind} App on this server are missing. Delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again.`, 'missing-app-details'],
+  missing: (kind, repository) => [UNUSABLE(kind, repository, 'missing'), 'missing-app-details'],
   gone: (kind, repository) => [`Setup stopped because the ${kind} App for ${repository} is no longer on your GitHub account. Try setup again, which creates it again; if your GitHub App settings still list a ${kind} App for ${repository}, delete it first.`, 'app-missing'],
   uninstalled: (kind, repository) => [`Setup stopped because the ${kind} App is no longer installed on ${repository}. Try setup again, which asks you to install it again.`, 'app-not-installed'],
   unchecked: (kind, repository) => [`Setup stopped because GitHub could not be reached to check the ${kind} App for ${repository}. Restore this server's access to GitHub before trying setup again.`, 'github-check'],
@@ -1312,10 +1324,13 @@ for (const kind of ['builder', 'release']) {
     assertStopped(await project.attempt(), appGoneStops.missing(kind, project.repository), project.retryState);
     assert(!(await isPresent(join(project.stateDirectory, `${kind}-installation.json`))));
     assert(!(await isPresent(join(project.stateDirectory, 'registration.json'))));
+    // The owner deletes the App, as the stop says, and the next run creates a new one.
+    project.standIn.live[kind] -= 1;
     const next = await project.attempt();
     assert(next.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
     assert(completedFor(project.repository)(next.messages.at(-1)));
     assert.deepEqual(project.standIn.counts, { [kind]: 2, [other]: 1 });
+    assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
   }
 }
 
@@ -1354,8 +1369,8 @@ testCase('a finished setup with both Apps broken stops on the first, then repair
 testCase('a finished setup stops on an unreachable App check before repairing the other App');
 {
   // GitHub answers that the release App is gone but cannot be reached for the builder App: the stop is the
-  // unreachable check, nothing is removed, and once GitHub answers for both the next runs repair the release
-  // App only after checking the builder App again.
+  // unreachable check, nothing is removed, and once GitHub answers for both the next run names both Apps it
+  // finds gone in one stop.
   const project = await finishedSetup('one-unchecked');
   const before = await readTree(project.retryState);
   project.standIn.onGithub.deleted.add('release');
@@ -1364,11 +1379,76 @@ testCase('a finished setup stops on an unreachable App check before repairing th
   assert.deepEqual(await readTree(project.retryState), before);
   project.standIn.onGithub.unreachable.clear();
   project.standIn.onGithub.deleted.add('builder');
-  assertStopped(await project.attempt(), appGoneStops.gone('builder', project.repository), project.retryState);
+  assertStopped(await project.attempt(), [BOTH_UNUSABLE(`the builder and release Apps for ${project.repository} are no longer on your GitHub account`, project.repository), 'apps-unusable'], project.retryState);
   project.standIn.onGithub.deleted.clear();
   const next = await project.attempt();
   assert(completedFor(project.repository)(next.messages.at(-1)));
   assert.deepEqual(project.standIn.counts, { builder: 2, release: 2 });
+}
+
+// Saved App details that setup can no longer read (#61). With the keys still in the pending record the App is
+// finished from them; without them one stop says the next run creates a new App, and following it gives one
+// App per role on GitHub.
+testCase('damaged builder details with its keys still in the pending record finish without a new App');
+{
+  const project = await finishedSetup('damaged-keys-kept');
+  const detailsPath = join(project.credentialDirectory, 'builder-app.json');
+  const saved = JSON.parse(await readFile(detailsPath, 'utf8'));
+  await rm(join(project.stateDirectory, 'registration.json'));
+  await writePrivateJson(join(project.credentialDirectory, 'builder-app-pending.json'), { code: 'spent', credentials: saved });
+  await writeFile(detailsPath, '{"id": 1');
+  const next = await project.attempt();
+  assert.equal(next.error, undefined);
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert(!next.messages.some(line => line.includes('delete')), next.messages.join('\n'));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(JSON.parse(await readFile(detailsPath, 'utf8')), saved);
+  assert.deepEqual(await pendingFiles(project.credentialDirectory), []);
+}
+
+for (const [name, damage, reason] of [
+  ['an empty builder details file', path => writeFile(path, ''), 'damaged'],
+  ['a builder details file that links to a removed file', async path => { await rm(path); await symlink(`${path}.removed`, path); }, 'missing']
+]) {
+  testCase(`${name} stops with one sentence and the retry completes`);
+  const project = await finishedSetup(`unusable-${reason}`);
+  await damage(join(project.credentialDirectory, 'builder-app.json'));
+  assertStopped(await project.attempt(), [UNUSABLE('builder', project.repository, reason), reason === 'damaged' ? 'damaged-app' : 'missing-app-details'], project.retryState);
+  project.standIn.live.builder -= 1;
+  const next = await project.attempt();
+  assert.equal(next.error, undefined);
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
+}
+
+// Both Apps unusable at once: one run names both, and after the owner deletes them the next run completes.
+for (const [name, slug, finished, breakApps, clause] of [
+  ['a finished setup with both details files damaged', 'both-damaged', true,
+    project => Promise.all(['builder', 'release'].map(kind => writeFile(join(project.credentialDirectory, `${kind}-app.json`), '{'))),
+    () => 'the saved details of the builder and release Apps on this server are damaged'],
+  ['an unfinished setup with both details files deleted', 'both-missing', false,
+    project => Promise.all(['builder', 'release'].map(kind => rm(join(project.credentialDirectory, `${kind}-app.json`)))),
+    () => 'the saved details of the builder and release Apps on this server are missing'],
+  ['a finished setup with the builder App gone and release details damaged', 'gone-and-damaged', true,
+    async project => {
+      project.standIn.onGithub.deleted.add('builder');
+      await writeFile(join(project.credentialDirectory, 'release-app.json'), '{');
+    },
+    repository => `the builder App for ${repository} is no longer on your GitHub account and the saved details of the release App on this server are damaged`]
+]) {
+  testCase(`${name} names both Apps in one stop, then the retry completes`);
+  const project = await finishedSetup(slug);
+  if (!finished) await rm(join(project.stateDirectory, 'registration.json'));
+  await breakApps(project);
+  assertStopped(await project.attempt(), [BOTH_UNUSABLE(clause(project.repository), project.repository), 'apps-unusable'], project.retryState);
+  project.standIn.onGithub.deleted.clear();
+  project.standIn.live.builder -= 1;
+  project.standIn.live.release -= 1;
+  const next = await project.attempt();
+  assert.equal(next.error, undefined);
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 2, release: 2 });
+  assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
 }
 
 for (const removed of ['settings', 'folder']) {

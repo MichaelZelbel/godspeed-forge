@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { access, chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, chmod, constants, mkdtemp, mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { runSetupCommand } from '../lib/cli.mjs';
 import { setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
-import { defaults } from '../lib/config.mjs';
+import { credentialPath, defaults } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
 
 const credentials = {
@@ -21,11 +21,15 @@ const TERMINATED = 'Setup stopped because this server told it to stop; try setup
 const APPS_KEPT = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
 const LEFTOVER_BUILDER = 'Setup stopped because it could not finish connecting the builder App. If GitHub created a builder App for owner/repo, delete it in your GitHub App settings, then try setup again.';
 const isPresent = async path => { try { await access(path); return true; } catch { return false; } };
+const reopened = kind => `If you finished the GitHub page for the ${kind} App during an earlier setup, delete the ${kind} App it made for owner/repo in your GitHub App settings before you create it again.`;
+const builderDetails = root => join(credentialPath(join(root, 'state'), 'owner/repo'), 'builder-app.json');
 
 // A setup's whole outside world: the agent, git, gh and the factory commands, GitHub and the owner's answers.
 // `waitAt` names the point where the run waits forever: a question, or a command that is still running.
-// `questions` records the mission questions asked; `answers` gives the purpose and users answers.
-function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = [], answers = ['Keep releases dependable.', 'Small teams.'], ask } = {}) {
+// `questions` records the mission questions asked; `answers` gives the purpose and users answers. With `ask`, the
+// address question of the App page at waitAt is asked through it. GitHub refuses the App codes in `spentCodes`, as
+// it does a code it already turned into keys.
+function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = [], answers = ['Keep releases dependable.', 'Small teams.'], ask, spentCodes = [] } = {}) {
   const messages = [];
   const wait = point => {
     if (point !== waitAt) return null;
@@ -57,8 +61,19 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = 
         await wait(`${manifest.name === 'Forge builder' ? 'builder' : 'release'}-question`);
         return { url: `https://example.test/${manifest.name}` };
       },
-      callback: async flow => { await wait(`${flow.url.endsWith('builder') ? 'builder' : 'release'}-callback`); return 'app-code'; },
-      exchange: async () => { await wait('exchange'); return credentials; },
+      callback: async flow => {
+        const kind = flow.url.endsWith('builder') ? 'builder' : 'release';
+        if (`${kind}-callback` === waitAt && ask) { onWait(); return ask('Paste the address your browser shows:'); }
+        await wait(`${kind}-callback`);
+        return `${kind}-code`;
+      },
+      exchange: async code => {
+        await wait('exchange');
+        if (spentCodes.includes(code)) throw Object.assign(new Error('GitHub refused the App code.'), { refused: true });
+        // The builder App's details file is then written, and that write waits on its stand-in (see 'command').
+        if (waitAt === 'builder-details') onWait();
+        return credentials;
+      },
       install: async ({ kind }) => { await wait(`${kind}-install`); return true; }
     },
     prompt: async question => {
@@ -79,6 +94,11 @@ if (process.argv[2] === 'command') {
   // With "closes", the question is asked on real input that then closes: no answer ever comes, as when the
   // owner's input ends, and nothing keeps the process alive but setup itself.
   const [, , , root, waitAt, mode] = process.argv;
+  // A named pipe where the builder App's details file is first written: that write waits until it is killed.
+  if (waitAt === 'builder-details') {
+    await mkdir(join(builderDetails(root), '..'), { recursive: true, mode: 0o700 });
+    execFileSync('mkfifo', [`${builderDetails(root)}.${process.pid}.tmp`]);
+  }
   const terminal = mode === 'terminal';
   const closes = mode === 'closes';
   const stream = new PassThrough();
@@ -98,8 +118,10 @@ if (process.argv[2] === 'command') {
     input
   }));
 } else {
-  // Runs the command until it waits at waitAt, sends the signal, and returns what it printed and its exit code.
-  async function interrupt(root, waitAt, signal) {
+  // Runs the command until it waits at waitAt and until() holds, sends the signal, and returns what it printed
+  // and its exit code. SIGKILL ends it with no word of its own; any other signal it must stop on itself.
+  // afterStop runs once the command has printed its stop sentence, to let go of whatever it still waits on.
+  async function interrupt(root, waitAt, signal, { until = async () => true, afterStop } = {}) {
     const mode = signal === 'terminal' || signal === 'closes' ? signal : '';
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'command', root, waitAt, mode],
       { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -112,10 +134,22 @@ if (process.argv[2] === 'command') {
       child.stderr.on('data', data => { stderr += data; if (stderr.includes('ready')) resolve(); });
       exited.then(() => reject(new Error(`the command exited before waiting at ${waitAt}: ${stderr}`)));
     });
+    for (let tries = 0; !(await until()); tries += 1) {
+      assert(tries < 200, `the command never reached the point after ${waitAt}`);
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
     if (!mode) child.kill(signal);
+    if (afterStop) {
+      for (let tries = 0; !stdout.includes('Setup stopped because'); tries += 1) {
+        assert(tries < 200, `the command printed no stop sentence after ${signal}`);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      await afterStop();
+    }
     const { code, killedBy } = await exited;
     clearTimeout(timer);
-    assert.equal(killedBy, null, `the command was ended by ${killedBy} instead of stopping itself`);
+    if (signal === 'SIGKILL') assert.equal(killedBy, 'SIGKILL');
+    else assert.equal(killedBy, null, `the command was ended by ${killedBy} instead of stopping itself`);
     return { code, lines: stdout.trimEnd().split('\n'), stderr: stderr.replace('ready\n', '') };
   }
 
@@ -131,10 +165,10 @@ if (process.argv[2] === 'command') {
     assert(!result.lines.some(line => /Error|at .*:\d+:\d+|Errno|ENOENT|EACCES/.test(line)));
   }
 
-  async function nextSetup(root, answers) {
+  async function nextSetup(root, answers, { spentCodes } = {}) {
     const manifests = [];
     const questions = [];
-    const next = standIn(root, { manifests, questions, answers });
+    const next = standIn(root, { manifests, questions, answers, spentCodes });
     next.options.output = value => next.messages.push(value);
     try {
       const result = await setupRepository('owner/repo', next.options);
@@ -184,27 +218,57 @@ if (process.argv[2] === 'command') {
     assert.deepEqual(result.lines, ['Using Claude Code to set up the Forge.', '', INTERRUPTED]);
   }
 
-  // Stopped while waiting for the address from an App's GitHub page: GitHub may have created that App, and the
-  // next run asks for it to be deleted. The stop sentence says that, instead of promising the next run picks
-  // up, and the next run then says the same; once that stop is followed, the run after it completes.
-  for (const [signal, code, why] of [['SIGINT', 130, 'it was interrupted'], ['SIGTERM', 143, 'this server told it to stop']]) {
+  // Stopped while waiting for the address from an App's GitHub page, by a signal or by input that closes (#61):
+  // no code was saved, so the next run opens that page again, first asking for the App to be deleted only if
+  // the owner had finished that page. The signal's sentence says the same, and nothing asks for a deletion
+  // outright.
+  for (const [stop, code, why] of [['SIGINT', 130, 'it was interrupted'], ['SIGTERM', 143, 'this server told it to stop'], ['closes', 0, null]]) {
     for (const [kind, waitAt, made] of [['builder', 'builder-callback', ['Forge builder', 'Forge release']], ['release', 'release-callback', ['Forge release']]]) {
-      testCase(`${signal} after the ${kind} App page was shown`);
+      testCase(stop === 'closes' ? `input closes at the ${kind} App address question` : `${stop} after the ${kind} App page was shown`);
       const root = await mkdtemp(join(tmpdir(), 'forge-signal-page-shown-'));
-      const result = await interrupt(root, waitAt, signal);
-      const sentence = `Setup stopped because ${why} before it finished connecting the ${kind} App; if GitHub created a ${kind} App for owner/repo, delete it in your GitHub App settings before you try setup again, as the next setup will ask you to.`;
-      assertStopped(result, { code, sentence, appsKept: false });
-      assert.equal(result.lines.at(-2), `Create the ${kind} App in your browser: https://example.test/Forge ${kind}`);
-      assert(!result.lines.some(line => line.includes('pick up from what it had already done')));
+      const result = await interrupt(root, waitAt, stop);
+      if (why) {
+        const sentence = `Setup stopped because ${why} before it finished connecting the ${kind} App; try setup again, which opens the GitHub page for the ${kind} App again, and if you had already finished that page, delete the ${kind} App it made for owner/repo in your GitHub App settings first.`;
+        assertStopped(result, { code, sentence, appsKept: false });
+        assert.equal(result.lines.at(-2), `Create the ${kind} App in your browser: https://example.test/Forge ${kind}`);
+        assert(!result.lines.some(line => line.includes('pick up from what it had already done')));
+      } else {
+        assert.equal(result.code, code);
+        assert.equal(result.stderr, '');
+        assert(!result.lines.some(line => line.startsWith('Setup stopped because')), result.lines.join('\n'));
+      }
       const next = await nextSetup(root);
-      assert(next.error);
-      assert.deepEqual(next.manifests, []);
-      assert.equal(next.messages.at(-1), `Setup stopped because it could not finish connecting the ${kind} App. If GitHub created a ${kind} App for owner/repo, delete it in your GitHub App settings, then try setup again.`);
-      const after = await nextSetup(root);
-      assert.equal(after.error, undefined);
-      assert(after.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
-      assert.deepEqual(after.manifests, made);
+      assert.equal(next.error, undefined);
+      assert.deepEqual(next.manifests, made);
+      assert.equal(next.messages[next.messages.indexOf(reopened(kind)) + 1], `Create the ${kind} App in your browser: https://example.test/Forge ${kind}`);
+      assert(!next.messages.some(line => line.includes('delete it in your GitHub App settings')));
+      assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
     }
+  }
+
+  // Killed, or terminated, after GitHub turned the builder App's code into its keys, while its details file is
+  // written (#61): the keys are already in the pending record, so the next run finishes that App from them even
+  // though GitHub no longer accepts the code, and creates no second App. The terminated run says to try again.
+  for (const [signal, sentence] of [['SIGKILL', null], ['SIGTERM', TERMINATED]]) {
+    testCase(`${signal} while the builder App details are being saved`);
+    const root = await mkdtemp(join(tmpdir(), 'forge-signal-details-'));
+    const credentialDirectory = join(builderDetails(root), '..');
+    const keysSaved = async () => {
+      try { return Boolean(JSON.parse(await readFile(join(credentialDirectory, 'builder-app-pending.json'), 'utf8')).credentials); } catch { return false; }
+    };
+    const pipes = async () => (await readdir(credentialDirectory)).filter(name => name.endsWith('.tmp')).map(name => join(credentialDirectory, name));
+    // A terminated command cannot exit while a write still waits on the pipe, so the pipe is opened for a moment.
+    const afterStop = async () => { for (const pipe of await pipes()) await (await open(pipe, constants.O_RDONLY | constants.O_NONBLOCK)).close(); };
+    const result = await interrupt(root, 'builder-details', signal, { until: keysSaved, afterStop: sentence ? afterStop : undefined });
+    if (sentence) assertStopped(result, { code: 143, sentence, appsKept: false });
+    else assert(!result.lines.some(line => line.startsWith('Setup stopped because')), result.lines.join('\n'));
+    for (const pipe of await pipes()) await rm(pipe);
+    const next = await nextSetup(root, undefined, { spentCodes: ['builder-code'] });
+    assert.equal(next.error, undefined);
+    assert(!next.messages.some(line => line.includes('delete')), next.messages.join('\n'));
+    assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
+    assert.deepEqual(next.manifests, ['Forge release']);
+    assert.deepEqual(JSON.parse(await readFile(builderDetails(root), 'utf8')), credentials);
   }
 
   // Stopped while GitHub turns the builder App's code into its credentials: the code is saved, so the next run
