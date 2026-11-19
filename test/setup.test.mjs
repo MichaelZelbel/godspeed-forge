@@ -20,7 +20,7 @@ import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 167
+// test cases: 172
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -2152,12 +2152,76 @@ async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPr
   assert.equal(begins, 2);
 }
 
+// A state folder setup cannot write before it makes anything (#87): it says nothing was created.
+const PROGRESS_NOTHING_MADE = 'Setup stopped because it could not save its progress on this server, so nothing was created. Let setup write to the folder where the Forge keeps its settings before trying setup again.';
+const PROGRESS_APPS_KEPT = 'Setup stopped because it could not save its progress on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.';
 await stopThenRetry('unwritable-state', {
   prepare: async ({ state }) => chmod(state, 0o500),
   undo: async ({ state }) => chmod(state, 0o700),
-  reason: 'settings',
-  message: 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
+  reason: 'progress',
+  message: PROGRESS_NOTHING_MADE
 });
+
+// The same through the command (#87), with every GitHub call counted: exit code 1, the exact lines, nothing asked
+// of GitHub and no App made. With an App kept from an earlier run, the kept-Apps line comes first and the stop
+// does not say nothing was created.
+async function readOnlyStateSetup(name, { firstAnswers, lock }) {
+  const repository = `owner/${name}`;
+  const stopRoot = join(root, 'read-only-state', name);
+  const paths = { state: join(stopRoot, 'state') };
+  await mkdir(paths.state, { recursive: true, mode: 0o700 });
+  const standIn = standInGithub();
+  const githubCalls = [];
+  const github = Object.fromEntries(Object.entries(standIn.github)
+    .map(([method, call]) => [method, (...args) => { githubCalls.push(method); return call(...args); }]));
+  const options = (answers, printed, prompts) => ({
+    config: { ...defaults(stopRoot), projectsRoot: join(stopRoot, 'projects') }, paths,
+    commands: {
+      run: async (command, args, runOptions) => command === 'git' && args[0] === 'remote'
+        ? { stdout: `https://github.com/${repository}.git\n` } : run(command, args, runOptions)
+    },
+    github,
+    prompt: async question => answers[prompts.push(question) - 1],
+    output: value => printed.push(value)
+  });
+  if (firstAnswers) assert.equal(await setupCommand(repository, options(firstAnswers, [], [])), 1);
+  const locked = lock(paths.state, repository);
+  const printed = [];
+  const prompts = [];
+  githubCalls.length = 0;
+  let code;
+  await chmod(locked, 0o500);
+  try {
+    code = await setupCommand(repository, options(['Purpose.', 'Users.'], printed, prompts));
+  } finally {
+    await chmod(locked, 0o700);
+  }
+  return { code, printed, prompts, githubCalls, standIn, stopRoot };
+}
+
+testCase('a read-only state folder before setup: one stop, nothing created, exit code 1, GitHub not asked');
+{
+  const result = await readOnlyStateSetup('read-only-state', { lock: state => state });
+  assert.equal(result.code, 1);
+  assertPlainStop(result.printed, ['Using Claude Code to set up the Forge.', PROGRESS_NOTHING_MADE], result.stopRoot);
+  assert(!/EROFS|EACCES/.test(PROGRESS_NOTHING_MADE));
+  assert.deepEqual(result.prompts, []);
+  assert.deepEqual(result.githubCalls, []);
+  assert.deepEqual(result.standIn.counts, { builder: 0, release: 0 });
+}
+
+testCase('a read-only state folder after an earlier run kept the Apps: the kept-Apps line, then the stop');
+{
+  const result = await readOnlyStateSetup('read-only-state-apps', {
+    firstAnswers: ['', 'Users.'],
+    lock: (state, repository) => projectStatePath(state, repository)
+  });
+  assert.equal(result.code, 1);
+  assertPlainStop(result.printed, ['Using Claude Code to set up the Forge.', FORGE_APPS_KEPT, PROGRESS_APPS_KEPT], result.stopRoot);
+  assert.deepEqual(result.prompts, []);
+  assert.deepEqual(result.githubCalls, []);
+  assert.deepEqual(result.standIn.counts, { builder: 1, release: 1 });
+}
 
 // mission.json lives in the project state folder: failing to read or save it is the same settings stop.
 // The Apps exist by then, so the stop first says they are kept.
@@ -2229,6 +2293,54 @@ testCase('after mission answers were not saved, the next run asks once and saves
   assert.equal((await setupRepository(repository, project.options())).completed, true);
   assert.deepEqual(project.record.prompts, []);
   assert.equal(await project.missionSections(), 1);
+}
+
+// The first mission answer is saved, then the second cannot be (#84): the stop says only that answer was not kept
+// and that the next try asks that question again, which is all the next run asks. When the first save fails, the
+// stop is the one above and the next run asks both questions.
+const USERS_NOT_SAVED = 'Setup stopped because it could not save your answer to \'Who uses it?\' on this server, so only that answer was not kept. Let setup write to the folder where the Forge keeps its settings, then try setup again; it asks that question again.';
+const PURPOSE_NOT_SAVED = 'Setup stopped because it could not save your answer to \'What is this software for?\' on this server, so only that answer was not kept. Let setup write to the folder where the Forge keeps its settings, then try setup again; it asks that question again.';
+for (const { name, lockAt, saved, message, kept, prompts } of [
+  { name: 'second-answer-not-saved', lockAt: 'Who uses it?', message: USERS_NOT_SAVED,
+    kept: { purpose: 'First purpose.' }, prompts: ['Who uses it?'] },
+  { name: 'first-answer-not-saved', lockAt: 'What is this software for?', message: MISSION_NOT_SAVED,
+    kept: null, prompts: ['What is this software for?', 'Who uses it?'] },
+  { name: 'purpose-not-saved-after-users', lockAt: 'What is this software for?', saved: { users: 'Saved users.' },
+    message: PURPOSE_NOT_SAVED, kept: { users: 'Saved users.' }, prompts: ['What is this software for?'] }
+]) {
+  testCase(`mission answer not saved: ${name} stops with exit code 1 and the retry asks only what was not kept`);
+  const repository = `owner/${name}`;
+  const project = await retryProject(repository);
+  const stateDirectory = join(root, 'retry-state/projects/owner', name);
+  const missionAnswersPath = join(stateDirectory, 'mission.json');
+  if (saved) {
+    await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+    await writeFile(missionAnswersPath, `${JSON.stringify(saved)}\n`);
+  }
+  const options = project.options();
+  const ask = options.prompt;
+  let code;
+  try {
+    code = await setupCommand(repository, {
+      ...options,
+      prompt: async question => {
+        if (question === lockAt) await chmod(stateDirectory, 0o500);
+        return ask(question);
+      }
+    });
+  } finally {
+    await chmod(stateDirectory, 0o700);
+  }
+  assert.equal(code, 1);
+  assert.deepEqual(project.record.messages.slice(-2), [FORGE_APPS_KEPT, message]);
+  assert.equal(project.record.messages.filter(text => text.startsWith('Setup stopped because')).length, 1);
+  if (kept) assert.deepEqual(JSON.parse(await readFile(missionAnswersPath, 'utf8')), kept);
+  else assert(!(await isPresent(missionAnswersPath)));
+  project.reset();
+  assert.equal(await setupCommand(repository, project.options({ answers: ['Second answer.', 'Third answer.'] })), 0);
+  assert.deepEqual(project.record.prompts, prompts);
+  const final = JSON.parse(await readFile(missionAnswersPath, 'utf8'));
+  for (const [key, value] of Object.entries(kept ?? {})) assert.equal(final[key], value);
 }
 
 // A mission question left empty, after the Apps exist: a plain stop that says the Apps are kept.
