@@ -7,13 +7,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 3
+// test cases: 5
 
 // Setup driven the way a chat relay or a script drives it: the real command with its answers piped in (#99).
 
 const INPUT_CLOSED = 'Setup stopped because the place it was reading your answers from closed before you answered. Try setup again and answer each question it asks.';
 const ORG_QUESTION = 'Type yes if owner is a GitHub organization, or no if it is your personal account: ';
 const ADDRESS_QUESTION = 'After GitHub finishes, paste the address from your browser: ';
+const RETRY = 'Setup expects yes or no here, so it asks again.';
 const PAGE = /^(Create the (builder|release) App in your browser: )data:text\/html;base64,\S+$/;
 
 // GitHub stood in for, loaded before the command with --import: a manifest code turns into an App named after the
@@ -57,7 +58,7 @@ async function pipedSetup({ piped = '', end = true, onOutput = () => {} } = {}) 
   const code = await new Promise(resolve => child.once('close', resolve));
   clearTimeout(timer);
   const lines = stdout.split('\n').map(line => line.replace(PAGE, '$1<page>'));
-  return { stdout: lines.join('\n'), stderr, code, root };
+  return { stdout: lines.join('\n'), raw: stdout, stderr, code, root };
 }
 
 {
@@ -107,6 +108,30 @@ async function pipedSetup({ piped = '', end = true, onOutput = () => {} } = {}) 
     }
   });
   assert.equal(stdout, `Using Claude Code to set up the Forge.\n${ORG_QUESTION}\nCreate the builder App in your browser: <page>\n${ADDRESS_QUESTION}\n${INPUT_CLOSED}\n`);
+  assert.equal(stderr, '');
+  assert.equal(code, 1);
+}
+
+// The organization question takes only yes or no; a piped answer that is neither is asked again and opens no App
+// page, and input that ends while it waits for yes or no stops setup (#103).
+const pageAction = raw => {
+  const address = /Create the builder App in your browser: data:text\/html;base64,(\S+)/.exec(raw)?.[1];
+  return address && /action="([^"]+)"/.exec(Buffer.from(address, 'base64').toString('utf8'))[1];
+};
+
+{
+  testCase('a piped y then yes at the organization question opens the organization App page');
+  const { stdout, raw, stderr, code } = await pipedSetup({ piped: 'y\nyes\n' });
+  assert.equal(stdout, `Using Claude Code to set up the Forge.\n${ORG_QUESTION}\n${RETRY}\n${ORG_QUESTION}\nCreate the builder App in your browser: <page>\n${ADDRESS_QUESTION}\n${INPUT_CLOSED}\n`);
+  assert.equal(pageAction(raw), 'https://github.com/organizations/owner/settings/apps/new');
+  assert.equal(stderr, '');
+  assert.equal(code, 1);
+}
+
+{
+  testCase('piped input that ends after an answer that is neither yes nor no stops setup with no App page');
+  const { stdout, stderr, code } = await pipedSetup({ piped: 'maybe\n' });
+  assert.equal(stdout, `Using Claude Code to set up the Forge.\n${ORG_QUESTION}\n${RETRY}\n${ORG_QUESTION}\n${INPUT_CLOSED}\n`);
   assert.equal(stderr, '');
   assert.equal(code, 1);
 }
