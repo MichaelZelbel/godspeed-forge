@@ -20,7 +20,7 @@ import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 173
+// test cases: 174
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -1807,6 +1807,24 @@ testCase('a damaged list of setup\'s Apps stops setup, which creates nothing, un
   assert(completedFor(project.repository)(next.messages.at(-1)));
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
   assert.equal(JSON.parse(await readFile(appRecordPath(project), 'utf8')).builder.slug, 'code-builder-1');
+}
+
+testCase('a list of setup\'s Apps that cannot be saved stops setup before it creates anything');
+{
+  const project = await finishedSetup('record-unwritable');
+  await rm(join(project.stateDirectory, 'registration.json'));
+  await rm(appRecordPath(project));
+  await rm(join(project.stateDirectory, 'release-installation.json'));
+  await rm(join(project.credentialDirectory, 'release-app.json'));
+  await chmod(join(project.checkout, '.git'), 0o500);
+  let stopped;
+  try {
+    stopped = await project.attempt();
+  } finally {
+    await chmod(join(project.checkout, '.git'), 0o700);
+  }
+  assertStopped(stopped, [`Setup stopped because it could not save the list of GitHub Apps it keeps in the project folder for ${project.repository} on this server. Let setup write to that project folder before trying setup again.`, 'app-record'], project.retryState);
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
 }
 
 testCase('saved state restored from an older copy names the newer App on GitHub, then uses the older App');
