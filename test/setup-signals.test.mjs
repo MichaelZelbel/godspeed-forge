@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { access, chmod, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createInterface } from 'node:readline/promises';
+import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,14 +24,14 @@ const isPresent = async path => { try { await access(path); return true; } catch
 
 // A setup's whole outside world: the agent, git, gh and the factory commands, GitHub and the owner's answers.
 // `waitAt` names the point where the run waits forever: a question, or a command that is still running.
-function standIn(root, { manifests = [], waitAt, onWait = () => {} } = {}) {
+// `questions` records the mission questions asked; `answers` gives the purpose and users answers.
+function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = [], answers = ['Keep releases dependable.', 'Small teams.'], ask } = {}) {
   const messages = [];
   const wait = point => {
     if (point !== waitAt) return null;
     onWait();
     return new Promise(() => {});
   };
-  let answer = 0;
   const options = {
     config: { ...defaults(root), projectsRoot: join(root, 'projects') }, paths: { state: join(root, 'state') },
     commands: {
@@ -59,7 +61,13 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {} } = {}) {
       exchange: async () => { await wait('exchange'); return credentials; },
       install: async ({ kind }) => { await wait(`${kind}-install`); return true; }
     },
-    prompt: async () => { await wait('mission'); return ['Keep releases dependable.', 'Small teams.'][answer++ % 2]; },
+    prompt: async question => {
+      questions.push(question);
+      await wait('mission');
+      const users = question === 'Who uses it?';
+      if (users && waitAt === 'users-question') { onWait(); return ask ? ask(question) : new Promise(() => {}); }
+      return answers[users ? 1 : 0];
+    },
     output: value => { messages.push(value); console.log(value); }
   };
   return { messages, options };
@@ -68,12 +76,20 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {} } = {}) {
 if (process.argv[2] === 'command') {
   // Run as a child: `godspeed-forge setup` as the command runs it, with the stand-in world. It prints "ready"
   // on stderr once it waits; with "terminal", the wait ends with Ctrl-C typed at the question instead.
-  const [, , , root, waitAt, terminal] = process.argv;
-  const input = Object.assign(new EventEmitter(), { close() {}, terminal: Boolean(terminal) });
-  setInterval(() => {}, 60_000);
-  await runSetupCommand('owner/repo', async () => ({
+  // With "closes", the question is asked on real input that then closes: no answer ever comes, as when the
+  // owner's input ends, and nothing keeps the process alive but setup itself.
+  const [, , , root, waitAt, mode] = process.argv;
+  const terminal = mode === 'terminal';
+  const closes = mode === 'closes';
+  const stream = new PassThrough();
+  const input = closes ? createInterface({ input: stream, output: process.stdout })
+    : Object.assign(new EventEmitter(), { close() {}, terminal });
+  if (!closes) setInterval(() => {}, 60_000);
+  // Not awaited, as the real command does not: a question that never settles is not an unsettled top-level await.
+  runSetupCommand('owner/repo', async () => ({
     ...standIn(root, {
       waitAt,
+      ask: closes ? question => { const answer = input.question(`${question} `); stream.end(); return answer; } : undefined,
       onWait: () => {
         process.stderr.write('ready\n');
         if (terminal) setImmediate(() => input.emit('SIGINT'));
@@ -84,7 +100,8 @@ if (process.argv[2] === 'command') {
 } else {
   // Runs the command until it waits at waitAt, sends the signal, and returns what it printed and its exit code.
   async function interrupt(root, waitAt, signal) {
-    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'command', root, waitAt, signal === 'terminal' ? 'terminal' : ''],
+    const mode = signal === 'terminal' || signal === 'closes' ? signal : '';
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'command', root, waitAt, mode],
       { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
@@ -95,7 +112,7 @@ if (process.argv[2] === 'command') {
       child.stderr.on('data', data => { stderr += data; if (stderr.includes('ready')) resolve(); });
       exited.then(() => reject(new Error(`the command exited before waiting at ${waitAt}: ${stderr}`)));
     });
-    if (signal !== 'terminal') child.kill(signal);
+    if (!mode) child.kill(signal);
     const { code, killedBy } = await exited;
     clearTimeout(timer);
     assert.equal(killedBy, null, `the command was ended by ${killedBy} instead of stopping itself`);
@@ -114,15 +131,16 @@ if (process.argv[2] === 'command') {
     assert(!result.lines.some(line => /Error|at .*:\d+:\d+|Errno|ENOENT|EACCES/.test(line)));
   }
 
-  async function nextSetup(root) {
+  async function nextSetup(root, answers) {
     const manifests = [];
-    const next = standIn(root, { manifests });
+    const questions = [];
+    const next = standIn(root, { manifests, questions, answers });
     next.options.output = value => next.messages.push(value);
     try {
       const result = await setupRepository('owner/repo', next.options);
-      return { manifests, messages: next.messages, result };
+      return { manifests, questions, messages: next.messages, result };
     } catch (error) {
-      return { manifests, messages: next.messages, error };
+      return { manifests, questions, messages: next.messages, error };
     }
   }
 
@@ -243,6 +261,28 @@ if (process.argv[2] === 'command') {
     assert.equal(next.error, undefined);
     assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
     assert.deepEqual(next.manifests, []);
+  }
+
+  // Stopped at "Who uses it?" after "What is this software for?" was answered, by a signal or by input that
+  // closes: the first answer is kept, so the next run asks only the second question and MISSION.md holds the
+  // first answer from the stopped run with the second answer from the next one.
+  for (const [stop, code, sentence] of [['SIGINT', 130, INTERRUPTED], ['SIGTERM', 143, TERMINATED], ['closes', 0, null]]) {
+    testCase(`${stop === 'closes' ? 'input closes' : stop} at "Who uses it?" keeps the first mission answer`);
+    const root = await mkdtemp(join(tmpdir(), 'forge-signal-second-question-'));
+    const result = await interrupt(root, 'users-question', stop);
+    if (sentence) assertStopped(result, { code, sentence, appsKept: true });
+    else {
+      assert.equal(result.code, code);
+      assert.equal(result.stderr, '');
+      assert(!result.lines.some(line => line.startsWith('Setup stopped because')), result.lines.join('\n'));
+    }
+    const next = await nextSetup(root, ['Not asked.', 'Second users.']);
+    assert.equal(next.error, undefined);
+    assert.deepEqual(next.questions, ['Who uses it?']);
+    assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
+    const mission = await readFile(join(root, 'projects/owner/repo/MISSION.md'), 'utf8');
+    assert.match(mission, /\n## Project mission\n\nWhat this software is for: Keep releases dependable\.\n\nWho uses it: Second users\.\n$/);
+    assert(!mission.includes('Not asked.'));
   }
 
   // The real command, with input that closes while a later question waits (after the builder App's install

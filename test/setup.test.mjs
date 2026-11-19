@@ -1643,6 +1643,25 @@ testCase('a stop before the mission answers asks them once on retry');
   assert.match(await readFile(project.missionPath, 'utf8'), /\n## Project mission\n\nWhat this software is for: First purpose\.\n\nWho uses it: First users\.\n$/);
 }
 
+testCase('an empty mission answer stops setup and keeps only a first answer that was given');
+// An empty answer stops setup. An empty first answer keeps nothing, so the next run asks both questions again,
+// in order; an empty second answer keeps the first, so the next run asks only the second.
+for (const [name, answers, asked] of [
+  ['empty-first-answer', [' ', 'First users.'], ['What is this software for?', 'Who uses it?']],
+  ['empty-second-answer', ['First purpose.', ''], ['Who uses it?']]
+]) {
+  const project = await retryProject(`owner/${name}`);
+  await assert.rejects(setupRepository(`owner/${name}`, project.options({ answers })),
+    error => error instanceof ReportedSetupError && error.message === 'mission');
+  assert.equal(project.record.messages.at(-1), 'Setup stopped because both mission questions need an answer: what the software is for and who uses it. Try setup again and answer both.');
+  assert.deepEqual(project.record.prompts, ['What is this software for?', 'Who uses it?']);
+  project.reset();
+  const retried = asked.length === 2 ? ['First purpose.', 'Second users.'] : ['Second users.'];
+  assert.equal((await setupRepository(`owner/${name}`, project.options({ answers: retried }))).completed, true);
+  assert.deepEqual(project.record.prompts, asked);
+  assert.match(await readFile(project.missionPath, 'utf8'), /\n## Project mission\n\nWhat this software is for: First purpose\.\n\nWho uses it: Second users\.\n$/);
+}
+
 testCase('setup on a project that is already set up says so and changes nothing');
 // Setup on a project that is already set up says so and changes nothing.
 {
