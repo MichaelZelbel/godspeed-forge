@@ -2231,15 +2231,20 @@ for (const [name, answers] of [['empty-purpose', ['', 'Users.']], ['empty-users'
   });
 }
 
-// MISSION.md in the project folder cannot be written, or cannot be read, after the Apps exist.
+// MISSION.md in the project folder cannot be written, or cannot be read, after the Apps exist: each stop says in
+// plain words what setup could not do there, with no file name, path or raw error text.
 const missionFile = (projectsRoot, name) => join(projectsRoot, 'owner', name, 'MISSION.md');
-for (const [name, mode] of [['unwritable-mission-file', 0o444], ['unreadable-mission-file', 0o000]]) {
+for (const [name, mode, message] of [
+  ['unwritable-mission-file', 0o444, 'Setup stopped because it could not save your answers to the mission questions in the project folder for owner/unwritable-mission-file on this server. Let setup read and write the files in that project folder, then try setup again.'],
+  ['unreadable-mission-file', 0o000, 'Setup stopped because it could not read the project\'s mission in the project folder for owner/unreadable-mission-file on this server, so it could not add your answers to the mission questions there. Let setup read and write the files in that project folder, then try setup again.']
+]) {
+  assert(!/MISSION\.md|\.md\b|EACCES|permission denied/.test(message), message);
   await stopThenRetry(name, {
     onPrompt: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), mode),
     undo: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), 0o644),
     reason: 'mission-file',
     before: [...appPages, FORGE_APPS_KEPT],
-    message: 'Setup stopped because it could not save the project\'s mission in the MISSION.md file of the project folder on this server. Let setup read and write that file before trying setup again.'
+    message
   });
 }
 
