@@ -1451,6 +1451,28 @@ for (const [name, slug, finished, breakApps, clause] of [
   assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
 }
 
+// The release details cannot be read for another reason after setup already removed the damaged builder
+// details: the builder's stop still comes first, so following it never leaves a second builder App.
+for (const finished of [true, false]) {
+  testCase(`damaged builder details with unreadable release details${finished ? ' on a finished setup' : ''} still ask for the builder App's deletion`);
+  const project = await finishedSetup(`damaged-then-unreadable-${finished ? 'finished' : 'unfinished'}`);
+  if (!finished) await rm(join(project.stateDirectory, 'registration.json'));
+  const releasePath = join(project.credentialDirectory, 'release-app.json');
+  const releaseDetails = await readFile(releasePath, 'utf8');
+  await writeFile(join(project.credentialDirectory, 'builder-app.json'), '{');
+  await rm(releasePath);
+  await mkdir(releasePath);
+  assertStopped(await project.attempt(), [UNUSABLE('builder', project.repository, 'damaged'), 'damaged-app'], project.retryState);
+  await rm(releasePath, { recursive: true });
+  await writeFile(releasePath, releaseDetails, { mode: 0o600 });
+  project.standIn.live.builder -= 1;
+  const next = await project.attempt();
+  assert.equal(next.error, undefined);
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 2, release: 1 });
+  assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
+}
+
 for (const removed of ['settings', 'folder']) {
   testCase(`a finished setup whose build tools ${removed} are gone stops, then installs them again`);
   // The build tools' settings, or the whole project folder, are gone from this server.

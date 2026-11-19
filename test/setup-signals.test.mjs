@@ -246,6 +246,32 @@ if (process.argv[2] === 'command') {
     }
   }
 
+  // A pending record that cannot be parsed when the signal comes: the next run cannot tell whether GitHub
+  // made the App, so it asks for the leftover to be deleted, and the signal's sentence says so first.
+  {
+    testCase('SIGINT after the builder App page was shown, with a pending record that cannot be parsed');
+    const root = await mkdtemp(join(tmpdir(), 'forge-signal-cut-record-'));
+    const pendingPath = join(credentialPath(join(root, 'state'), 'owner/repo'), 'builder-app-pending.json');
+    const cutRecord = async () => {
+      if (!(await isPresent(pendingPath))) return false;
+      await writeFile(pendingPath, '{');
+      return true;
+    };
+    const result = await interrupt(root, 'builder-callback', 'SIGINT', { until: cutRecord });
+    assertStopped(result, { code: 130, appsKept: false,
+      sentence: 'Setup stopped because it was interrupted before it finished connecting the builder App; if GitHub created a builder App for owner/repo, delete it in your GitHub App settings before you try setup again, as the next setup will ask you to.' });
+    const leftover = await nextSetup(root);
+    assert.equal(leftover.error?.message, 'leftover-app');
+    assert.equal(leftover.messages.at(-1), LEFTOVER_BUILDER);
+    assert.deepEqual(leftover.manifests, []);
+    assert(!(await isPresent(pendingPath)));
+    const next = await nextSetup(root);
+    assert.equal(next.error, undefined);
+    assert(!next.messages.includes(reopened('builder')));
+    assert.deepEqual(next.manifests, ['Forge builder', 'Forge release']);
+    assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
+  }
+
   // Killed, or terminated, after GitHub turned the builder App's code into its keys, while its details file is
   // written (#61): the keys are already in the pending record, so the next run finishes that App from them even
   // though GitHub no longer accepts the code, and creates no second App. The terminated run says to try again.
