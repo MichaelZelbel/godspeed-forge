@@ -3,7 +3,13 @@ import { chmod, lstat, mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, wri
 import { generateKeyPairSync, verify } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadSettings, ReportedSetupError, setupRepository, prepareCheckout, repositoryFromRemote } from '../lib/setup.mjs';
+import { createInterface } from 'node:readline/promises';
+import { PassThrough } from 'node:stream';
+import {
+  answersFrom, InputClosed, loadSettings, ReportedSetupError, setupCommand, setupRepository, prepareCheckout,
+  repositoryFromRemote, UNEXPECTED_MESSAGE
+} from '../lib/setup.mjs';
+import { files } from '../lib/files.mjs';
 import { findSignedInAgent } from '../lib/agent.mjs';
 import {
   APP_PERMISSIONS, APP_PERMISSION_DOCUMENTATION, AppSetupStop, AppStepError, builderManifest, createApps,
@@ -14,7 +20,7 @@ import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 162
+// test cases: 164
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -313,6 +319,8 @@ testCase('a stop at the final check says the Apps are kept and retrying adds non
 // A stop at the final check tells the owner their Apps are kept; stopping again and retrying add none.
 const appsKeptState = join(root, 'apps-kept-state');
 const appsKeptProjects = join(root, 'apps-kept-projects');
+// The kept-Apps line when only the builder App (named as in the stand-in's credentials, or by default) exists.
+const builderKept = name => `Your GitHub App "${name}" for this repository is already on your GitHub account and is kept there. Trying setup again uses it instead of creating a new one.`;
 const APPS_KEPT_MESSAGE = 'Your two GitHub Apps for this repository, "Acme Forge builder" and "Acme Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
 let appsKeptCheckPasses = false;
 const appsKeptBegins = {};
@@ -655,6 +663,7 @@ assert.deepEqual(abandonedReleaseOutputs, [
   'Using Claude Code to set up the Forge.',
   'Create the builder App in your browser: https://example.test/create',
   'Create the release App in your browser: https://example.test/create',
+  builderKept('Forge builder'),
   'Setup stopped because the GitHub page for creating its release App was left unfinished, so GitHub did not hand that App over. Try setup again, finish creating the release App on the GitHub page it opens, and paste the address your browser shows afterwards.'
 ]);
 await assert.rejects(stat(join(state, 'projects/owner/abandoned-release-page/registration.json')));
@@ -682,6 +691,7 @@ try {
 assert.deepEqual(unwritableOutputs, [
   'Using Claude Code to set up the Forge.',
   'Create the builder App in your browser: https://example.test/create',
+  builderKept('Forge builder'),
   'Setup stopped because it could not save the details of the GitHub App it just created on this server. Let setup write to the credentials folder in the Forge\'s private state folder before trying setup again.'
 ]);
 await assert.rejects(stat(join(unwritableCredentials, 'builder-app.json')));
@@ -2271,7 +2281,8 @@ for (const [file, stopAt, damagedMessage] of [
   project.reset();
   await assert.rejects(setupRepository(repository, project.options()),
     error => error instanceof ReportedSetupError && error.message === 'damaged-settings');
-  assert.deepEqual(project.record.messages, ['Using Claude Code to set up the Forge.', damagedMessage(repository)]);
+  // Both Apps exist from the earlier run, so the stop says they are kept (issue #56).
+  assert.deepEqual(project.record.messages, ['Using Claude Code to set up the Forge.', FORGE_APPS_KEPT, damagedMessage(repository)]);
   for (const message of project.record.messages) {
     assert(!/JSON|position|line \d+ column|SyntaxError|Expected property|\bat \w/.test(message), message);
     assert(!message.includes(root), message);
@@ -2478,4 +2489,251 @@ testCase('a damaged build tools folder is replaced and setup finishes');
   assert(!healed.some(message => message.startsWith('Setup stopped')));
   assert.deepEqual(healCalls.filter(([command]) => command === 'git').map(([, step]) => step),
     ['fetch', 'clone', 'fetch', 'checkout', 'rev-parse']);
+}
+
+// The final record that setup finished cannot be written: the Apps exist, so the stop says they are kept.
+{
+  const projectState = join(root, 'stops', 'unrecordable-registration', 'state', 'projects', 'owner', 'unrecordable-registration');
+  await stopThenRetry('unrecordable-registration', {
+    run: async (command, args) => {
+      if (command === 'python3' && args.at(-1) === 'doctor') await chmod(projectState, 0o500);
+      return null;
+    },
+    undo: async () => chmod(projectState, 0o700),
+    reason: 'registration',
+    before: [...appPages, FORGE_APPS_KEPT],
+    message: 'Setup stopped because it could not record on this server that setup finished. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
+  });
+}
+
+// Saved App details setup may not read: the stop names reading them, not the GitHub page, and once they can
+// be read again setup uses that App instead of creating another.
+{
+  const repository = 'owner/unreadable-app';
+  const project = await retryProject(repository);
+  await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
+    error => error instanceof ReportedSetupError && error.message === 'final-check');
+  const builderPath = join(credentialPath(join(root, 'retry-state'), repository), 'builder-app.json');
+  await chmod(builderPath, 0o000);
+  project.reset();
+  try {
+    await assert.rejects(setupRepository(repository, project.options()),
+      error => error instanceof ReportedSetupError && error.message === 'unreadable-app');
+  } finally {
+    await chmod(builderPath, 0o600);
+  }
+  assert.equal(project.record.messages.at(-1), 'Setup stopped because it could not read the saved details of the builder App on this server. Let setup read the credentials folder in the Forge\'s private state folder before trying setup again.');
+  assert(!project.record.messages.some(message => message.includes('Complete the GitHub page')));
+  project.reset();
+  assert.equal((await setupRepository(repository, project.options())).completed, true);
+  assert.equal(project.record.begins, 0);
+}
+
+// The place answers come from closes while setup waits for the address from the browser.
+const INPUT_CLOSED = 'Setup stopped because the place it was reading your answers from closed before you answered. Try setup again and answer each question it asks.';
+async function closedInputSetup(name, start) {
+  const closedRoot = join(root, 'closed-input', name);
+  const stream = new PassThrough();
+  const input = answersFrom(createInterface({ input: stream }));
+  const adapter = createGithubAdapter({ input });
+  const printed = [];
+  const options = {
+    paths: { state: join(closedRoot, 'state'), config: join(closedRoot, 'config.json') },
+    commands: { run },
+    github: {
+      ...adapter,
+      begin: async manifest => {
+        const answered = adapter.begin(manifest);
+        stream.write('no\n');
+        await answered;
+        stream.end();
+        return { url: 'https://example.test/create' };
+      }
+    },
+    prompt: question => input.question(question),
+    output: value => printed.push(value)
+  };
+  await writePrivateJson(options.paths.config, { ...defaults(closedRoot), projectsRoot: join(closedRoot, 'projects') });
+  return { printed, result: start(options, { ...defaults(closedRoot), projectsRoot: join(closedRoot, 'projects') }) };
+}
+{
+  const closed = await closedInputSetup('repository', (options, config) => setupRepository('owner/closed-input', { ...options, config }));
+  await assert.rejects(closed.result, error => error instanceof ReportedSetupError && error.message === 'input-closed');
+  assert.deepEqual(closed.printed, [
+    'Using Claude Code to set up the Forge.', 'Create the builder App in your browser: https://example.test/create', INPUT_CLOSED
+  ]);
+  const command = await closedInputSetup('command', options => setupCommand('owner/closed-input', options));
+  assert.equal(await command.result, 1);
+  assert.equal(command.printed.at(-1), INPUT_CLOSED);
+  const readline = createInterface({ input: new PassThrough() });
+  const answers = answersFrom(readline);
+  readline.close();
+  await assert.rejects(answers.question('Anything? '), error => error instanceof InputClosed);
+}
+
+// A finished setup whose release App details are damaged, where the record that setup finished cannot be
+// removed: nothing is removed, so the next run does not wrongly say the Forge is already set up.
+{
+  const repository = 'owner/damaged-unrecorded';
+  const retryState = join(root, 'retry-damaged-unrecorded');
+  const credentialDirectory = credentialPath(retryState, repository);
+  const standIn = standInGithub();
+  assert.equal((await setupAttempt(repository, retryState, standIn.github)).error, undefined);
+  const damagedPath = join(credentialDirectory, 'release-app.json');
+  await writeFile(damagedPath, '{"id": 12345, "pem": "PRIV');
+  const realRm = files.rm;
+  files.rm = async (path, options) => {
+    if (path.endsWith('registration.json')) {
+      throw Object.assign(new Error(`EACCES: permission denied, unlink '${path}'`), { code: 'EACCES', syscall: 'unlink' });
+    }
+    return realRm(path, options);
+  };
+  let first;
+  try {
+    first = await setupAttempt(repository, retryState, standIn.github);
+  } finally {
+    files.rm = realRm;
+  }
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'settings');
+  assert.equal(first.messages.at(-1), 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.');
+  assert(await isPresent(damagedPath));
+  assert(await isPresent(join(projectStatePath(retryState, repository), 'release-installation.json')));
+  const second = await setupAttempt(repository, retryState, standIn.github);
+  assert(second.error instanceof ReportedSetupError && second.error.message === 'damaged-app');
+  assert(!second.messages.some(message => message.includes('already set up')));
+  const third = await setupAttempt(repository, retryState, standIn.github);
+  assert(completedFor(repository)(third.messages.at(-1)));
+  assert.deepEqual(standIn.counts, { builder: 1, release: 2 });
+}
+
+// A failure no step names stops with the general sentence and never the failure's own text.
+{
+  const commandRoot = join(root, 'unexpected');
+  const paths = { state: join(commandRoot, 'state'), config: join(commandRoot, 'config.json') };
+  const commandProjects = join(commandRoot, 'projects');
+  await writePrivateJson(paths.config, { ...defaults(commandRoot), projectsRoot: commandProjects });
+  const printed = [];
+  const realMkdir = files.mkdir;
+  files.mkdir = async (path, options) => {
+    if (path === join(commandProjects, 'owner')) throw new Error(`boom ${commandRoot}`);
+    return realMkdir(path, options);
+  };
+  try {
+    assert.equal(await setupCommand('owner/unexpected', {
+      paths, commands: { run }, github: standInGithub().github, prompt: async () => 'Answer.', output: value => printed.push(value)
+    }), 1);
+  } finally {
+    files.mkdir = realMkdir;
+  }
+  assert.deepEqual(printed, ['Using Claude Code to set up the Forge.', UNEXPECTED_MESSAGE]);
+  assert.equal(UNEXPECTED_MESSAGE, 'Setup stopped because of a problem on this server that setup could not identify. Try setup again.');
+}
+
+// A repository name setup cannot use, and a settings file that is damaged or holds a secret.
+{
+  const commandRoot = join(root, 'settings-stops');
+  const config = join(commandRoot, 'config.json');
+  const command = async repository => {
+    const printed = [];
+    const code = await setupCommand(repository, {
+      paths: { state: join(commandRoot, 'state'), config }, commands: { run }, github: standInGithub().github,
+      prompt: async () => 'Answer.', output: value => printed.push(value)
+    });
+    return { code, printed };
+  };
+  await writePrivateJson(config, { ...defaults(commandRoot), projectsRoot: join(commandRoot, 'projects') });
+  assert.deepEqual(await command('owner/bad/name'), { code: 1, printed: [
+    'Setup stopped because the repository name is not in the form owner/repository. Try setup again with a name in that form.'
+  ] });
+  await writeFile(config, '{ damaged');
+  assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
+    'Setup stopped because the Forge\'s settings file on this server is damaged. Delete config.json in the folder where the Forge keeps its settings before trying setup again, and setup writes a fresh one.'
+  ] });
+  await writeFile(config, JSON.stringify({ commands: { github_token: 'ghs_secret' } }));
+  assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
+    'Setup stopped because the Forge\'s settings file on this server contains commands.github_token, which must never be kept there. Remove commands.github_token from config.json in the folder where the Forge keeps its settings before trying setup again.'
+  ] });
+}
+
+// Saved App details in the old place in the project folder, or a half-finished App record, that setup may not
+// read: the stop names the folder they are in, and once they can be read setup uses that App.
+for (const [name, place] of [['unreadable-legacy-app', 'legacy'], ['unreadable-pending-app', 'pending']]) {
+  const repository = `owner/${name}`;
+  const retryState = join(root, 'retry-state');
+  const project = await retryProject(repository);
+  let lockedPath;
+  if (place === 'legacy') {
+    await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
+      error => error instanceof ReportedSetupError && error.message === 'final-check');
+    lockedPath = join(projectStatePath(retryState, repository), 'builder-app.json');
+    await writeFile(lockedPath, await readFile(join(credentialPath(retryState, repository), 'builder-app.json')));
+    await rm(join(credentialPath(retryState, repository), 'builder-app.json'));
+  } else {
+    lockedPath = join(credentialPath(retryState, repository), 'builder-app-pending.json');
+    await writePrivateJson(lockedPath, { code: 'code' });
+  }
+  await chmod(lockedPath, 0o000);
+  project.reset();
+  try {
+    await assert.rejects(setupRepository(repository, project.options()),
+      error => error instanceof ReportedSetupError && error.message === 'unreadable-app');
+  } finally {
+    await chmod(lockedPath, 0o600);
+  }
+  const folder = place === 'legacy' ? `the folder projects/${repository}` : 'the credentials folder';
+  assert.equal(project.record.messages.at(-1), `Setup stopped because it could not read the saved details of the builder App on this server. Let setup read ${folder} in the Forge's private state folder before trying setup again.`);
+  project.reset();
+  assert.equal((await setupRepository(repository, project.options())).completed, true);
+  assert.equal(project.record.begins, place === 'legacy' ? 0 : 1);
+}
+
+testCase('a pending record setup cannot read is not called a kept App');
+// The builder App is made and the release App's page was shown but never finished, so its pending record
+// holds no App code. When neither the builder details nor that record can be read, the stop says only the
+// builder App is kept: setup cannot know that a release App exists to use again.
+{
+  const repository = 'owner/unreadable-pending-no-app';
+  const retryState = join(root, 'retry-state');
+  const project = await retryProject(repository);
+  await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
+    error => error instanceof ReportedSetupError && error.message === 'final-check');
+  const credentialFolder = credentialPath(retryState, repository);
+  await rm(join(credentialFolder, 'release-app.json'));
+  await rm(join(projectStatePath(retryState, repository), 'release-installation.json'), { force: true });
+  const builderPath = join(credentialFolder, 'builder-app.json');
+  const pendingPath = join(credentialFolder, 'release-app-pending.json');
+  await writePrivateJson(pendingPath, { code: null });
+  await chmod(builderPath, 0o000);
+  await chmod(pendingPath, 0o000);
+  project.reset();
+  try {
+    await assert.rejects(setupRepository(repository, project.options()),
+      error => error instanceof ReportedSetupError && error.message === 'unreadable-app');
+  } finally {
+    await chmod(builderPath, 0o600);
+    await chmod(pendingPath, 0o600);
+  }
+  assert.deepEqual(project.record.messages.slice(-2), [
+    'Your GitHub App "Forge builder" for this repository is already on your GitHub account and is kept there. Trying setup again uses it instead of creating a new one.',
+    'Setup stopped because it could not read the saved details of the builder App on this server. Let setup read the credentials folder in the Forge\'s private state folder before trying setup again.'
+  ]);
+  assert(!project.record.messages.some(message => message.includes('"Forge release"')));
+  project.reset();
+  assert.equal((await setupRepository(repository, project.options())).completed, true);
+  assert.equal(project.record.begins, 1);
+}
+
+// A release-cost setting setup cannot use stops setup before it records that setup finished, so the next
+// run, with that setting mended, finishes instead of saying setup was already done.
+{
+  const repository = 'owner/bad-release-cost';
+  const project = await retryProject(repository);
+  const options = project.options();
+  await assert.rejects(setupRepository(repository, { ...options, config: { ...options.config, releaseCost: null } }),
+    error => error instanceof ReportedSetupError && error.message === 'unexpected');
+  assert.equal(project.record.messages.at(-1), UNEXPECTED_MESSAGE);
+  assert(!(await isPresent(join(projectStatePath(join(root, 'retry-state'), repository), 'registration.json'))));
+  project.reset();
+  await setupRepository(repository, project.options());
+  assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
 }
