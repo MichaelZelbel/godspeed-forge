@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { access, chmod, constants, mkdtemp, mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,7 @@ import { answersFrom, setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 25
+// test cases: 30
 
 const credentials = {
   id: 12345, slug: 'forge-app', pem: 'PRIVATE KEY', client_secret: 'CLIENT SECRET', webhook_secret: 'WEBHOOK SECRET'
@@ -130,11 +130,11 @@ if (process.argv[2] === 'command') {
     input
   }));
 } else {
-  // Runs the command until it waits at waitAt and until() holds, sends the signal, and returns what it printed
-  // and its exit code. SIGKILL ends it with no word of its own; any other signal it must stop on itself.
-  // afterStop runs once the command has printed its stop sentence, to let go of whatever it still waits on.
-  // deleted names the Apps that are gone from GitHub during this run.
-  async function interrupt(root, waitAt, signal, { until = async () => true, afterStop, deleted = [] } = {}) {
+  // Runs the command until it waits at waitAt and until() holds, sends the signal, and returns what it printed,
+  // its exit code and how long it took to end after the signal. SIGKILL ends it with no word of its own; any
+  // other signal it must stop on itself, by exiting, or with endsBySignal by ending through that same signal
+  // once a write it cannot finish holds up its exit. deleted names the Apps that are gone from GitHub during this run.
+  async function interrupt(root, waitAt, signal, { until = async () => true, endsBySignal = false, deleted = [] } = {}) {
     const mode = signal === 'terminal' || signal === 'closes' ? signal : '';
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'command', root, waitAt, mode, deleted.join(',')],
       { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -151,19 +151,14 @@ if (process.argv[2] === 'command') {
       assert(tries < 200, `the command never reached the point after ${waitAt}`);
       await new Promise(resolve => setTimeout(resolve, 50));
     }
+    const signalledAt = Date.now();
     if (!mode) child.kill(signal);
-    if (afterStop) {
-      for (let tries = 0; !stdout.includes('Setup stopped because'); tries += 1) {
-        assert(tries < 200, `the command printed no stop sentence after ${signal}`);
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-      await afterStop();
-    }
     const { code, killedBy } = await exited;
+    const took = Date.now() - signalledAt;
     clearTimeout(timer);
     if (signal === 'SIGKILL') assert.equal(killedBy, 'SIGKILL');
-    else assert.equal(killedBy, null, `the command was ended by ${killedBy} instead of stopping itself`);
-    return { code, lines: stdout.trimEnd().split('\n'), stderr: stderr.replace('ready\n', '') };
+    else assert.equal(killedBy, endsBySignal ? signal : null, `the command was ended by ${killedBy} instead of stopping itself`);
+    return { code, took, lines: stdout.trimEnd().split('\n'), stderr: stderr.replace('ready\n', '') };
   }
 
   // What every interrupted run must look like: the stop sentence last, the kept-Apps line (kept, null when no
@@ -282,24 +277,27 @@ if (process.argv[2] === 'command') {
     assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
   }
 
-  // Killed, or terminated, after GitHub turned the builder App's code into its keys, while its details file is
-  // written (#61): the keys are already in the pending record, so the next run finishes that App from them even
-  // though GitHub no longer accepts the code, and creates no second App. The terminated run says to try again,
-  // after saying the builder App, whose keys this server now holds, is kept.
-  for (const [signal, sentence] of [['SIGKILL', null], ['SIGTERM', TERMINATED]]) {
+  // Killed, terminated or interrupted after GitHub turned the builder App's code into its keys, while its details
+  // file is written (#61): the keys are already in the pending record, so the next run finishes that App from
+  // them even though GitHub no longer accepts the code, and creates no second App. A terminated or interrupted
+  // run says to try again, after saying the builder App, whose keys this server now holds, is kept, and ends
+  // within a few seconds though that write never finishes (#82): by its signal, which a shell reports as 143 or
+  // 130.
+  for (const [signal, sentence] of [['SIGKILL', null], ['SIGTERM', TERMINATED], ['SIGINT', INTERRUPTED]]) {
     testCase(`${signal} while the builder App details are being saved`);
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-details-'));
     const credentialDirectory = join(builderDetails(root), '..');
     const keysSaved = async () => {
       try { return Boolean(JSON.parse(await readFile(join(credentialDirectory, 'builder-app-pending.json'), 'utf8')).credentials); } catch { return false; }
     };
-    const pipes = async () => (await readdir(credentialDirectory)).filter(name => name.endsWith('.tmp')).map(name => join(credentialDirectory, name));
-    // A terminated command cannot exit while a write still waits on the pipe, so the pipe is opened for a moment.
-    const afterStop = async () => { for (const pipe of await pipes()) await (await open(pipe, constants.O_RDONLY | constants.O_NONBLOCK)).close(); };
-    const result = await interrupt(root, 'builder-details', signal, { until: keysSaved, afterStop: sentence ? afterStop : undefined });
-    if (sentence) assertStopped(result, { code: 143, sentence, kept: BUILDER_KEPT });
-    else assert(!result.lines.some(line => line.startsWith('Setup stopped because')), result.lines.join('\n'));
-    for (const pipe of await pipes()) await rm(pipe);
+    const result = await interrupt(root, 'builder-details', signal, { until: keysSaved, endsBySignal: Boolean(sentence) });
+    if (sentence) {
+      assertStopped(result, { code: null, sentence, kept: BUILDER_KEPT });
+      assert(result.took < 8000, `the command took ${result.took} ms to end after ${signal}`);
+    } else {
+      assert(!result.lines.some(line => line.startsWith('Setup stopped because')), result.lines.join('\n'));
+    }
+    for (const name of await readdir(credentialDirectory)) if (name.endsWith('.tmp')) await rm(join(credentialDirectory, name));
     const next = await nextSetup(root, undefined, { spentCodes: ['builder-code'] });
     assert.equal(next.error, undefined);
     assert(!next.messages.some(line => line.includes('delete')), next.messages.join('\n'));
@@ -404,11 +402,11 @@ if (process.argv[2] === 'command') {
     assert(!mission.includes('Not asked.'));
   }
 
-  // The real command, with input that closes while a later question waits (after the builder App's install
-  // answer): it prints no raw Node text, such as a warning about an unsettled top-level await, and stops.
-  {
-    testCase('input closes at a later question');
-    const root = await mkdtemp(join(tmpdir(), 'forge-signal-input-closes-'));
+  // The real command in a home folder of its own under root, with the agent, git, gh and the factory commands
+  // stood in for on its PATH. In a terminal (pty) it runs under script(1). onOutput sees all it printed so far
+  // and may answer through the child. Returns what it printed, with a terminal's carriage returns and control
+  // sequences taken out, and its exit code.
+  async function realCommand(root, onOutput, { pty = false } = {}) {
     const bin = join(root, 'bin');
     await mkdir(bin);
     const tools = {
@@ -421,28 +419,62 @@ if (process.argv[2] === 'command') {
       await writeFile(join(bin, name), `#!/bin/bash\n${body}\n`);
       await chmod(join(bin, name), 0o755);
     }
-    const credentialDirectory = join(root, '.godspeed/forge/state/credentials/owner/repo');
-    await mkdir(credentialDirectory, { recursive: true });
-    await writeFile(join(credentialDirectory, 'builder-app.json'), JSON.stringify(credentials), { mode: 0o600 });
-    const child = spawn(process.execPath, [fileURLToPath(new URL('../bin/godspeed-forge.mjs', import.meta.url)), 'setup', 'owner/repo'],
-      { env: { ...process.env, HOME: root, PATH: `${bin}:${process.env.PATH}` }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const command = [process.execPath, fileURLToPath(new URL('../bin/godspeed-forge.mjs', import.meta.url)), 'setup', 'owner/repo'];
+    const env = { ...process.env, HOME: root, PATH: `${bin}:${process.env.PATH}` };
+    const child = pty
+      ? spawn('script', ['-qec', command.map(word => `'${word}'`).join(' '), '/dev/null'], { env, stdio: ['pipe', 'pipe', 'pipe'] })
+      : spawn(command[0], command.slice(1), { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', data => {
       stdout += data;
-      if (stdout.endsWith('installed only on owner/repo: ')) child.stdin.write('yes\n');
-      if (stdout.endsWith('or no if it is your personal account: ')) child.stdin.end();
+      onOutput(stdout.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, ''), child);
     });
     child.stderr.on('data', data => { stderr += data; });
     const timer = setTimeout(() => child.kill('SIGKILL'), 20_000);
     const code = await new Promise(resolve => child.once('close', resolve));
     clearTimeout(timer);
+    return { stdout: stdout.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, ''), stderr, code };
+  }
+
+  // The real command, with input that closes while a later question waits (after the builder App's install
+  // answer): it prints no raw Node text, such as a warning about an unsettled top-level await, and stops.
+  {
+    testCase('input closes at a later question');
+    const root = await mkdtemp(join(tmpdir(), 'forge-signal-input-closes-'));
+    const credentialDirectory = join(root, '.godspeed/forge/state/credentials/owner/repo');
+    await mkdir(credentialDirectory, { recursive: true });
+    await writeFile(join(credentialDirectory, 'builder-app.json'), JSON.stringify(credentials), { mode: 0o600 });
+    const { stdout, stderr, code } = await realCommand(root, (printed, child) => {
+      if (printed.endsWith('installed only on owner/repo: ')) child.stdin.write('yes\n');
+      if (printed.endsWith('or no if it is your personal account: ')) child.stdin.end();
+    });
     assert(stdout.includes('Type yes if owner is a GitHub organization'), stdout);
     assert.equal(stderr, '');
     assert(!/Warning|await|\^/.test(stdout), stdout);
     // Closed input is a stop like any other (issue #56): one plain sentence and a non-zero exit.
-    assert.equal(stdout.trimEnd().split('\n').at(-1), 'Setup stopped because the place it was reading your answers from closed before you answered. Try setup again and answer each question it asks.', stdout);
+    assert.equal(stdout.trimEnd().split('\n').at(-1), INPUT_CLOSED, stdout);
     assert.equal(code, 1);
+  }
+
+  // A stop at an open question starts on a line of its own, with no blank line after it (#82): the real command
+  // signalled with its output piped, and in a terminal where Ctrl-D closes the input or Ctrl-C interrupts.
+  const ORG_QUESTION = 'Type yes if owner is a GitHub organization, or no if it is your personal account: ';
+  for (const [name, pty, stop, code, sentence] of [
+    ['SIGINT', false, child => child.kill('SIGINT'), 130, INTERRUPTED],
+    ['SIGTERM', false, child => child.kill('SIGTERM'), 143, TERMINATED],
+    ['Ctrl-D in a terminal', true, child => child.stdin.write('\x04'), 1, INPUT_CLOSED],
+    ['Ctrl-C in a terminal', true, child => child.stdin.write('\x03'), 130, INTERRUPTED]
+  ]) {
+    testCase(`${name} at an open question stops on a line of its own`);
+    const root = await mkdtemp(join(tmpdir(), 'forge-signal-open-question-'));
+    let stopped = false;
+    const { stdout, stderr, code: exitCode } = await realCommand(root, (printed, child) => {
+      if (!stopped && printed.endsWith(ORG_QUESTION)) { stopped = true; stop(child); }
+    }, { pty });
+    assert.equal(stdout, `Using Claude Code to set up the Forge.\n${ORG_QUESTION}\n${sentence}\n`);
+    assert.equal(stderr, '');
+    assert.equal(exitCode, code);
   }
 
   console.log('setup signal tests pass');
