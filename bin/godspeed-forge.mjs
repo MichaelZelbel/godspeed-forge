@@ -18,7 +18,7 @@ runSetupCommand(repository, async () => {
   const input = createInterface({ input: stdin, output: stdout });
   const answers = answersFrom(input);
   return {
-    paths: defaultPaths(), commands: { run }, github: createGithubAdapter({ input: answers }), input,
+    paths: defaultPaths(), commands: { run }, github: createGithubAdapter({ input: answers }), input, answers,
     prompt: question => answers.question(`${question} `),
     output: message => console.log(message)
   };
