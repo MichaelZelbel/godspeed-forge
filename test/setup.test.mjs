@@ -858,7 +858,7 @@ const isPresent = async path => { try { await stat(path); return true; } catch {
 function standInGithub(options = {}) {
   const counts = { builder: 0, release: 0 };
   const installs = { builder: 0, release: 0 };
-  const onGithub = { deleted: new Set(), uninstalled: new Set(), unreachable: new Set() };
+  const onGithub = { deleted: new Set(), rejected: new Set(), uninstalled: new Set(), unreachable: new Set() };
   const live = { builder: 0, release: 0 };
   const pending = { ...options };
   const usedCodes = new Set();
@@ -889,6 +889,7 @@ function standInGithub(options = {}) {
     appStatus: async ({ kind }) => {
       if (onGithub.unreachable.has(kind)) throw new Error('network unreachable');
       if (onGithub.deleted.has(kind)) return 'app-missing';
+      if (onGithub.rejected.has(kind)) return 'app-rejected';
       return onGithub.uninstalled.has(kind) ? 'not-installed' : 'installed';
     }
   };
@@ -1253,6 +1254,7 @@ const appGoneStops = {
   gone: (kind, repository) => [`Setup stopped because the ${kind} App for ${repository} is no longer on your GitHub account. Try setup again, which creates it again; if your GitHub App settings still list a ${kind} App for ${repository}, delete it first.`, 'app-missing'],
   uninstalled: (kind, repository) => [`Setup stopped because the ${kind} App is no longer installed on ${repository}. Try setup again, which asks you to install it again.`, 'app-not-installed'],
   unchecked: (kind, repository) => [`Setup stopped because GitHub could not be reached to check the ${kind} App for ${repository}. Restore this server's access to GitHub before trying setup again.`, 'github-check'],
+  rejected: (kind, repository) => [`Setup stopped because GitHub did not accept the sign-in of the ${kind} App for ${repository}. This is often because this server's clock is wrong; correct the clock, then try setup again.`, 'app-rejected'],
   buildTools: repository => [`Setup stopped because the build tools setup installed in the project folder for ${repository} on this server are missing. Try setup again, which installs them again.`, 'factory-missing']
 };
 
@@ -1371,6 +1373,27 @@ testCase('a finished setup stops on an unreachable App check before repairing th
   assert.deepEqual(project.standIn.counts, { builder: 2, release: 2 });
 }
 
+testCase('a finished setup whose App sign-in GitHub rejects keeps every saved file, then is set up again');
+{
+  // GitHub answers 401 for the builder App and 404 for the release App: a rejected sign-in proves nothing
+  // is gone, so the stop names it, nothing is removed, and once GitHub accepts it no App is created again.
+  const project = await finishedSetup('sign-in-rejected');
+  const before = await readTree(project.retryState);
+  project.standIn.onGithub.rejected.add('builder');
+  project.standIn.onGithub.deleted.add('release');
+  const stopped = await project.attempt();
+  assertStopped(stopped, appGoneStops.rejected('builder', project.repository), project.retryState);
+  assert.equal(stopped.messages.filter(line => line.startsWith('Setup stopped because')).length, 1);
+  assert.deepEqual(await readTree(project.retryState), before);
+  project.standIn.onGithub.rejected.clear();
+  project.standIn.onGithub.deleted.clear();
+  const again = await project.attempt();
+  assert.equal(again.error, undefined);
+  assert.deepEqual(again.messages, [`The Forge is already set up for ${project.repository}.`]);
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(project.standIn.installs, { builder: 1, release: 1 });
+}
+
 for (const removed of ['settings', 'folder']) {
   testCase(`a finished setup whose build tools ${removed} are gone stops, then installs them again`);
   // The build tools' settings, or the whole project folder, are gone from this server.
@@ -1454,7 +1477,7 @@ testCase('the GitHub adapter reads the App code and tells refused exchanges from
   assert(requests.every(request => request.url === 'https://api.github.com/app-manifests/abc/conversions' && request.method === 'POST'));
 }
 
-testCase('the GitHub adapter checks an App as the App itself and tells gone, uninstalled and unreachable apart');
+testCase('the GitHub adapter checks an App as the App itself and tells gone, rejected, uninstalled and unreachable apart');
 {
   // appStatus asks GitHub as the App itself, signed with the App's saved key.
   const requests = [];
@@ -1485,7 +1508,7 @@ testCase('the GitHub adapter checks an App as the App itself and tells gone, uni
     assert(verify('sha256', Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature, 'base64url')));
   }
   assert.equal(await status(404), 'app-missing');
-  assert.equal(await status(401), 'app-missing');
+  assert.equal(await status(401), 'app-rejected');
   assert.equal(requests.length, 1);
   assert.equal(await status(200, 404), 'not-installed');
   for (const answers of [[502], [200, 500], [new TypeError('fetch failed')]]) {
