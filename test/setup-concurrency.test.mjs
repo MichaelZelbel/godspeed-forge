@@ -146,18 +146,17 @@ if (process.argv[2] === 'waiting-setup') {
     child.kill('SIGKILL');
     await exited;
     // The killed setup may have left the owner finishing the builder App page (#29), so the next setup is
-    // not blocked but says once to delete that App; the one after creates one App per role.
+    // not blocked: it opens that page again (#61), asking first for the App to be deleted only if the owner
+    // finished the page, and creates one App per role.
     const manifests = [];
     const next = standIn(root, { manifests });
-    await assert.rejects(setupRepository('owner/repo', next.options),
-      error => error instanceof ReportedSetupError && error.message === 'leftover-app');
-    assert.deepEqual(next.record.messages.at(-1), 'Setup stopped because it could not finish connecting the builder App. If GitHub created a builder App for owner/repo, delete it in your GitHub App settings, then try setup again.');
-    assert.deepEqual(manifests, []);
-    const after = standIn(root, { manifests });
-    const result = await setupRepository('owner/repo', after.options);
+    const result = await setupRepository('owner/repo', next.options);
     assert.equal(result.completed, true);
     assert.deepEqual(manifests, ['Forge builder', 'Forge release']);
-    assert(after.record.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
+    const reminder = 'If you finished the GitHub page for the builder App during an earlier setup, delete the builder App it made for owner/repo in your GitHub App settings before you create it again.';
+    assert.equal(next.record.messages[next.record.messages.indexOf(reminder) + 1], 'Create the builder App in your browser: https://example.test/Forge builder');
+    assert(!next.record.messages.some(line => line.startsWith('Setup stopped because')));
+    assert(next.record.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
   }
 
   testCase('a second setup while the first waits on the App page stops and leaves the first alone');
