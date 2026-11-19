@@ -20,7 +20,7 @@ import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 158
+// test cases: 164
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -156,15 +156,12 @@ for (const kind of ['builder', 'release']) {
 }
 testCase('App keys are saved privately and no secret reaches the project state, mission or messages');
 assert.deepEqual((await readdir(join(state, 'credentials/owner/repo'))).sort(), ['builder-app.json', 'release-app.json']);
-const serializedProjectState = JSON.stringify({
-  config: { projectsRoot, releaseCost: { message: 'Release cost.' } },
-  paths: { state },
-  projectState: await readTree(join(state, 'projects/owner/repo'))
-});
-assert(!serializedProjectState.includes('"code"'));
+const projectState = (await readTree(join(state, 'projects/owner/repo')))
+  .map(file => `${file.name}\n${file.contents}`).join('\n');
+assert(!projectState.includes('"code"'));
 for (const [field, secret] of Object.entries(credentials)) {
-  assert(!serializedProjectState.includes(field));
-  assert(!serializedProjectState.includes(String(secret)));
+  assert(!projectState.includes(`"${field}"`));
+  assert(!projectState.includes(String(secret)));
   assert(!mission.includes(String(secret)));
   assert(!messages.join('\n').includes(String(secret)));
 }
@@ -872,7 +869,7 @@ await assert.rejects(stat(emptyRoot));
 function standInGithub(options = {}) {
   const counts = { builder: 0, release: 0 };
   const installs = { builder: 0, release: 0 };
-  const onGithub = { deleted: new Set(), uninstalled: new Set(), unreachable: new Set() };
+  const onGithub = { deleted: new Set(), clockRejected: new Set(), keyRejected: new Set(), uninstalled: new Set(), unreachable: new Set() };
   const live = { builder: 0, release: 0 };
   const pending = { ...options };
   const usedCodes = new Set();
@@ -903,6 +900,8 @@ function standInGithub(options = {}) {
     appStatus: async ({ kind }) => {
       if (onGithub.unreachable.has(kind)) throw new Error('network unreachable');
       if (onGithub.deleted.has(kind)) return 'app-missing';
+      if (onGithub.clockRejected.has(kind)) return 'clock-rejected';
+      if (onGithub.keyRejected.has(kind)) return 'key-rejected';
       return onGithub.uninstalled.has(kind) ? 'not-installed' : 'installed';
     }
   };
@@ -932,6 +931,9 @@ async function setupAttempt(repository, stateDirectory, github, { doctor, init }
 
 const REOPENED = (kind, repository) => `If you finished the GitHub page for the ${kind} App during an earlier setup, delete the ${kind} App it made for ${repository} in your GitHub App settings before you create it again.`;
 const UNUSABLE = (kind, repository, reason) => `Setup stopped because the saved details of the ${kind} App on this server are ${reason}, so setup can no longer use that App; delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again, which creates a new ${kind} App.`;
+// The stops for a 401 on GET /app: one GitHub sent because this server's clock is off, and any other.
+const CLOCK_STOP = (kind, repository) => [`Setup stopped because GitHub did not accept the sign-in of the ${kind} App for ${repository}, as this server's clock is off. Correct this server's clock, then try setup again.`, 'app-clock'];
+const KEY_REJECTED_STOP = (kind, repository) => [`Setup stopped because GitHub no longer accepts the saved key of the ${kind} App for ${repository}. If your GitHub App settings still list a ${kind} App for ${repository}, delete it, then try setup again, which creates it again.`, 'app-key-rejected'];
 const BOTH_UNUSABLE = (clause, repository) => `Setup stopped because ${clause}, so setup can no longer use either App; delete any builder or release App for ${repository} that your GitHub App settings still list, then try setup again, which creates both Apps again.`;
 
 const pendingFiles = async directory => (await readdir(directory)).filter(name => name.endsWith('-app-pending.json'));
@@ -1132,6 +1134,39 @@ testCase('kept App keys GitHub could not be asked about stay for the next run');
   assert(completedFor(project.repository)(third.messages.at(-1)));
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
   assert.equal(JSON.parse(await readFile(join(project.credentialDirectory, 'builder-app.json'), 'utf8')).slug, 'code-builder-1');
+}
+
+testCase('kept App keys whose sign-in GitHub refuses over the clock stay for the next run');
+{
+  const project = await keysKeptSetup('kept-clock');
+  const kept = await readFile(project.pendingPath, 'utf8');
+  project.standIn.onGithub.clockRejected.add('builder');
+  const second = await project.attempt();
+  assertStopped(second, CLOCK_STOP('builder', project.repository), project.retryState);
+  assert.deepEqual(project.standIn.installs, { builder: 0, release: 0 });
+  assert.equal(await readFile(project.pendingPath, 'utf8'), kept);
+  project.standIn.onGithub.clockRejected.clear();
+  const third = await project.attempt();
+  assert.equal(third.error, undefined);
+  assert(completedFor(project.repository)(third.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+}
+
+testCase('kept App keys GitHub no longer accepts stop before the install link, and the retry creates the App again');
+{
+  const project = await keysKeptSetup('kept-key-rejected');
+  project.standIn.onGithub.keyRejected.add('builder');
+  const second = await project.attempt();
+  assertStopped(second, KEY_REJECTED_STOP('builder', project.repository), project.retryState);
+  assert.deepEqual(project.standIn.installs, { builder: 0, release: 0 });
+  assert.deepEqual(await pendingFiles(project.credentialDirectory), []);
+  await assert.rejects(stat(join(project.credentialDirectory, 'builder-app.json')));
+  project.standIn.onGithub.keyRejected.clear();
+  project.standIn.live.builder -= 1;
+  const third = await project.attempt();
+  assert.equal(third.error, undefined);
+  assert(completedFor(project.repository)(third.messages.at(-1)));
+  assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
 }
 
 testCase('App keys lost after the exchange: the owner deletes the App once and setup finishes');
@@ -1391,6 +1426,8 @@ const appGoneStops = {
   gone: (kind, repository) => [`Setup stopped because the ${kind} App for ${repository} is no longer on your GitHub account. Try setup again, which creates it again; if your GitHub App settings still list a ${kind} App for ${repository}, delete it first.`, 'app-missing'],
   uninstalled: (kind, repository) => [`Setup stopped because the ${kind} App is no longer installed on ${repository}. Try setup again, which asks you to install it again.`, 'app-not-installed'],
   unchecked: (kind, repository) => [`Setup stopped because GitHub could not be reached to check the ${kind} App for ${repository}. Restore this server's access to GitHub before trying setup again.`, 'github-check'],
+  clock: CLOCK_STOP,
+  keyRejected: KEY_REJECTED_STOP,
   buildTools: repository => [`Setup stopped because the build tools setup installed in the project folder for ${repository} on this server are missing. Try setup again, which installs them again.`, 'factory-missing']
 };
 
@@ -1540,6 +1577,68 @@ testCase('a finished setup stops on an unreachable App check before repairing th
   const next = await project.attempt();
   assert(completedFor(project.repository)(next.messages.at(-1)));
   assert.deepEqual(project.standIn.counts, { builder: 2, release: 2 });
+}
+
+testCase('a finished setup whose App sign-in GitHub refuses over the clock keeps every saved file, then is set up again');
+{
+  // GitHub refuses the builder App's sign-in because this server's clock is off, and answers 404 for the release
+  // App: the clock proves nothing is gone, so the stop names it, nothing is removed, and once the clock is right
+  // no App is created again.
+  const project = await finishedSetup('sign-in-clock');
+  const before = await readTree(project.retryState);
+  project.standIn.onGithub.clockRejected.add('builder');
+  project.standIn.onGithub.deleted.add('release');
+  const stopped = await project.attempt();
+  assertStopped(stopped, appGoneStops.clock('builder', project.repository), project.retryState);
+  assert.equal(stopped.messages.filter(line => line.startsWith('Setup stopped because')).length, 1);
+  assert.deepEqual(await readTree(project.retryState), before);
+  project.standIn.onGithub.clockRejected.clear();
+  project.standIn.onGithub.deleted.clear();
+  const again = await project.attempt();
+  assert.equal(again.error, undefined);
+  assert.deepEqual(again.messages, [`The Forge is already set up for ${project.repository}.`]);
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(project.standIn.installs, { builder: 1, release: 1 });
+}
+
+for (const kind of ['builder', 'release']) {
+  const other = kind === 'builder' ? 'release' : 'builder';
+  testCase(`a finished setup whose ${kind} App key GitHub no longer accepts stops, then creates it again`);
+  {
+    // GitHub refuses the App's sign-in with the server's clock right: the App was deleted or its key revoked.
+    // The stop says to delete the App if it is still listed, its records go, and once the owner has deleted it
+    // the next run ends with one App per role.
+    const project = await finishedSetup(`${kind}-key-rejected`);
+    project.standIn.onGithub.keyRejected.add(kind);
+    const stopped = await project.attempt();
+    assertStopped(stopped, appGoneStops.keyRejected(kind, project.repository), project.retryState);
+    assert.equal(stopped.messages.filter(line => line.startsWith('Setup stopped because')).length, 1);
+    assert(!(await isPresent(join(project.credentialDirectory, `${kind}-app.json`))));
+    assert(!(await isPresent(join(project.stateDirectory, `${kind}-installation.json`))));
+    assert(await isPresent(join(project.credentialDirectory, `${other}-app.json`)));
+    assert(!(await isPresent(join(project.stateDirectory, 'registration.json'))));
+    project.standIn.onGithub.keyRejected.clear();
+    project.standIn.live[kind] -= 1;
+    const next = await project.attempt();
+    assert.equal(next.error, undefined);
+    assert(completedFor(project.repository)(next.messages.at(-1)));
+    assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
+    assert.deepEqual((await project.attempt()).messages, [`The Forge is already set up for ${project.repository}.`]);
+  }
+}
+
+testCase('a finished setup whose two App keys GitHub no longer accepts names both Apps in one stop');
+{
+  const project = await finishedSetup('both-key-rejected');
+  project.standIn.onGithub.keyRejected.add('builder');
+  project.standIn.onGithub.keyRejected.add('release');
+  assertStopped(await project.attempt(), [BOTH_UNUSABLE(`GitHub no longer accepts the saved keys of the builder and release Apps for ${project.repository}`, project.repository), 'apps-unusable'], project.retryState);
+  project.standIn.onGithub.keyRejected.clear();
+  project.standIn.live.builder -= 1;
+  project.standIn.live.release -= 1;
+  const next = await project.attempt();
+  assert.equal(next.error, undefined);
+  assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
 }
 
 // Saved App details that setup can no longer read (#61). With the keys still in the pending record the App is
@@ -1771,7 +1870,7 @@ testCase('the GitHub adapter reads the App code and tells refused exchanges from
   assert(requests.every(request => request.url === 'https://api.github.com/app-manifests/abc/conversions' && request.method === 'POST'));
 }
 
-testCase('the GitHub adapter checks an App as the App itself and tells gone, uninstalled and unreachable apart');
+testCase('the GitHub adapter checks an App as the App itself and tells gone, clock-refused, key-refused, uninstalled and unreachable apart');
 {
   // appStatus asks GitHub as the App itself, signed with the App's saved key.
   const requests = [];
@@ -1782,7 +1881,9 @@ testCase('the GitHub adapter checks an App as the App itself and tells gone, uni
       requests.push({ url, method: init.method, authorization: init.headers.authorization });
       const next = responses.shift();
       if (next instanceof Error) throw next;
-      return { status: next };
+      if (typeof next === 'number') return { status: next };
+      // A 401 carries GitHub's Date header and error message.
+      return { status: next.status, headers: new Headers(next.date ? { date: next.date } : {}), json: async () => ({ message: next.message }) };
     }
   });
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -1802,7 +1903,18 @@ testCase('the GitHub adapter checks an App as the App itself and tells gone, uni
     assert(verify('sha256', Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature, 'base64url')));
   }
   assert.equal(await status(404), 'app-missing');
-  assert.equal(await status(401), 'app-missing');
+  // A 401 is put down to the clock only when GitHub's Date is more than a minute off or its message is about the
+  // token's issued-at or expiry time; any other 401 means GitHub no longer accepts the App's key.
+  const at = offset => new Date(Date.now() + offset).toUTCString();
+  const refused = 'A JSON web token could not be decoded';
+  assert.equal(await status({ status: 401, date: at(5 * 60_000), message: refused }), 'clock-rejected');
+  assert.equal(await status({ status: 401, date: at(-5 * 60_000), message: refused }), 'clock-rejected');
+  assert.equal(await status({ status: 401, date: at(0), message: "'Issued at' claim ('iat') must be an Integer representing the time that the assertion was issued" }), 'clock-rejected');
+  assert.equal(await status({ status: 401, date: at(0), message: "'Expiration time' claim ('exp') is too far in the future" }), 'clock-rejected');
+  assert.equal(await status({ status: 401, date: at(0), message: 'Integration not found' }), 'key-rejected');
+  assert.equal(await status({ status: 401, date: at(0), message: refused }), 'key-rejected');
+  assert.equal(await status({ status: 401 }), 'key-rejected');
+  assert.equal(await status(401), 'key-rejected');
   assert.equal(requests.length, 1);
   assert.equal(await status(200, 404), 'not-installed');
   for (const answers of [[502], [200, 500], [new TypeError('fetch failed')]]) {
@@ -2129,15 +2241,20 @@ for (const [name, answers] of [['empty-purpose', ['', 'Users.']], ['empty-users'
   });
 }
 
-// MISSION.md in the project folder cannot be written, or cannot be read, after the Apps exist.
+// MISSION.md in the project folder cannot be written, or cannot be read, after the Apps exist: each stop says in
+// plain words what setup could not do there, with no file name, path or raw error text.
 const missionFile = (projectsRoot, name) => join(projectsRoot, 'owner', name, 'MISSION.md');
-for (const [name, mode] of [['unwritable-mission-file', 0o444], ['unreadable-mission-file', 0o000]]) {
+for (const [name, mode, message] of [
+  ['unwritable-mission-file', 0o444, 'Setup stopped because it could not save your answers to the mission questions in the project folder for owner/unwritable-mission-file on this server. Let setup read and write the files in that project folder, then try setup again.'],
+  ['unreadable-mission-file', 0o000, 'Setup stopped because it could not read the project\'s mission in the project folder for owner/unreadable-mission-file on this server, so it could not add your answers to the mission questions there. Let setup read and write the files in that project folder, then try setup again.']
+]) {
+  assert(!/MISSION\.md|\.md\b|EACCES|permission denied/.test(message), message);
   await stopThenRetry(name, {
     onPrompt: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), mode),
     undo: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), 0o644),
     reason: 'mission-file',
     before: [...appPages, FORGE_APPS_KEPT],
-    message: 'Setup stopped because it could not save the project\'s mission in the MISSION.md file of the project folder on this server. Let setup read and write that file before trying setup again.'
+    message
   });
 }
 
