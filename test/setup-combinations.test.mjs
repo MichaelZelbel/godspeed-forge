@@ -1,10 +1,14 @@
 // Runs setup from every combination of what this server has saved about each App and whether GitHub still has
 // it, with an owner who, after each stop, deletes on GitHub every App role the stop asks them to delete and
 // tries again, up to three times. GitHub must never hold more than one App per role at any point, and setup must
-// end complete or already set up. Each combination starts from a real finished setup, then changes per App:
-// its details file (kept, deleted, empty, a link to a removed file, or damaged), whether a pending record still
-// holds its keys, whether the record that it is installed stays, and whether it is still on GitHub; and
-// whether the record that setup finished stays. Combinations run 16 at a time, each in its own folders.
+// end complete or already set up, using, for each role whose App the owner deleted, an App that is on GitHub.
+// Each combination starts from a real finished setup, then changes per App: its details file (kept, deleted,
+// empty, a link to a removed file, or damaged), whether a pending record still holds its keys, whether the
+// record that it is installed stays, and whether it is still on GitHub; and whether the record that setup
+// finished stays. Kept details and keys may also be those of an older App of the
+// role than the one setup listed (state restored from an older copy), which is itself on GitHub or gone. The
+// owner deletes the Apps a stop names in quotes, or else every App of each role it names. Combinations run 16
+// at a time, each in its own folders.
 // test cases: 8
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
@@ -18,13 +22,17 @@ import { testCase } from './cases.mjs';
 const root = await mkdtemp(join(tmpdir(), 'forge-combinations-'));
 const KINDS = ['builder', 'release'];
 const DETAILS = ['kept', 'deleted', 'empty', 'broken link', 'damaged'];
-const ROLE_STATES = DETAILS.flatMap(details => [false, true].flatMap(pending => [false, true].map(installed => ({ details, pending, installed }))));
+const OLDER = ['on GitHub', 'gone'];
+const ROLE_STATES = DETAILS.flatMap(details => [false, true].flatMap(pending => [false, true].flatMap(installed => [
+  { details, pending, installed },
+  ...(details === 'kept' ? OLDER.map(older => ({ details, pending, installed, older })) : [])
+])));
 const CONCURRENT = 16;
 const RETRIES = 3;
 
 // GitHub, as far as setup sees it: the Apps each role has, by slug. A second App of a role is a violation.
 function standInGithub() {
-  const world = { apps: { builder: new Set(), release: new Set() }, codes: new Map(), spent: new Set(), violations: [], made: 0 };
+  const world = { apps: { builder: new Set(), release: new Set() }, codes: new Map(), names: new Map(), deleted: new Set(), spent: new Set(), violations: [], made: 0 };
   let creating;
   const listed = slug => KINDS.some(kind => world.apps[kind].has(slug));
   world.github = {
@@ -40,9 +48,10 @@ function standInGithub() {
       const kind = code.split('-')[1];
       if (world.apps[kind].size > 0) world.violations.push(`a second ${kind} App while ${[...world.apps[kind]].join(', ')} is on GitHub`);
       world.made += 1;
-      const app = { id: world.made, slug: `combo-${kind}-${world.made}`, pem: 'PRIVATE KEY', name: `Forge ${kind}` };
+      const app = { id: world.made, slug: `combo-${kind}-${world.made}`, pem: 'PRIVATE KEY', name: `Forge ${kind} ${world.made}` };
       world.apps[kind].add(app.slug);
       world.codes.set(app.slug, code);
+      world.names.set(app.name, { kind, slug: app.slug });
       return app;
     },
     install: async () => true,
@@ -85,7 +94,16 @@ async function attempt(repository, folder, github) {
 
 async function arrange(kind, state, onGithub, { stateDirectory, credentialDirectory, world }) {
   const detailsPath = join(credentialDirectory, `${kind}-app.json`);
-  const details = JSON.parse(await readFile(detailsPath, 'utf8'));
+  const listed = JSON.parse(await readFile(detailsPath, 'utf8'));
+  let details = listed;
+  if (state.older) {
+    details = { id: 900, slug: `combo-${kind}-older`, pem: 'PRIVATE KEY', name: `Forge ${kind} older` };
+    world.codes.set(details.slug, `code-${kind}-older`);
+    world.spent.add(`code-${kind}-older`);
+    world.names.set(details.name, { kind, slug: details.slug });
+    if (state.older === 'on GitHub') world.apps[kind].add(details.slug);
+    await writeFile(detailsPath, JSON.stringify(details));
+  }
   if (state.pending) {
     await writeFile(join(credentialDirectory, `${kind}-app-pending.json`), JSON.stringify({ code: world.codes.get(details.slug), credentials: details }));
   }
@@ -94,10 +112,16 @@ async function arrange(kind, state, onGithub, { stateDirectory, credentialDirect
   if (state.details === 'empty') await writeFile(detailsPath, '');
   if (state.details === 'broken link') { await rm(detailsPath); await symlink(`${detailsPath}.removed`, detailsPath); }
   if (state.details === 'damaged') await writeFile(detailsPath, '{"id": 1, "pem": "PRIV');
-  if (!onGithub) world.apps[kind].delete(details.slug);
+  if (!onGithub) world.apps[kind].delete(listed.slug);
 }
 
-const describe = (kind, state, onGithub) => `${kind} details ${state.details}, ${state.pending ? '' : 'no '}keys kept, ${state.installed ? '' : 'not '}installed, ${onGithub ? 'on' : 'gone from'} GitHub`;
+const describe = (kind, state, onGithub) => `${kind} details ${state.details}${state.older ? ` of an older App ${state.older}` : ''}, ${state.pending ? '' : 'no '}keys kept, ${state.installed ? '' : 'not '}installed, ${onGithub ? 'on' : 'gone from'} GitHub`;
+
+function deleteNamed(stop, world) {
+  const named = [...stop.matchAll(/"([^"]+)"/g)].map(([, name]) => world.names.get(name)).filter(Boolean);
+  if (named.length) for (const { kind, slug } of named) { world.apps[kind].delete(slug); world.deleted.add(kind); }
+  else for (const kind of KINDS) if (new RegExp(`\\b${kind}\\b`).test(stop)) { world.apps[kind].clear(); world.deleted.add(kind); }
+}
 
 // The problems one combination ends with: none when it passes.
 async function combination(name, finished, roles) {
@@ -114,7 +138,7 @@ async function combination(name, finished, roles) {
   const lines = [...last.output];
   for (let retry = 0; !last.completed && retry < RETRIES; retry += 1) {
     const stop = last.output.at(-1) ?? '';
-    if (/delete/i.test(stop)) for (const kind of KINDS) if (new RegExp(`\\b${kind}\\b`).test(stop)) world.apps[kind].clear();
+    if (/delete/i.test(stop)) deleteNamed(stop, world);
     last = await attempt(repository, folder, world.github);
     lines.push(...last.output);
   }
@@ -124,6 +148,10 @@ async function combination(name, finished, roles) {
     problems.push(`setup did not end complete: ${end}`);
   }
   if (lines.includes(UNEXPECTED_MESSAGE)) problems.push('setup stopped for a reason it could not identify');
+  for (const kind of world.deleted) {
+    const held = await readFile(join(context.credentialDirectory, `${kind}-app.json`), 'utf8').then(JSON.parse, () => null);
+    if (last.completed && !world.apps[kind].has(held?.slug)) problems.push(`after the owner deleted the ${kind} App, setup ended using one that is not on GitHub`);
+  }
   await rm(folder, { recursive: true, force: true });
   return problems;
 }

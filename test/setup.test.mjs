@@ -20,7 +20,7 @@ import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 174
+// test cases: 175
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -1827,9 +1827,10 @@ testCase('a list of setup\'s Apps that cannot be saved stops setup before it cre
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
 }
 
-testCase('saved state restored from an older copy names the newer App on GitHub, then uses the older App');
+testCase('saved state restored from an older copy names the newer App on GitHub, then creates a new one');
 {
-  // The saved builder details are those of an older builder App, while the list names the newer one (#79).
+  // The saved builder details are those of an older builder App, no longer on GitHub, while the list names
+  // the newer one (#79). Once the owner deletes the newer App, the role has none, so setup creates one.
   const project = await finishedSetup('restored-older');
   await rm(join(project.stateDirectory, 'registration.json'));
   await writePrivateJson(join(project.credentialDirectory, 'builder-app.json'), { ...credentials, slug: 'code-builder-0', id: 999 });
@@ -1837,8 +1838,22 @@ testCase('saved state restored from an older copy names the newer App on GitHub,
   project.standIn.live.builder -= 1;
   const next = await project.attempt();
   assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 2, release: 1 });
+  assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
+  assert.equal(JSON.parse(await readFile(appRecordPath(project), 'utf8')).builder.slug, 'code-builder-2');
+}
+
+testCase('an older App whose saved details setup holds, which GitHub cannot be asked about, stops setup, which keeps them');
+{
+  const project = await finishedSetup('restored-older-unchecked');
+  await rm(join(project.stateDirectory, 'registration.json'));
+  const detailsPath = join(project.credentialDirectory, 'builder-app.json');
+  await writePrivateJson(detailsPath, { ...credentials, slug: 'code-olderbuilder-0', id: 999 });
+  const details = await readFile(detailsPath, 'utf8');
+  project.standIn.onGithub.unreachable.add('olderbuilder');
+  assertStopped(await project.attempt(), [`Setup stopped because GitHub could not be reached to check whether the builder App "Forge builder" for ${project.repository} is still on your GitHub account. Restore this server's access to GitHub before trying setup again.`, 'app-record-check'], project.retryState);
+  assert.equal(await readFile(detailsPath, 'utf8'), details);
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
-  assert.deepEqual(JSON.parse(await readFile(appRecordPath(project), 'utf8')).builder, { name: 'Forge builder', slug: 'code-builder-0', id: 999 });
 }
 
 // The release details cannot be read for another reason after setup already removed the damaged builder
