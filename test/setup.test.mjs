@@ -40,6 +40,8 @@ async function readTree(directory) {
   return values;
 }
 
+const isPresent = async path => { try { await stat(path); return true; } catch { return false; } };
+
 const run = async (command, args, options = {}) => {
   calls.push({ command, args, cwd: options.cwd });
   if (command === 'claude') return { stdout: 'signed in' };
@@ -58,6 +60,9 @@ const run = async (command, args, options = {}) => {
     await writeFile(join(options.cwd, 'factory/consumer.py'), '# factory stand-in\n');
     await mkdir(join(options.cwd, '.factory'), { recursive: true });
     await writeFile(join(options.cwd, '.factory/consumer.json'), '{}\n');
+  }
+  if (command === 'python3' && args.at(-1) === 'doctor' && !(await isPresent(join(options.cwd, args[0])))) {
+    throw Object.assign(new Error('Command failed'), { stderr: `python3: can't open file '${join(options.cwd, args[0])}': [Errno 2] No such file or directory\n` });
   }
   return { stdout: '' };
 };
@@ -851,8 +856,6 @@ await assert.rejects(setupRepository('owner/other', {
 assert.deepEqual(stopped, ['Setup stopped because neither Claude Code nor Codex is signed in. Sign in to one of them before trying setup again.']);
 await assert.rejects(stat(emptyRoot));
 
-const isPresent = async path => { try { await stat(path); return true; } catch { return false; } };
-
 // deleted and uninstalled name the Apps GitHub answers for as gone from the account or from the repository;
 // unreachable names the Apps whose check fails as if GitHub could not be reached.
 function standInGithub(options = {}) {
@@ -895,20 +898,24 @@ function standInGithub(options = {}) {
   return { counts, live, installs, onGithub, github };
 }
 
-async function setupAttempt(repository, stateDirectory, github) {
+// doctor and init, when given, run before the stand-in final check or build tools install and fail it by throwing.
+async function setupAttempt(repository, stateDirectory, github, { doctor, init } = {}) {
   const attemptMessages = [];
-  let attemptAnswer = 0;
-  const retryRun = async (command, args, options) => command === 'git' && args[0] === 'remote'
-    ? { stdout: `https://github.com/${repository}.git\n` }
-    : run(command, args, options);
+  const prompts = [];
+  const retryRun = async (command, args, options) => {
+    if (command === 'git' && args[0] === 'remote') return { stdout: `https://github.com/${repository}.git\n` };
+    if (args.at(-1) === 'doctor') await doctor?.();
+    if (args.at(-1) === 'init') await init?.();
+    return run(command, args, options);
+  };
   try {
     await setupRepository(repository, {
       config: { ...defaults(root), projectsRoot }, paths: { state: stateDirectory }, commands: { run: retryRun }, github,
-      prompt: async () => ['Purpose.', 'Users.'][attemptAnswer++], output: value => attemptMessages.push(value)
+      prompt: async question => ['Purpose.', 'Users.'][prompts.push(question) - 1], output: value => attemptMessages.push(value)
     });
-    return { messages: attemptMessages };
+    return { messages: attemptMessages, prompts };
   } catch (error) {
-    return { messages: attemptMessages, error };
+    return { messages: attemptMessages, prompts, error };
   }
 }
 
@@ -1268,6 +1275,8 @@ const appGoneStops = {
   buildTools: repository => [`Setup stopped because the build tools setup installed in the project folder for ${repository} on this server are missing. Try setup again, which installs them again.`, 'factory-missing']
 };
 
+const FORGE_APPS_KEPT = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
+
 async function finishedSetup(name) {
   const repository = `owner/${name}`;
   const retryState = join(root, `finished-${name}`);
@@ -1279,7 +1288,7 @@ async function finishedSetup(name) {
     stateDirectory: projectStatePath(retryState, repository),
     credentialDirectory: credentialPath(retryState, repository),
     checkout: join(projectsRoot, repository),
-    attempt: () => setupAttempt(repository, retryState, standIn.github)
+    attempt: options => setupAttempt(repository, retryState, standIn.github, options)
   };
 }
 
@@ -1483,6 +1492,64 @@ for (const removed of ['settings', 'folder']) {
   const next = await project.attempt();
   assert(completedFor(project.repository)(next.messages.at(-1)));
   assert(await isPresent(join(project.checkout, '.factory/consumer.json')));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+}
+
+// A finished setup whose mission or installed build tools are gone is set up again in the same run, from the
+// saved answers and with the same Apps.
+for (const [removed, verb, remove] of [
+  ['mission', 'is', project => writeFile(join(project.checkout, 'MISSION.md'), '# Mission\n\nFactory template.\n')],
+  ['mission file', 'is', project => rm(join(project.checkout, 'MISSION.md'))],
+  ['installed build tools', 'are', project => rm(join(project.checkout, 'factory'), { recursive: true })]
+]) {
+  testCase(`a finished setup whose ${removed} ${verb} gone sets it up again without asking`);
+  const project = await finishedSetup(`${removed.replaceAll(' ', '-')}-removed`);
+  await remove(project);
+  const again = await project.attempt();
+  assert.equal(again.error, undefined, removed);
+  assert.deepEqual(again.prompts, []);
+  assert.equal(again.messages[0], 'Using Claude Code to set up the Forge.');
+  assert(completedFor(project.repository)(again.messages.at(-1)));
+  assert(!again.messages.some(line => line.includes('already set up')));
+  assert.match(await readFile(join(project.checkout, 'MISSION.md'), 'utf8'),
+    /\n## Project mission\n\nWhat this software is for: Purpose\.\n\nWho uses it: Users\.\n$/);
+  assert(await isPresent(join(project.checkout, 'factory/consumer.py')));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(project.standIn.installs, { builder: 1, release: 1 });
+  assert.deepEqual((await project.attempt()).messages, [`The Forge is already set up for ${project.repository}.`]);
+}
+
+// A finished setup whose final check now fails stops as a first run stopped by that failure would.
+for (const [name, report, message] of [
+  ['a named refusal', 'Factory refused: No bash to run the holdout fence (bash not found)',
+    'Setup stopped because the final check found that the bash shell is not installed on this server. Install bash before trying setup again.'],
+  ['an unknown failure', 'Traceback (most recent call last):\nRuntimeError: something broke',
+    'Setup stopped because the final check could not confirm that the build tools setup installed on this server work. Try setup again.']
+]) {
+  testCase(`a finished setup whose final check now fails with ${name} stops, then completes once fixed`);
+  const project = await finishedSetup(`final-check-${name.replaceAll(' ', '-')}`);
+  const failing = { doctor: async () => { throw Object.assign(new Error('Command failed'), { stderr: report }); } };
+  const stopped = await project.attempt(failing);
+  assertStopped(stopped, [message, 'final-check'], project.retryState);
+  assert.deepEqual(stopped.messages, ['Using Claude Code to set up the Forge.', FORGE_APPS_KEPT, message]);
+  assert.deepEqual(stopped.prompts, []);
+  assert(!(await isPresent(join(project.stateDirectory, 'registration.json'))));
+  assertStopped(await project.attempt(failing), [message, 'final-check'], project.retryState);
+  const next = await project.attempt();
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual((await project.attempt()).messages, [`The Forge is already set up for ${project.repository}.`]);
+}
+
+testCase('a finished setup being set up again says the Apps are kept when it stops before reusing them');
+{
+  const project = await finishedSetup('repair-init-fails');
+  await rm(join(project.checkout, 'MISSION.md'));
+  const message = 'Setup stopped because the build tools it downloaded could not prepare the project on this server. Install the latest version of the Forge on this server before trying setup again.';
+  const stopped = await project.attempt({ init: async () => { throw new Error('python3 failed.'); } });
+  assertStopped(stopped, [message, 'initialization'], project.retryState);
+  assert.deepEqual(stopped.messages, ['Using Claude Code to set up the Forge.', FORGE_APPS_KEPT, message]);
+  assert(completedFor(project.repository)((await project.attempt()).messages.at(-1)));
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
 }
 
@@ -1712,7 +1779,7 @@ testCase('setup on a project that is already set up says so and changes nothing'
   assert.equal(result.alreadySetUp, true);
   assert.deepEqual(project.record.prompts, []);
   assert.equal(project.record.begins, 0);
-  assert(!project.record.calls.some(call => call.args.at(-1) === 'doctor'));
+  assert.deepEqual(project.record.calls.map(call => call.args), [['factory/consumer.py', 'doctor']]);
   assert.deepEqual(await readFile(project.missionPath), missionBefore);
   assert.deepEqual(project.record.messages, ['The Forge is already set up for owner/already-set-up.']);
 }
@@ -1726,6 +1793,9 @@ testCase('a project set up by an earlier release has its credentials moved');
   await mkdir(join(legacyCheckout, '.git'), { recursive: true });
   await mkdir(join(legacyCheckout, '.factory'), { recursive: true });
   await writeFile(join(legacyCheckout, '.factory/consumer.json'), '{}\n');
+  await mkdir(join(legacyCheckout, 'factory'), { recursive: true });
+  await writeFile(join(legacyCheckout, 'factory/consumer.py'), '# factory stand-in\n');
+  await writeFile(join(legacyCheckout, 'MISSION.md'), '# Mission\n\n## Project mission\n\nWhat this software is for: Purpose.\n\nWho uses it: Users.\n');
   await writePrivateJson(join(legacyState, 'registration.json'), { repository: 'owner/legacy-set-up', checkout: legacyCheckout, completed: true });
   for (const kind of ['builder', 'release']) {
     await writePrivateJson(join(legacyState, `${kind}-app.json`), credentials);
@@ -1836,7 +1906,6 @@ const appPages = [
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release'
 ];
-const FORGE_APPS_KEPT = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
 for (const [name, mission] of [
   ['unreadable-mission', {
     prepare: async ({ state }) => {
