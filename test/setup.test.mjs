@@ -2174,25 +2174,57 @@ for (const [file, stopAt, damagedMessage] of [
   assert.equal(await project.missionSections(), 1);
 }
 
-// An empty saved file is nothing saved: setup carries on as if it were missing, without calling it damaged.
-for (const [file, stopAt] of [['mission.json', 'final-check'], ['registration.json', undefined]]) {
-  testCase(`an empty ${file} reads as nothing saved`);
-  const repository = `owner/empty-${file.replace('.json', '')}`;
+// An empty registration record is nothing saved: setup carries on as if it were missing, without calling it damaged.
+testCase('an empty registration.json reads as nothing saved');
+{
+  const repository = 'owner/empty-registration';
   const project = await retryProject(repository);
-  if (stopAt) {
-    await assert.rejects(setupRepository(repository, project.options({ failAt: stopAt })),
-      error => error instanceof ReportedSetupError && error.message === stopAt);
-  } else {
-    assert.equal((await setupRepository(repository, project.options())).completed, true);
-  }
-  await writeFile(join(root, 'retry-state', 'projects', repository, file), '');
+  assert.equal((await setupRepository(repository, project.options())).completed, true);
+  await writeFile(join(root, 'retry-state', 'projects', repository, 'registration.json'), '');
   project.reset();
   assert.equal((await setupRepository(repository, project.options())).completed, true);
   assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
   assert(!project.record.messages.some(message => message.includes('damaged')), JSON.stringify(project.record.messages));
   assert.equal(project.record.begins, 0);
-  assert.deepEqual(project.record.prompts, file === 'mission.json' ? ['What is this software for?', 'Who uses it?'] : []);
+  assert.deepEqual(project.record.prompts, []);
   assert.equal(await project.missionSections(), 1);
+}
+
+// An empty saved mission answers file (#80) cannot be read: setup stops with one plain sentence after saying the
+// Apps are kept, never calls it damaged or names a path, and the next run asks both questions and finishes with
+// the same two Apps.
+testCase('an empty mission.json stops setup plainly, and the next run asks both questions and finishes');
+{
+  const repository = 'owner/empty-mission';
+  const project = await retryProject(repository);
+  const answersPath = join(root, 'retry-state', 'projects', repository, 'mission.json');
+  await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
+    error => error instanceof ReportedSetupError && error.message === 'final-check');
+  assert.equal(project.record.begins, 2);
+  await writeFile(answersPath, '');
+  project.reset();
+  await assert.rejects(setupRepository(repository, project.options({ answers: ['Second purpose.', 'Second users.'] })),
+    error => error instanceof ReportedSetupError && error.message === 'unreadable-mission-answers');
+  assert.deepEqual(project.record.messages.slice(-2), [
+    'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.',
+    'Setup stopped because its saved answers to the two setup questions on this server cannot be read. Try setup again, and it asks both questions again.'
+  ]);
+  assert.equal(project.record.messages.filter(message => message.startsWith('Setup stopped because')).length, 1);
+  for (const message of project.record.messages) {
+    assert(!message.includes('damaged'), message);
+    assertNoInternalText(message, root);
+  }
+  assert.equal(project.record.begins, 0);
+  assert.deepEqual(project.record.prompts, []);
+  project.reset();
+  const result = await setupRepository(repository, project.options({ answers: ['Second purpose.', 'Second users.'] }));
+  assert.equal(result.completed, true);
+  assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
+  assert.deepEqual(project.record.prompts, ['What is this software for?', 'Who uses it?']);
+  assert.equal(project.record.begins, 0);
+  assert.deepEqual(JSON.parse(await readFile(answersPath, 'utf8')), { purpose: 'Second purpose.', users: 'Second users.' });
+  assert.equal(await project.missionSections(), 1);
+  assert.match(await readFile(project.missionPath, 'utf8'), /What this software is for: Second purpose\.\n\nWho uses it: Second users\.\n$/);
 }
 
 // An App details file emptied after setup stopped at the final check, with both Apps installed: the rerun does
