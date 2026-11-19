@@ -7,17 +7,26 @@
 # as not run, and the total stays the same as on a passing run.
 # Prints "<n> of <m> pass" counting cases across all files (the factory's harness reads that line), where
 # <n> counts only cases that passed, and exits 1, naming the file and the case, when any case fails, a
-# file fails outside a case, a file reports no cases, or a file runs a different number of cases than it
-# says it has.
+# file fails outside a case, a file reports no cases, a file runs a different number of cases than it
+# says it has, or a file reaches for the network.
+# No test reaches the network: every file runs with test/offline first on PATH (a git that reaches only
+# repositories on this machine) and test/offline/no-network.mjs loaded into node, and each attempt they
+# refuse fails the file that made it, naming what it tried to reach.
 set -u
 cd "$(dirname "$0")/.."
+offline="$(pwd)/test/offline"
 pass=0
 total=0
 not_run=0
 failed=()
 skipped=()
 output="$(mktemp)"
-trap 'rm -f "$output"' EXIT
+network="$(mktemp)"
+trap 'rm -f "$output" "$network"' EXIT
+export FORGE_TEST_NETWORK_LOG="$network"
+export PATH="$offline:$PATH"
+export GIT_ALLOW_PROTOCOL=file
+export NODE_OPTIONS="--import \"$offline/no-network.mjs\"${NODE_OPTIONS:+ $NODE_OPTIONS}"
 shopt -s nullglob
 for t in test/*.test.sh test/*.test.mjs; do
   echo "== $t"
@@ -33,6 +42,8 @@ for t in test/*.test.sh test/*.test.mjs; do
   file_total=$reached
   file_failures=${#failed[@]}
   while IFS= read -r name; do failed+=("$t: $name"); done < <(sed -n 's/^case failed: //p' "$output")
+  while IFS= read -r attempt; do failed+=("$t: reached for the network: $attempt"); done <"$network"
+  : >"$network"
   if [ "$status" -ne 0 ] && [ "$failing" -eq 0 ]; then
     failed+=("$t: outside any case (exit $status)")
   elif [ "$status" -eq 0 ] && [ "$passed" -eq 0 ]; then

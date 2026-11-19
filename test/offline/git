@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# git for the test suite (test/run.sh puts this folder first on PATH): the same git, allowed to reach only
+# repositories on this machine. A command that would reach the network is refused by git itself before it
+# connects, and is written to $FORGE_TEST_NETWORK_LOG so test/run.sh fails the test file that ran it, even
+# when the code under test turns the refusal into an ordinary stop.
+set -eu
+here="$(cd "$(dirname "$0")" && pwd)"
+real=""
+IFS=: read -ra dirs <<<"$PATH"
+for dir in "${dirs[@]}"; do
+  if [ -n "$dir" ] && [ -x "$dir/git" ] && [ "$(cd "$dir" 2>/dev/null && pwd)" != "$here" ]; then
+    real="$dir/git"
+    break
+  fi
+done
+if [ -z "$real" ]; then
+  echo "The test suite's git stand-in found no git on PATH." >&2
+  exit 127
+fi
+export GIT_ALLOW_PROTOCOL=file
+errors="$(mktemp)"
+status=0
+"$real" "$@" 2>"$errors" || status=$?
+cat "$errors" >&2
+if grep -q "^fatal: transport '[^']*' not allowed" "$errors"; then
+  echo "git $*" >>"${FORGE_TEST_NETWORK_LOG:-/dev/null}"
+fi
+rm -f "$errors"
+exit "$status"
