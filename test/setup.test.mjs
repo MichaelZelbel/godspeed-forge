@@ -898,13 +898,14 @@ function standInGithub(options = {}) {
   return { counts, live, installs, onGithub, github };
 }
 
-// doctor, when given, runs before the stand-in final check and fails it by throwing.
-async function setupAttempt(repository, stateDirectory, github, { doctor } = {}) {
+// doctor and init, when given, run before the stand-in final check or build tools install and fail it by throwing.
+async function setupAttempt(repository, stateDirectory, github, { doctor, init } = {}) {
   const attemptMessages = [];
   const prompts = [];
   const retryRun = async (command, args, options) => {
     if (command === 'git' && args[0] === 'remote') return { stdout: `https://github.com/${repository}.git\n` };
     if (args.at(-1) === 'doctor') await doctor?.();
+    if (args.at(-1) === 'init') await init?.();
     return run(command, args, options);
   };
   try {
@@ -1436,6 +1437,18 @@ for (const [name, report, message] of [
   assert(completedFor(project.repository)(next.messages.at(-1)));
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
   assert.deepEqual((await project.attempt()).messages, [`The Forge is already set up for ${project.repository}.`]);
+}
+
+testCase('a finished setup being set up again says the Apps are kept when it stops before reusing them');
+{
+  const project = await finishedSetup('repair-init-fails');
+  await rm(join(project.checkout, 'MISSION.md'));
+  const message = 'Setup stopped because the build tools it downloaded could not prepare the project on this server. Install the latest version of the Forge on this server before trying setup again.';
+  const stopped = await project.attempt({ init: async () => { throw new Error('python3 failed.'); } });
+  assertStopped(stopped, [message, 'initialization'], project.retryState);
+  assert.deepEqual(stopped.messages, ['Using Claude Code to set up the Forge.', FORGE_APPS_KEPT, message]);
+  assert(completedFor(project.repository)((await project.attempt()).messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
 }
 
 testCase('a finished setup with GitHub unreachable changes nothing, and with nothing missing says it is set up');
