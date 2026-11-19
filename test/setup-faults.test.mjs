@@ -5,7 +5,7 @@
 // code (as real network failures do), and GitHub calls and questions as if the input closed. Every place in lib/ that reads or writes a file, runs a command, calls GitHub, asks a question
 // or takes that hold must be made to fail by some scenario here, so a new step that no scenario reaches fails
 // this test.
-// test cases: 14
+// test cases: 15
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -140,6 +140,8 @@ function standInGithub() {
       return credentialsFor(code);
     },
     install: async () => true,
+    // Whether an App on setup's list is still on GitHub: there while the owner has not deleted its role's App.
+    appExists: async ({ slug }) => world.live[slug.match(/builder|release/)[0]] > 0,
     // What GitHub says about an App on a finished setup: still there while the owner has not deleted it.
     appStatus: async ({ kind }) => world.live[kind] > 0 ? 'installed' : 'app-missing'
   };
@@ -230,6 +232,12 @@ const SCENARIOS = [
     await writeJson(join(credentialFolder, 'release-app.json'), '{"id": 1, "pem": "PRIV');
   } },
   { name: 'abandoned page', finish: 'complete', behaviour: { noCallback: 'release' } },
+  { name: 'App details lost', finish: 'complete', arrange: async world => {
+    await setup(world);
+    await rm(join(credentialFolder, 'builder-app.json'));
+    await rm(join(projectState, 'builder-installation.json'));
+    await rm(join(projectState, 'registration.json'));
+  } },
   // #80: an empty saved answers file, found after the Apps exist, and recovered from the project's mission.
   { name: 'empty mission answers', finish: 'complete', arrange: async world => {
     await setup(world, { behaviour: { doctor: 'fail' } });

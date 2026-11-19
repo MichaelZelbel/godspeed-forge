@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { access, chmod, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
@@ -357,16 +358,15 @@ if (process.argv[2] === 'command') {
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-deleted-app-'));
     const first = await interrupt(root, 'release-callback', 'closes');
     assertStopped(first, { code: 1, sentence: INPUT_CLOSED, kept: BUILDER_KEPT });
-    const second = await interrupt(root, 'release-callback', 'closes', { deleted: ['builder'] });
+    // Setup asks GitHub about every App it holds before it shows any App page, so the stop has to come
+    // before that: here, while it downloads the build tools.
+    const second = await interrupt(root, 'download', 'SIGINT', { deleted: ['builder'] });
     assert.equal(second.stderr, '', 'setup asked GitHub about the deleted App before it stopped');
-    assert.equal(second.code, 1);
+    assert.equal(second.code, 130);
     assert.deepEqual(second.lines, [
       'Using Claude Code to set up the Forge.',
-      reopened('release'),
-      'Create the release App in your browser: https://example.test/Forge release',
-      'Paste the address your browser shows: ',
       BUILDER_KEPT,
-      INPUT_CLOSED
+      INTERRUPTED
     ]);
     assert(!second.lines.some(line => /already on your GitHub account|kept there/.test(line)));
   }
@@ -402,8 +402,12 @@ if (process.argv[2] === 'command') {
     assert(!mission.includes('Not asked.'));
   }
 
+  // GitHub's App check for the real command: every App it asks about is on GitHub and installed, so the run never
+  // reaches the real GitHub. Loaded before the command with --import.
+  const GITHUB_STAND_IN = `data:text/javascript,${encodeURIComponent('globalThis.fetch = async () => ({ status: 200, ok: true, headers: new Headers(), json: async () => ({}) });')}`;
+
   // The real command in a home folder of its own under root, with the agent, git, gh and the factory commands
-  // stood in for on its PATH. In a terminal (pty) it runs under script(1). onOutput sees all it printed so far
+  // stood in for on its PATH, and GitHub's answers about an App stood in for by GITHUB_STAND_IN. In a terminal (pty) it runs under script(1). onOutput sees all it printed so far
   // and may answer through the child. Returns what it printed, with a terminal's carriage returns and control
   // sequences taken out, and its exit code.
   async function realCommand(root, onOutput, { pty = false } = {}) {
@@ -419,7 +423,7 @@ if (process.argv[2] === 'command') {
       await writeFile(join(bin, name), `#!/bin/bash\n${body}\n`);
       await chmod(join(bin, name), 0o755);
     }
-    const command = [process.execPath, fileURLToPath(new URL('../bin/godspeed-forge.mjs', import.meta.url)), 'setup', 'owner/repo'];
+    const command = [process.execPath, `--import=${GITHUB_STAND_IN}`, fileURLToPath(new URL('../bin/godspeed-forge.mjs', import.meta.url)), 'setup', 'owner/repo'];
     const env = { ...process.env, HOME: root, PATH: `${bin}:${process.env.PATH}` };
     const child = pty
       ? spawn('script', ['-qec', command.map(word => `'${word}'`).join(' '), '/dev/null'], { env, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -444,7 +448,9 @@ if (process.argv[2] === 'command') {
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-input-closes-'));
     const credentialDirectory = join(root, '.godspeed/forge/state/credentials/owner/repo');
     await mkdir(credentialDirectory, { recursive: true });
-    await writeFile(join(credentialDirectory, 'builder-app.json'), JSON.stringify(credentials), { mode: 0o600 });
+    // A key that signs, so setup's check of the saved builder App reaches the stand-in GitHub.
+    const pem = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs1', format: 'pem' });
+    await writeFile(join(credentialDirectory, 'builder-app.json'), JSON.stringify({ ...credentials, pem }), { mode: 0o600 });
     const { stdout, stderr, code } = await realCommand(root, (printed, child) => {
       if (printed.endsWith('installed only on owner/repo: ')) child.stdin.write('yes\n');
       if (printed.endsWith('or no if it is your personal account: ')) child.stdin.end();
