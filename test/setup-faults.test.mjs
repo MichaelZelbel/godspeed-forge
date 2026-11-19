@@ -52,7 +52,8 @@ for (const [path, text] of sources) {
 }
 
 // Functions that continue by design after the failure of a step inside them, and the one line that does.
-const ABSORBED = ['pathExists', 'findSignedInAgent', 'stopIfDamaged', 'replaceMarkedDownload', 'discardPending', 'updatePending', 'prepareFactory'];
+// finishedProjectWorks (#74): a finished setup whose mission or final check cannot be confirmed is set up again.
+const ABSORBED = ['pathExists', 'findSignedInAgent', 'stopIfDamaged', 'replaceMarkedDownload', 'discardPending', 'updatePending', 'prepareFactory', 'finishedProjectWorks'];
 const ABSORBED_SITES = [siteOf('setup.mjs', ".then(entry => entry.isDirectory(), () => false)")];
 
 function siteOf(module, text) {
