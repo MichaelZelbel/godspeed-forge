@@ -4,6 +4,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 . test/cases.sh
+# test cases: 3
 test_case "LICENSE is the MIT license"
 head -1 LICENSE | grep -qx "MIT License" || { echo "LICENSE is not the MIT license"; exit 1; }
 test_case "LICENSE carries the copyright line"
