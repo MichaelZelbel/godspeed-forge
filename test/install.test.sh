@@ -2,6 +2,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 . test/cases.sh
+# test cases: 5
 
 test_case "the installer requires Godspeed 2.0.0-beta.24"
 grep -q 'MINIMUM_GODSPEED="2.0.0-beta.24"' install.sh
