@@ -2231,6 +2231,54 @@ testCase('after mission answers were not saved, the next run asks once and saves
   assert.equal(await project.missionSections(), 1);
 }
 
+// The first mission answer is saved, then the second cannot be (#84): the stop says only that answer was not kept
+// and that the next try asks that question again, which is all the next run asks. When the first save fails, the
+// stop is the one above and the next run asks both questions.
+const USERS_NOT_SAVED = 'Setup stopped because it could not save your answer to \'Who uses it?\' on this server, so only that answer was not kept. Let setup write to the folder where the Forge keeps its settings, then try setup again; it asks that question again.';
+const PURPOSE_NOT_SAVED = 'Setup stopped because it could not save your answer to \'What is this software for?\' on this server, so only that answer was not kept. Let setup write to the folder where the Forge keeps its settings, then try setup again; it asks that question again.';
+for (const { name, lockAt, saved, message, kept, prompts } of [
+  { name: 'second-answer-not-saved', lockAt: 'Who uses it?', message: USERS_NOT_SAVED,
+    kept: { purpose: 'First purpose.' }, prompts: ['Who uses it?'] },
+  { name: 'first-answer-not-saved', lockAt: 'What is this software for?', message: MISSION_NOT_SAVED,
+    kept: null, prompts: ['What is this software for?', 'Who uses it?'] },
+  { name: 'purpose-not-saved-after-users', lockAt: 'What is this software for?', saved: { users: 'Saved users.' },
+    message: PURPOSE_NOT_SAVED, kept: { users: 'Saved users.' }, prompts: ['What is this software for?'] }
+]) {
+  testCase(`mission answer not saved: ${name} stops with exit code 1 and the retry asks only what was not kept`);
+  const repository = `owner/${name}`;
+  const project = await retryProject(repository);
+  const stateDirectory = join(root, 'retry-state/projects/owner', name);
+  const missionAnswersPath = join(stateDirectory, 'mission.json');
+  if (saved) {
+    await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+    await writeFile(missionAnswersPath, `${JSON.stringify(saved)}\n`);
+  }
+  const options = project.options();
+  const ask = options.prompt;
+  let code;
+  try {
+    code = await setupCommand(repository, {
+      ...options,
+      prompt: async question => {
+        if (question === lockAt) await chmod(stateDirectory, 0o500);
+        return ask(question);
+      }
+    });
+  } finally {
+    await chmod(stateDirectory, 0o700);
+  }
+  assert.equal(code, 1);
+  assert.deepEqual(project.record.messages.slice(-2), [FORGE_APPS_KEPT, message]);
+  assert.equal(project.record.messages.filter(text => text.startsWith('Setup stopped because')).length, 1);
+  if (kept) assert.deepEqual(JSON.parse(await readFile(missionAnswersPath, 'utf8')), kept);
+  else assert(!(await isPresent(missionAnswersPath)));
+  project.reset();
+  assert.equal(await setupCommand(repository, project.options({ answers: ['Second answer.', 'Third answer.'] })), 0);
+  assert.deepEqual(project.record.prompts, prompts);
+  const final = JSON.parse(await readFile(missionAnswersPath, 'utf8'));
+  for (const [key, value] of Object.entries(kept ?? {})) assert.equal(final[key], value);
+}
+
 // A mission question left empty, after the Apps exist: a plain stop that says the Apps are kept.
 for (const [name, answers] of [['empty-purpose', ['', 'Users.']], ['empty-users', ['Purpose.', '  ']]]) {
   await stopThenRetry(name, {
