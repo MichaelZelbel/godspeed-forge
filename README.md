@@ -52,7 +52,10 @@ and never a key, in that repository's project checkout at `.git/godspeed-forge-a
 commits or pushes. The list outlasts the private state being lost or restored from an older copy. Before
 setup creates an App, it asks GitHub, through this server's `gh` sign-in, about the App the list names for
 that role; when that App is still on GitHub but this server can no longer use it, setup creates nothing and
-stops, naming the App to delete.
+stops, naming the App to delete. Before setup uses an App whose details or keys this server holds, it also
+asks GitHub whether that App is still there and installed, so a deleted App is created again and an
+uninstalled one is installed again instead of being reported as set up. When GitHub cannot be reached or
+refuses either question, setup changes nothing and stops, and the next run asks again.
 
 After upgrading a server that set up repositories with an earlier release, run setup again for each
 repository. That setup run moves its existing App credentials out of project state and into the private

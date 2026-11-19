@@ -20,7 +20,7 @@ import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 183
+// test cases: 188
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -80,7 +80,8 @@ await setupRepository('owner/repo', {
   github: {
     begin: async manifest => { manifests.push(manifest); return { url: `https://example.test/${manifest.name}` }; },
     callback: async () => 'code', exchange: async () => credentials,
-    install: async details => { installations.push(details); return true; }
+    install: async details => { installations.push(details); return true; },
+    appStatus: async () => 'installed'
   },
   prompt: async () => ['Keep releases dependable.', 'Small software teams.'][answer++],
   output: value => messages.push(value)
@@ -108,7 +109,8 @@ await setupRepository('owner/codex-repo', {
   github: {
     begin: async manifest => ({ url: `https://example.test/${manifest.name}` }),
     callback: async () => 'code', exchange: async () => credentials,
-    install: async () => true
+    install: async () => true,
+    appStatus: async () => 'installed'
   },
   prompt: async () => ['Keep releases dependable.', 'Small software teams.'][codexAnswer++],
   output: value => codexMessages.push(value)
@@ -235,7 +237,8 @@ await assert.rejects(setupRepository('owner/failing-doctor', {
   },
   github: {
     begin: async () => ({ url: 'https://example.test/create' }), callback: async () => 'code', exchange: async () => credentials,
-    install: async () => true
+    install: async () => true,
+    appStatus: async () => 'installed'
   },
   prompt: async () => ['Purpose.', 'Users.'][failedAnswer++], output: value => failedMessages.push(value)
 }), error => error instanceof ReportedSetupError && error.message === 'final-check');
@@ -277,7 +280,8 @@ const retryOptions = output => {
       exists: async path => { try { await stat(path); return true; } catch { return false; } },
       begin: async manifest => { retryBegins += 1; return { url: `https://example.test/${manifest.name}` }; },
       callback: async () => 'code', exchange: async () => credentials,
-      install: async () => { retryInstalls += 1; return true; }
+      install: async () => { retryInstalls += 1; return true; },
+      appStatus: async () => 'installed'
     },
     prompt: async () => ['Purpose.', 'Users.'][retryAnswer++],
     output
@@ -290,7 +294,7 @@ assert.deepEqual(retryFailed, [
   'Using Claude Code to set up the Forge.',
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release',
-  'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.',
+  'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.',
   'Setup stopped because the final check found that the guard keeping your project\'s hidden test scenarios away from the coding agent does not work on this server, because the python command there does not run Python 3. Install the python-is-python3 package on this server before trying setup again.'
 ]);
 for (const hidden of ['Factory refused', 'Holdout fence', 'consumer.py', 'Traceback', 'ghs_report_secret', 'report']) {
@@ -320,8 +324,8 @@ testCase('a stop at the final check says the Apps are kept and retrying adds non
 const appsKeptState = join(root, 'apps-kept-state');
 const appsKeptProjects = join(root, 'apps-kept-projects');
 // The kept-Apps line when only the builder App (named as in the stand-in's credentials, or by default) exists.
-const builderKept = name => `Your GitHub App "${name}" for this repository is already on your GitHub account and is kept there. Trying setup again uses it instead of creating a new one.`;
-const APPS_KEPT_MESSAGE = 'Your two GitHub Apps for this repository, "Acme Forge builder" and "Acme Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
+const builderKept = name => `Setup kept the details of your GitHub App "${name}" for this repository on this server. Trying setup again checks whether it is still on your GitHub account and uses it if it is, instead of creating a new one.`;
+const APPS_KEPT_MESSAGE = 'Setup kept the details of your two GitHub Apps for this repository, "Acme Forge builder" and "Acme Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.';
 let appsKeptCheckPasses = false;
 const appsKeptBegins = {};
 const appsKeptOptions = output => {
@@ -346,7 +350,8 @@ const appsKeptOptions = output => {
       },
       callback: async flow => flow.name,
       exchange: async name => ({ ...credentials, name: name === 'Forge builder' ? 'Acme Forge builder' : 'Acme Forge release' }),
-      install: async () => true
+      install: async () => true,
+      appStatus: async () => 'installed'
     },
     prompt: async () => ['Purpose.', 'Users.'][appsKeptAnswer++],
     output
@@ -454,7 +459,7 @@ for (const [index, [report, expected]] of refusalCases.entries()) {
         return { stdout: '' };
       }
     },
-    github: { begin: async () => ({ url: 'https://example.test/create' }), callback: async () => 'code', exchange: async () => credentials, install: async () => true },
+    github: { begin: async () => ({ url: 'https://example.test/create' }), callback: async () => 'code', exchange: async () => credentials, install: async () => true, appStatus: async () => 'installed' },
     prompt: async () => ['Purpose.', 'Users.'][answer++],
     output: value => outputs.push(value)
   }), error => error instanceof ReportedSetupError && error.message === 'final-check', repository);
@@ -520,7 +525,7 @@ for (const [name, damage, report, expected] of replaceCases) {
           return retryRun(command, args, runOptions);
         }
       },
-      github: { begin: async () => ({ url: 'https://example.test/create' }), callback: async () => 'code', exchange: async () => credentials, install: async () => true },
+      github: { begin: async () => ({ url: 'https://example.test/create' }), callback: async () => 'code', exchange: async () => credentials, install: async () => true, appStatus: async () => 'installed' },
       prompt: async () => ['Purpose.', 'Users.'][answer++],
       output: value => outputs.push(value)
     };
@@ -574,7 +579,7 @@ testCase('a refusal not about the download leaves it alone, and only download fo
     await assert.rejects(setupRepository(repository, {
       config: { ...defaults(root), projectsRoot: join(caseRoot, 'projects') }, paths: { state: join(caseRoot, 'state') },
       commands: { run: run(source, report) },
-      github: { begin: async () => ({ url: 'https://example.test/create' }), callback: async () => 'code', exchange: async () => credentials, install: async () => true },
+      github: { begin: async () => ({ url: 'https://example.test/create' }), callback: async () => 'code', exchange: async () => credentials, install: async () => true, appStatus: async () => 'installed' },
       prompt: async () => ['Purpose.', 'Users.'][answer++],
       output: () => {}
     }), error => error instanceof ReportedSetupError && error.message === 'final-check');
@@ -653,7 +658,8 @@ await assert.rejects(setupRepository('owner/abandoned-release-page', {
     begin: async manifest => { await abandonedReleaseAdapter.begin(manifest); return { url: 'https://example.test/create' }; },
     callback: async flow => abandonedReleaseKinds.length === 0 ? 'code' : abandonedReleaseAdapter.callback(flow),
     exchange: async () => credentials,
-    install: async ({ kind }) => { abandonedReleaseKinds.push(kind); return true; }
+    install: async ({ kind }) => { abandonedReleaseKinds.push(kind); return true; },
+    appStatus: async () => 'installed'
   },
   prompt: async () => { throw new Error('must not prompt'); },
   output: value => abandonedReleaseOutputs.push(value)
@@ -680,7 +686,8 @@ try {
       begin: async () => ({ url: 'https://example.test/create' }),
       callback: async () => 'code',
       exchange: async () => { await chmod(unwritableCredentials, 0o500); return credentials; },
-      install: async () => { throw new Error('must not install unsaved credentials'); }
+      install: async () => { throw new Error('must not install unsaved credentials'); },
+      appStatus: async () => 'installed'
     },
     prompt: async () => { throw new Error('must not prompt'); },
     output: value => unwritableOutputs.push(value)
@@ -740,7 +747,8 @@ for (const refusedKind of ['builder', 'release']) {
     github: {
       begin: async () => ({ url: 'https://example.test/create' }),
       callback: async () => 'code', exchange: async () => credentials,
-      install: async ({ kind }) => kind !== refusedKind
+      install: async ({ kind }) => kind !== refusedKind,
+      appStatus: async () => 'installed'
     }
   }), new RegExp(`Install the ${refusedKind} App`));
   await assert.rejects(stat(join(refusedState, `${refusedKind}-installation.json`)));
@@ -754,7 +762,8 @@ await assert.rejects(createApps({ checkout: join(root, 'direct-checkouts', '1'),
   github: {
     begin: async () => ({ url: 'https://example.test/create' }),
     callback: async () => 'code', exchange: async () => ({ id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' }),
-    install: async () => { throw new Error('must not install incomplete credentials'); }
+    install: async () => { throw new Error('must not install incomplete credentials'); },
+    appStatus: async () => 'installed'
   }
 }), /did not return the builder App credentials/);
 await assert.rejects(stat(join(incompleteCredentialsState, 'credentials/builder-app.json')));
@@ -772,7 +781,8 @@ await createApps({ checkout: join(root, 'direct-checkouts', '2'),
   github: {
     exists: async path => { try { await stat(path); return true; } catch { return false; } },
     begin: async () => { throw new Error('must not create completed Apps'); },
-    install: async () => { throw new Error('must not reinstall completed Apps'); }
+    install: async () => { throw new Error('must not reinstall completed Apps'); },
+    appStatus: async () => 'installed'
   }
 });
 for (const kind of ['builder', 'release']) {
@@ -793,7 +803,8 @@ await createApps({ checkout: join(root, 'direct-checkouts', '3'),
     exists: async path => { try { await stat(path); return true; } catch { return false; } },
     begin: async manifest => ({ url: `https://example.test/${manifest.name}` }),
     callback: async () => 'code', exchange: async () => ({ ...credentials, slug: 'release-slug' }),
-    install: async ({ kind }) => { resumed.push(kind); return true; }
+    install: async ({ kind }) => { resumed.push(kind); return true; },
+    appStatus: async () => 'installed'
   }
 });
 assert.deepEqual(resumed, ['builder', 'release']);
@@ -815,7 +826,8 @@ await assert.rejects(createApps({ checkout: join(root, 'direct-checkouts', '4'),
       assert.equal(kind, 'builder');
       assert.deepEqual(installed, currentCredentials);
       return false;
-    }
+    },
+    appStatus: async () => 'installed'
   }
 }), /Install the builder App/);
 await assert.rejects(stat(join(duplicateState, 'builder-app.json')));
@@ -827,7 +839,7 @@ await writePrivateJson(join(malformedState, 'builder-app.json'), { id: 12345, pe
 await assert.rejects(createApps({ checkout: join(root, 'direct-checkouts', '5'),
   repository: 'owner/repo', stateDirectory: malformedState,
   credentialDirectory: malformedCredentials, output: () => {},
-  github: { install: async () => { throw new Error('must not install malformed credentials'); } }
+  github: { install: async () => { throw new Error('must not install malformed credentials'); }, appStatus: async () => 'installed' }
 }), error => error instanceof AppSetupStop && error.reason === 'damaged' && error.kind === 'builder');
 await assert.rejects(stat(join(malformedState, 'builder-app.json')));
 await assert.rejects(stat(join(malformedCredentials, 'builder-app.json')));
@@ -846,7 +858,8 @@ try {
     credentialDirectory: inaccessibleCredentials, output: () => {},
     github: {
       begin: async () => { throw new Error('must not recreate inaccessible credentials'); },
-      install: async () => { throw new Error('must not install inaccessible credentials'); }
+      install: async () => { throw new Error('must not install inaccessible credentials'); },
+      appStatus: async () => 'installed'
     }
   }), error => error.code === 'EACCES');
 } finally {
@@ -865,11 +878,12 @@ assert.deepEqual(stopped, ['Setup stopped because neither Claude Code nor Codex 
 await assert.rejects(stat(emptyRoot));
 
 // deleted and uninstalled name the Apps GitHub answers for as gone from the account or from the repository;
-// unreachable names the Apps whose check fails as if GitHub could not be reached.
+// unreachable names the Apps whose check fails as if GitHub could not be reached; refused those whose check
+// GitHub refuses.
 function standInGithub(options = {}) {
   const counts = { builder: 0, release: 0 };
   const installs = { builder: 0, release: 0 };
-  const onGithub = { deleted: new Set(), clockRejected: new Set(), keyRejected: new Set(), uninstalled: new Set(), unreachable: new Set() };
+  const onGithub = { deleted: new Set(), clockRejected: new Set(), keyRejected: new Set(), uninstalled: new Set(), unreachable: new Set(), refused: new Set() };
   const live = { builder: 0, release: 0 };
   const pending = { ...options };
   const usedCodes = new Set();
@@ -901,10 +915,12 @@ function standInGithub(options = {}) {
     appExists: async ({ slug }) => {
       const kind = slug.split('-')[1];
       if (onGithub.unreachable.has(kind)) throw new Error('network unreachable');
+      if (onGithub.refused.has(kind)) throw Object.assign(new Error('refused'), { refused: true });
       return kind in live && live[kind] > 0 && !onGithub.deleted.has(kind) && slug === `code-${kind}-${counts[kind]}`;
     },
     appStatus: async ({ kind }) => {
       if (onGithub.unreachable.has(kind)) throw new Error('network unreachable');
+      if (onGithub.refused.has(kind)) throw Object.assign(new Error('refused'), { refused: true });
       if (onGithub.deleted.has(kind)) return 'app-missing';
       if (onGithub.clockRejected.has(kind)) return 'clock-rejected';
       if (onGithub.keyRejected.has(kind)) return 'key-rejected';
@@ -1433,12 +1449,13 @@ const appGoneStops = {
   gone: (kind, repository) => [`Setup stopped because the ${kind} App for ${repository} is no longer on your GitHub account. Try setup again, which creates it again; if your GitHub App settings still list a ${kind} App for ${repository}, delete it first.`, 'app-missing'],
   uninstalled: (kind, repository) => [`Setup stopped because the ${kind} App is no longer installed on ${repository}. Try setup again, which asks you to install it again.`, 'app-not-installed'],
   unchecked: (kind, repository) => [`Setup stopped because GitHub could not be reached to check the ${kind} App for ${repository}. Restore this server's access to GitHub before trying setup again.`, 'github-check'],
+  refused: (kind, repository) => [`Setup stopped because GitHub refused setup's request to check the ${kind} App for ${repository}, so setup changed nothing. Try setup again; if GitHub refuses again, check in your GitHub settings that the ${kind} App is still installed on ${repository}.`, 'github-refused'],
   clock: CLOCK_STOP,
   keyRejected: KEY_REJECTED_STOP,
   buildTools: repository => [`Setup stopped because the build tools setup installed in the project folder for ${repository} on this server are missing. Try setup again, which installs them again.`, 'factory-missing']
 };
 
-const FORGE_APPS_KEPT = 'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.';
+const FORGE_APPS_KEPT = 'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.';
 
 async function finishedSetup(name) {
   const repository = `owner/${name}`;
@@ -1793,6 +1810,60 @@ testCase('an App on setup\'s list that GitHub cannot be asked about stops setup,
   assert.equal(await readFile(appRecordPath(project), 'utf8'), before);
 }
 
+testCase('an App on setup\'s list that GitHub refuses to be asked about stops setup, which creates nothing and changes nothing');
+{
+  const project = await finishedSetup('record-refused');
+  await rm(join(project.stateDirectory, 'registration.json'));
+  await rm(join(project.stateDirectory, 'builder-installation.json'));
+  await rm(join(project.credentialDirectory, 'builder-app.json'));
+  const before = await readFile(appRecordPath(project), 'utf8');
+  project.standIn.onGithub.refused.add('builder');
+  const refusedStop = [`Setup stopped because GitHub refused setup's request to check whether the builder App "Forge builder" for ${project.repository} is still on your GitHub account, so setup changed nothing. Check that this server's GitHub sign-in is the GitHub account that owns "Forge builder", then try setup again.`, 'app-record-refused'];
+  assertStopped(await project.attempt(), refusedStop, project.retryState);
+  assertStopped(await project.attempt(), refusedStop, project.retryState);
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.equal(await readFile(appRecordPath(project), 'utf8'), before);
+  // Once GitHub answers again, the App on the list is still there and setup names it instead of making a second.
+  project.standIn.onGithub.refused.clear();
+  assertStopped(await project.attempt(), RECORDED_STOP('builder', project.repository), project.retryState);
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+}
+
+testCase('state restored from an older copy after the owner deleted the App it holds never reports setup complete without that App');
+{
+  // The restored state still holds the builder App's details, its install record and the list's entry for it,
+  // but the owner deleted that App on GitHub. Setup must not finish with it: it stops, and the retry creates it.
+  const project = await finishedSetup('restored-deleted');
+  await rm(join(project.stateDirectory, 'registration.json'));
+  project.standIn.onGithub.deleted.add('builder');
+  project.standIn.live.builder -= 1;
+  const stopped = await project.attempt();
+  assertStopped(stopped, appGoneStops.gone('builder', project.repository), project.retryState);
+  assert(!stopped.messages.some(completedFor(project.repository)));
+  assert(!stopped.messages.some(line => line.includes('"Forge builder"')));
+  await assert.rejects(stat(join(project.credentialDirectory, 'builder-app.json')));
+  await assert.rejects(stat(join(project.stateDirectory, 'builder-installation.json')));
+  project.standIn.onGithub.deleted.clear();
+  const next = await project.attempt();
+  assert.equal(next.error, undefined);
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 2, release: 1 });
+  assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
+  assert.equal(JSON.parse(await readFile(appRecordPath(project), 'utf8')).builder.slug, 'code-builder-2');
+}
+
+testCase('state restored from an older copy whose App is no longer installed asks to install it again');
+{
+  const project = await finishedSetup('restored-uninstalled');
+  await rm(join(project.stateDirectory, 'registration.json'));
+  project.standIn.onGithub.uninstalled.add('builder');
+  const next = await project.attempt();
+  assert.equal(next.error, undefined);
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.deepEqual(project.standIn.installs, { builder: 2, release: 1 });
+}
+
 testCase('a damaged list of setup\'s Apps stops setup, which creates nothing, until the owner deletes it');
 {
   const project = await finishedSetup('record-damaged');
@@ -1968,6 +2039,37 @@ testCase('a finished setup with GitHub unreachable changes nothing, and with not
   assert.deepEqual(await saved(), before);
 }
 
+testCase('a finished setup whose App check GitHub refuses keeps every saved file, then says it is set up');
+{
+  // GitHub refuses the request to check the builder App (#82): the stop says so instead of calling GitHub
+  // unreachable, nothing is changed, and once GitHub answers the next run says it is set up.
+  const project = await finishedSetup('check-refused');
+  const before = await readTree(project.retryState);
+  project.standIn.onGithub.refused.add('builder');
+  assertStopped(await project.attempt(), appGoneStops.refused('builder', project.repository), project.retryState);
+  assert.deepEqual(await readTree(project.retryState), before);
+  project.standIn.onGithub.refused.clear();
+  const again = await project.attempt();
+  assert.equal(again.error, undefined);
+  assert.deepEqual(again.messages, [`The Forge is already set up for ${project.repository}.`]);
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+}
+
+testCase('kept App keys whose check GitHub refuses stay for the next run');
+{
+  const project = await keysKeptSetup('kept-refused');
+  const kept = await readFile(project.pendingPath, 'utf8');
+  project.standIn.onGithub.refused.add('builder');
+  assertStopped(await project.attempt(), appGoneStops.refused('builder', project.repository), project.retryState);
+  assert.deepEqual(project.standIn.installs, { builder: 0, release: 0 });
+  assert.equal(await readFile(project.pendingPath, 'utf8'), kept);
+  project.standIn.onGithub.refused.clear();
+  const next = await project.attempt();
+  assert.equal(next.error, undefined);
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+}
+
 testCase('an unfinished setup whose App details are gone does not skip that App');
 {
   // An unfinished setup whose App details are gone while the App's install record stays does not skip that App.
@@ -1986,7 +2088,7 @@ testCase('a finished setup\'s Apps are not created again');
 await createApps({ checkout,
   repository: 'owner/repo', stateDirectory: projectStatePath(state, 'owner/repo'),
   credentialDirectory: credentialPath(state, 'owner/repo'), output: () => {},
-  github: { exists: isPresent, begin: async () => { throw new Error('must not create'); } }
+  github: { exists: isPresent, begin: async () => { throw new Error('must not create'); }, appStatus: async () => 'installed' }
 });
 
 testCase('the GitHub adapter reads the App code and tells refused exchanges from failed ones');
@@ -2019,7 +2121,7 @@ testCase('the GitHub adapter reads the App code and tells refused exchanges from
   assert(requests.every(request => request.url === 'https://api.github.com/app-manifests/abc/conversions' && request.method === 'POST'));
 }
 
-testCase('the GitHub adapter asks this server\'s gh sign-in whether an App is on GitHub, and tells gone from no answer');
+testCase('the GitHub adapter asks this server\'s gh sign-in whether an App is on GitHub, and tells gone, refused and no answer apart');
 {
   const asked = [];
   const answers = [];
@@ -2039,13 +2141,17 @@ testCase('the GitHub adapter asks this server\'s gh sign-in whether an App is on
   answers.push(ghFailed('{"message":"Not Found","status":"404"}gh: Not Found (HTTP 404)\n'));
   assert.equal(await adapter.appExists({ slug: 'forge-builder' }), false);
   assert.equal(asked.at(-1)[0], 'gh');
-  for (const failure of [ghFailed('gh: Bad credentials (HTTP 401)\n'), ghFailed('gh: Server Error (HTTP 502)\n'), new Error('Could not run gh.')]) {
+  for (const failure of [ghFailed('gh: Bad credentials (HTTP 401)\n'), ghFailed('gh: Forbidden (HTTP 403)\n')]) {
     answers.push(failure);
-    await assert.rejects(adapter.appExists({ slug: 'forge-builder' }), /could not be reached/);
+    await assert.rejects(adapter.appExists({ slug: 'forge-builder' }), error => error.refused === true);
+  }
+  for (const failure of [ghFailed('gh: Server Error (HTTP 502)\n'), new Error('Could not run gh.')]) {
+    answers.push(failure);
+    await assert.rejects(adapter.appExists({ slug: 'forge-builder' }), error => /could not be reached/.test(error.message) && !error.refused);
   }
 }
 
-testCase('the GitHub adapter checks an App as the App itself and tells gone, clock-refused, key-refused, uninstalled and unreachable apart');
+testCase('the GitHub adapter checks an App as the App itself and tells gone, clock-refused, key-refused, uninstalled, refused and unreachable apart');
 {
   // appStatus asks GitHub as the App itself, signed with the App's saved key.
   const requests = [];
@@ -2092,8 +2198,13 @@ testCase('the GitHub adapter checks an App as the App itself and tells gone, clo
   assert.equal(await status(401), 'key-rejected');
   assert.equal(requests.length, 1);
   assert.equal(await status(200, 404), 'not-installed');
-  for (const answers of [[502], [200, 500], [new TypeError('fetch failed')]]) {
-    await assert.rejects(status(...answers), error => error.message === 'GitHub could not be reached to check the App.');
+  for (const answers of [[502], [200, 500], [200, 429], [new TypeError('fetch failed')]]) {
+    await assert.rejects(status(...answers), error => error.message === 'GitHub could not be reached to check the App.' && !error.refused);
+    responses.length = 0;
+  }
+  // A request GitHub refuses is not called a network problem (#82).
+  for (const answers of [[200, 401], [200, 403], [403]]) {
+    await assert.rejects(status(...answers), error => error.message === 'GitHub refused the request to check the App.' && error.refused === true);
     responses.length = 0;
   }
   requests.length = 0;
@@ -2304,7 +2415,8 @@ async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPr
         begin: async manifest => { begins += 1; return { url: `https://example.test/${manifest.name}` }; },
         callback: async () => 'code',
         exchange: async () => credentials,
-        install: async () => true
+        install: async () => true,
+        appStatus: async () => 'installed'
       },
       prompt: async () => {
         if (!failing) return ['Purpose.', 'Users.'][answer++];
@@ -2639,7 +2751,7 @@ for (const { name, mission, sentence, recovered, prompts, final } of [
   await assert.rejects(setupRepository(repository, project.options({ answers: ['Second purpose.', 'Second users.'] })),
     error => error instanceof ReportedSetupError && error.message === 'unreadable-mission-answers');
   assert.deepEqual(project.record.messages.slice(-2), [
-    'Your two GitHub Apps for this repository, "Forge builder" and "Forge release", are already on your GitHub account and are kept there. Trying setup again uses them instead of creating new ones.',
+    'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.',
     sentence
   ]);
   assert.equal(project.record.messages.filter(message => message.startsWith('Setup stopped because')).length, 1);
@@ -2823,7 +2935,7 @@ testCase('a damaged build tools folder is replaced and setup finishes');
         return run(command, args, runOptions);
       }
     },
-    github: { begin: async manifest => ({ url: `https://example.test/${manifest.name}` }), callback: async () => 'code', exchange: async () => credentials, install: async () => true },
+    github: { begin: async manifest => ({ url: `https://example.test/${manifest.name}` }), callback: async () => 'code', exchange: async () => credentials, install: async () => true, appStatus: async () => 'installed' },
     prompt: async () => ['Purpose.', 'Users.'][healAnswer++],
     output: value => healed.push(value)
   });
@@ -2973,7 +3085,7 @@ async function closedInputSetup(name, start) {
   assert.equal(UNEXPECTED_MESSAGE, 'Setup stopped because of a problem on this server that setup could not identify. Try setup again.');
 }
 
-// A repository name setup cannot use, and a settings file that is damaged or holds a secret.
+// A repository name setup cannot use, and a settings file that is damaged, empty or holds a secret.
 {
   const commandRoot = join(root, 'settings-stops');
   const config = join(commandRoot, 'config.json');
@@ -2989,10 +3101,12 @@ async function closedInputSetup(name, start) {
   assert.deepEqual(await command('owner/bad/name'), { code: 1, printed: [
     'Setup stopped because the repository name is not in the form owner/repository. Try setup again with a name in that form.'
   ] });
-  await writeFile(config, '{ damaged');
-  assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
-    'Setup stopped because the Forge\'s settings file on this server is damaged. Delete config.json in the folder where the Forge keeps its settings before trying setup again, and setup writes a fresh one.'
-  ] });
+  for (const damaged of ['{ damaged', '', '\n']) {
+    await writeFile(config, damaged);
+    assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
+      'Setup stopped because the Forge\'s settings file on this server is damaged. Delete config.json in the folder where the Forge keeps its settings before trying setup again, and setup writes a fresh one.'
+    ] });
+  }
   await writeFile(config, JSON.stringify({ commands: { github_token: 'ghs_secret' } }));
   assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
     'Setup stopped because the Forge\'s settings file on this server contains commands.github_token, which must never be kept there. Remove commands.github_token from config.json in the folder where the Forge keeps its settings before trying setup again.'
@@ -3060,7 +3174,7 @@ testCase('a pending record setup cannot read is not called a kept App');
     await chmod(pendingPath, 0o600);
   }
   assert.deepEqual(project.record.messages.slice(-2), [
-    'Your GitHub App "Forge builder" for this repository is already on your GitHub account and is kept there. Trying setup again uses it instead of creating a new one.',
+    'Setup kept the details of your GitHub App "Forge builder" for this repository on this server. Trying setup again checks whether it is still on your GitHub account and uses it if it is, instead of creating a new one.',
     'Setup stopped because it could not read the saved details of the builder App on this server. Let setup read the credentials folder in the Forge\'s private state folder before trying setup again.'
   ]);
   assert(!project.record.messages.some(message => message.includes('"Forge release"')));

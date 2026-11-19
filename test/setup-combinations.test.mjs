@@ -148,9 +148,15 @@ async function combination(name, finished, roles) {
     problems.push(`setup did not end complete: ${end}`);
   }
   if (lines.includes(UNEXPECTED_MESSAGE)) problems.push('setup stopped for a reason it could not identify');
-  for (const kind of world.deleted) {
+  // A complete setup uses, for each role, an App that is on GitHub, whether the owner deleted one or it was
+  // already gone.
+  for (const kind of KINDS) {
     const held = await readFile(join(context.credentialDirectory, `${kind}-app.json`), 'utf8').then(JSON.parse, () => null);
-    if (last.completed && !world.apps[kind].has(held?.slug)) problems.push(`after the owner deleted the ${kind} App, setup ended using one that is not on GitHub`);
+    if (last.completed && !world.apps[kind].has(held?.slug)) {
+      problems.push(world.deleted.has(kind)
+        ? `after the owner deleted the ${kind} App, setup ended using one that is not on GitHub`
+        : `setup ended complete using a ${kind} App that is not on GitHub`);
+    }
   }
   await rm(folder, { recursive: true, force: true });
   return problems;
