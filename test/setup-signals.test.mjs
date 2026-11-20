@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { access, chmod, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
@@ -76,7 +76,13 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = 
         await wait('exchange');
         if (spentCodes.includes(code)) throw Object.assign(new Error('GitHub refused the App code.'), { refused: true });
         // The builder App's details file is then written, and that write waits on its stand-in (see 'command').
-        if (waitAt === 'builder-details') onWait();
+        // The named pipe is made here, not when the command starts: a run sweeps left-behind temporaries
+        // beside its saves before anything else (#100), and it would take this one away first.
+        if (waitAt === 'builder-details') {
+          await mkdir(join(builderDetails(root), '..'), { recursive: true, mode: 0o700 });
+          execFileSync('mkfifo', [`${builderDetails(root)}.${process.pid}.tmp`]);
+          onWait();
+        }
         return credentials;
       },
       install: async ({ kind }) => { await wait(`${kind}-install`); return true; },
@@ -104,11 +110,6 @@ if (process.argv[2] === 'command') {
   // With "closes", the question is asked on real input that then closes: no answer ever comes, as when the
   // owner's input ends, and nothing keeps the process alive but setup itself.
   const [, , , root, waitAt, mode, deleted = ''] = process.argv;
-  // A named pipe where the builder App's details file is first written: that write waits until it is killed.
-  if (waitAt === 'builder-details') {
-    await mkdir(join(builderDetails(root), '..'), { recursive: true, mode: 0o700 });
-    execFileSync('mkfifo', [`${builderDetails(root)}.${process.pid}.tmp`]);
-  }
   const terminal = mode === 'terminal';
   const closes = mode === 'closes';
   const stream = new PassThrough();
@@ -278,12 +279,14 @@ if (process.argv[2] === 'command') {
     assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
   }
 
-  // Killed, terminated or interrupted after GitHub turned the builder App's code into its keys, while its details
-  // file is written (#61): the keys are already in the pending record, so the next run finishes that App from
-  // them even though GitHub no longer accepts the code, and creates no second App. A terminated or interrupted
-  // run says to try again, after saying the builder App, whose keys this server now holds, is kept, and ends
-  // within a few seconds though that write never finishes (#82): by its signal, which a shell reports as 143 or
-  // 130.
+  // Killed, terminated or interrupted after GitHub turned the builder App's code into its keys, while its
+  // details file is written (#61): the keys are already in the pending record, so the next run finishes that App
+  // from them even though GitHub no longer accepts the code, and creates no second App. A terminated or
+  // interrupted run says to try again, after saying the builder App, whose keys this server now holds, is kept,
+  // and ends within a few seconds though that write never finishes (#82): by its signal, which a shell reports
+  // as 143 or 130. A stopped run leaves no temporary of that save behind, when it can end its requests: right
+  // after SIGTERM or SIGINT there is none, and after SIGKILL there is exactly one, which the next run's sweep
+  // removes (#100). The saved file's content is the credentials either way.
   for (const [signal, sentence] of [['SIGKILL', null], ['SIGTERM', TERMINATED], ['SIGINT', INTERRUPTED]]) {
     testCase(`${signal} while the builder App details are being saved`);
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-details-'));
@@ -298,8 +301,17 @@ if (process.argv[2] === 'command') {
     } else {
       assert(!result.lines.some(line => line.startsWith('Setup stopped because')), result.lines.join('\n'));
     }
-    for (const name of await readdir(credentialDirectory)) if (name.endsWith('.tmp')) await rm(join(credentialDirectory, name));
+    const temporaries = async () => (await readdir(credentialDirectory)).filter(name => name.endsWith('.tmp'));
+    // The App record is saved in the project checkout's `.git` (lib/github-apps.mjs), the one swept folder inside
+    // the owner's own project: a temporary a killed save of it left there is swept by the next run too (#100).
+    const appRecordTemporary = join(root, 'projects', 'owner/repo', '.git', 'godspeed-forge-apps.json.2147483646.tmp');
+    await mkdir(join(appRecordTemporary, '..'), { recursive: true });
+    await writeFile(appRecordTemporary, '{"apps": []}');
+    if (sentence) assert.deepEqual(await temporaries(), [], 'the stopped run left its temporary behind');
+    else assert.equal((await temporaries()).length, 1, 'the killed run left no temporary for the next run to sweep');
     const next = await nextSetup(root, undefined, { spentCodes: ['builder-code'] });
+    assert.deepEqual(await temporaries(), [], 'the next run left the temporary behind');
+    assert(!(await isPresent(appRecordTemporary)), 'the next run left the App record temporary in the project checkout');
     assert.equal(next.error, undefined);
     assert(!next.messages.some(line => line.includes('delete')), next.messages.join('\n'));
     assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));

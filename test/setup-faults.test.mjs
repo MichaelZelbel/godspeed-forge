@@ -5,7 +5,7 @@
 // code (as real network failures do), and GitHub calls and questions as if the input closed. Every place in lib/ that reads or writes a file, runs a command, calls GitHub, asks a question
 // or takes that hold must be made to fail by some scenario here, so a new step that no scenario reaches fails
 // this test.
-// test cases: 15
+// test cases: 16
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -54,7 +54,9 @@ for (const [path, text] of sources) {
 
 // Functions that continue by design after the failure of a step inside them, and the one line that does.
 // finishedProjectWorks (#74): a finished setup whose mission or final check cannot be confirmed is set up again.
-const ABSORBED = ['pathExists', 'findSignedInAgent', 'stopIfDamaged', 'replaceMarkedDownload', 'discardPending', 'updatePending', 'prepareFactory', 'finishedProjectWorks'];
+// removeStaleTemporaries and discardTemporary (#100): the sweep for left-behind temporaries and the removal of
+// one are best effort; junk that cannot be removed must never stop a setup.
+const ABSORBED = ['pathExists', 'findSignedInAgent', 'stopIfDamaged', 'replaceMarkedDownload', 'discardPending', 'updatePending', 'prepareFactory', 'finishedProjectWorks', 'removeStaleTemporaries', 'discardTemporary'];
 const ABSORBED_SITES = [siteOf('setup.mjs', ".then(entry => entry.isDirectory(), () => false)")];
 
 function siteOf(module, text) {
@@ -242,6 +244,12 @@ const SCENARIOS = [
   { name: 'empty mission answers', finish: 'complete', arrange: async world => {
     await setup(world, { behaviour: { doctor: 'fail' } });
     await writeJson(join(projectState, 'mission.json'), '');
+  } },
+  // #100: a temporary a stopped earlier run left beside its saves; the own pid with no save in flight is
+  // stale by rule, so the run's sweep looks the folder up and removes the entry.
+  { name: 'leftover temporary', finish: 'complete', arrange: async world => {
+    await setup(world, { behaviour: { doctor: 'fail' } });
+    await writeJson(join(credentialFolder, `builder-app.json.${process.pid}.tmp`), '{"id": 1');
   } }
 ];
 
