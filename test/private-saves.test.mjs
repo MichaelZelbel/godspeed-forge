@@ -1,7 +1,7 @@
 // The sweep of temporaries left beside private saves, and the removal of a failed save's own temporary (#100):
 // the sweep must take only the temporaries of saves whose process is gone and that it can read, and never the
 // saved file itself, a temporary of a live save, or a file it cannot look up or read.
-// test cases: 2
+// test cases: 3
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -60,5 +60,29 @@ testCase('a save that fails removes its temporary');
     files.rename = rename;
     await rm(folder, { recursive: true, force: true });
   }
+}
+testCase('the sweep takes a temporary a real save wrote');
+{
+  const folder = await mkdtemp(join(tmpdir(), 'forge-private-saves-'));
+  const rename = files.rename;
+  const unlink = files.unlink;
+  // A save that cannot finish and cannot remove its own temporary: the rename fails and the unlink does
+  // nothing, so the temporary the writer itself built stays on disk for the sweep to take.
+  files.rename = async () => {
+    throw Object.assign(new Error(`EACCES: permission denied, rename '${folder}/builder-app.json'`), { code: 'EACCES' });
+  };
+  files.unlink = async () => {};
+  try {
+    await assert.rejects(writePrivateJson(join(folder, 'builder-app.json'), { id: 1 }), { code: 'EACCES' });
+  } finally {
+    files.rename = rename;
+    files.unlink = unlink;
+  }
+  assert.equal((await readdir(folder)).filter(name => name.endsWith('.tmp')).length, 1,
+    'the failed save left no temporary for the sweep to take');
+  await removeStaleTemporaries(folder);
+  assert.deepEqual((await readdir(folder)).filter(name => name.endsWith('.tmp')), [],
+    'the sweep left the temporary a real save wrote behind');
+  await rm(folder, { recursive: true, force: true });
 }
 console.log('private save tests pass');

@@ -302,10 +302,16 @@ if (process.argv[2] === 'command') {
       assert(!result.lines.some(line => line.startsWith('Setup stopped because')), result.lines.join('\n'));
     }
     const temporaries = async () => (await readdir(credentialDirectory)).filter(name => name.endsWith('.tmp'));
+    // The App record is saved in the project checkout's `.git` (lib/github-apps.mjs), the one swept folder inside
+    // the owner's own project: a temporary a killed save of it left there is swept by the next run too (#100).
+    const appRecordTemporary = join(root, 'projects', 'owner/repo', '.git', 'godspeed-forge-apps.json.2147483646.tmp');
+    await mkdir(join(appRecordTemporary, '..'), { recursive: true });
+    await writeFile(appRecordTemporary, '{"apps": []}');
     if (sentence) assert.deepEqual(await temporaries(), [], 'the stopped run left its temporary behind');
     else assert.equal((await temporaries()).length, 1, 'the killed run left no temporary for the next run to sweep');
     const next = await nextSetup(root, undefined, { spentCodes: ['builder-code'] });
     assert.deepEqual(await temporaries(), [], 'the next run left the temporary behind');
+    assert(!(await isPresent(appRecordTemporary)), 'the next run left the App record temporary in the project checkout');
     assert.equal(next.error, undefined);
     assert(!next.messages.some(line => line.includes('delete')), next.messages.join('\n'));
     assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
