@@ -66,6 +66,7 @@ What was tried before, newest last (do something different from it):
 - Never read or search the hidden holdouts or their tools, the factory's checkout, or any key or login.
 - Never change protected paths ({{PROTECTED}}). Every comment carries the marker `{{MARKER}}`.
 - Never mention people with `@`; never post on the owner issue #{{OWNER_ISSUE}}.
+- Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step.
 
 ## The ticket and the plan
 

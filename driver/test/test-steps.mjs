@@ -240,6 +240,8 @@ test("the driver reads the hidden checks' tools in its own process through the t
 
 test("`driver.mjs --step <name> --clear-halt <key> --owner-said ... --owner-ref ...` calls the step's own clearHalt and never run(); a manual run refuses while the step's unit is active, the scheduled child does not", async () => {
   const { cli } = await import("../driver.mjs");
+  const envBefore = { ...process.env }; // the command puts the settings into the environment: the other tests get theirs back
+  try {
   const src = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "settings.example.json"), "utf8"));
   const dir = tmp(); fs.mkdirSync(path.join(dir, "projects"));
   const d = src["driver.json"]; d.server.state_dir = path.join(dir, "state");
@@ -258,4 +260,5 @@ test("`driver.mjs --step <name> --clear-halt <key> --owner-said ... --owner-ref 
   assert.match(said.at(-1), /running right now/);
   assert.equal(await cli(["--step", "beta", "--scheduled", "--settings-dir", dir], { ...io, isActive: () => true }), 0, "the runner's own child holds the unit and runs");
   assert.equal(await cli(["--step", "nope", "--settings-dir", dir], io), 2);
+  } finally { for (const k of Object.keys(process.env)) if (!(k in envBefore)) delete process.env[k]; Object.assign(process.env, envBefore); }
 });

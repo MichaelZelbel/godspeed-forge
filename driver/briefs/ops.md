@@ -40,6 +40,7 @@ What was tried before, newest last (do something different from it):
 - Never change the hidden-check tools (the factory user's `.archon/holdout-tools/` folder) or the test
   machine's files: they belong to the tests helper. When they are the cause, say so in `cause`.
 - Never mention people with `@`.
+- Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step.
 
 ## Your report
 

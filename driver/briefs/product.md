@@ -114,6 +114,7 @@ What was tried before, newest last (read it first; do something different from i
 - Push only to an open pull request's branch or to a new branch named `release-driver/<topic>`. Do not
   use `/usr/bin/gh` or `/usr/bin/git` directly, `--no-verify`, or anything that gets around the guard.
 - Be economical: no full test suites, no app runs. At most one action per item.
+- Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step.
 
 ## Tools
 

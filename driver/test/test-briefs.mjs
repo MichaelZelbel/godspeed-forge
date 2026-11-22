@@ -2,6 +2,8 @@ import { TEST_ENV } from "./env.mjs";
 import test from "./harness.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const dir = new URL("../briefs/", import.meta.url);
 const NAMES = ["diagnose", "product", "tests", "decide", "michael", "feasibility", "ops"];
@@ -85,4 +87,15 @@ test("no helper brief tells a helper to write Owner decision, Owner question or 
   assert.ok(!form.test(rd) && !asHeading.test(rd));
   assert.match(rd, /Mission Control repair:/);
   assert.match(rd, /Manager decision \(Mission Control, not Michael\)/);
+});
+
+test("every brief that has a never-list carries the owner's-words line: acting runs, the dead-man's repair run and every helper brief", async () => {
+  const LINE = "Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step.";
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const briefs = fs.readdirSync(path.join(root, "briefs")).filter(n => n.endsWith(".md")).map(n => path.join(root, "briefs", n)).concat(path.join(root, "release-driver", "brief.md"));
+  assert.ok(briefs.length >= 8);
+  for (const f of briefs) assert.ok(fs.readFileSync(f, "utf8").includes(LINE), `${path.relative(root, f)} carries it`);
+  const { prompt } = await import("../onduty.mjs");
+  assert.ok(prompt({ kind: "ticket", title: "t", evidence: [] }, [], "/x/onduty.mjs").includes(LINE), "the acting run's brief");
+  assert.ok(fs.readFileSync(path.join(root, "deadman", "deadman.mjs"), "utf8").includes(LINE), "the dead-man's repair brief");
 });

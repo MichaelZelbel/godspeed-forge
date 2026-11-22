@@ -43,6 +43,7 @@ The three failed attempts and what each reported, newest last:
   post or deploy anything. Work in your clone and `{{RUN_DIR}}`.
 - Never read the hidden holdouts or their tools, the factory's checkout, or any key or login.
 - Never mention people with `@`.
+- Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step.
 
 ## The ticket and the plan
 

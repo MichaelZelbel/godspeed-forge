@@ -179,6 +179,7 @@ personally". He wrote none of it. Therefore:
   key, token or login file. Work only in this clone (your current directory) and the run folder.
 - Never post on the owner issue #{{OWNER_ISSUE}} ("Owner decisions needed"): the driver notes there
   itself which of its questions you handled. Report their numbers in `owner_questions_handled`.
+- Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step.
 - Never mention people with `@`. Every comment, issue and pull request body you write must contain
   the marker `{{MARKER}}` (the guard refuses it otherwise); the driver uses it to check your work.
 - Push only to an open pull request's branch or to a new branch named `release-driver/<topic>`.

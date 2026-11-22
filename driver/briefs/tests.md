@@ -54,6 +54,7 @@ What was tried before, newest last (do something different from it):
   product is wrong, say so in `product_defects` and leave it.
 - Never touch the factory's checkouts, `~/.archon/workspaces`, keys, tokens or logins. No `sudo`, no
   GitHub login needed or used.
+- Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step.
 
 ## How to work
 
