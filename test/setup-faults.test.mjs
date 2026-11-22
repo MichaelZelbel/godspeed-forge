@@ -5,7 +5,7 @@
 // code (as real network failures do), and GitHub calls and questions as if the input closed. Every place in lib/ that reads or writes a file, runs a command, calls GitHub, asks a question
 // or takes that hold must be made to fail by some scenario here, so a new step that no scenario reaches fails
 // this test.
-// test cases: 16
+// test cases: 19
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,6 +14,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { files } from '../lib/files.mjs';
 import { InputClosed, setupCommand } from '../lib/setup.mjs';
+import { signIn, AGENT_QUESTION, CODE_QUESTION } from '../lib/signin.mjs';
+import { createFactorySetup, STRIKE_QUESTION } from '../lib/factory-setup.mjs';
 import { defaults } from '../lib/config.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { testCase } from './cases.mjs';
@@ -57,7 +59,9 @@ for (const [path, text] of sources) {
 // finishedProjectWorks (#74): a finished setup whose mission or final check cannot be confirmed is set up again.
 // removeStaleTemporaries and discardTemporary (#100): the sweep for left-behind temporaries and the removal of
 // one are best effort; junk that cannot be removed must never stop a setup.
-const ABSORBED = ['pathExists', 'findSignedInAgent', 'stopIfDamaged', 'replaceMarkedDownload', 'discardPending', 'updatePending', 'prepareFactory', 'finishedProjectWorks', 'removeStaleTemporaries', 'discardTemporary'];
+// letGitUseGh: git's use of gh's sign-in is set up best effort; a push that then fails says so itself.
+// identity and defaultBranch: who a commit is by and which branch is the default each have a second source.
+const ABSORBED = ['pathExists', 'findSignedInAgent', 'stopIfDamaged', 'replaceMarkedDownload', 'discardPending', 'updatePending', 'prepareFactory', 'finishedProjectWorks', 'removeStaleTemporaries', 'discardTemporary', 'letGitUseGh', 'identity', 'defaultBranch'];
 const ABSORBED_SITES = [siteOf('setup.mjs', ".then(entry => entry.isDirectory(), () => false)")];
 
 function siteOf(module, text) {
@@ -118,6 +122,14 @@ function point(kind, op, call) {
   };
 }
 for (const op of Object.keys(files)) files[op] = point('file', op, files[op]);
+// A sign-in a command starts: on a fault it ends at once with a failure and shows nothing.
+function startPoint(call) {
+  return (...args) => {
+    if (!watch('start', 'start', args)) return call(...args);
+    const output = '';
+    return { watch: watcher => { watcher(output); return () => {}; }, write: () => {}, stop: () => {}, done: Promise.resolve({ code: 1, started: true, output }) };
+  };
+}
 const listen = Server.prototype.listen;
 Server.prototype.listen = function (...args) {
   if (!watch('lock', 'listen')) return listen.apply(this, args);
@@ -151,9 +163,70 @@ function standInGithub() {
   return world;
 }
 
-function standInCommands(behaviour) {
+// The stand-in sign-ins: gh's prints its code and is approved at once, Claude Code's waits for the pasted code.
+function standInStart(world) {
+  return (command, args) => {
+    let output = '';
+    let ended = false;
+    let resolveDone;
+    const watchers = new Set();
+    const done = new Promise(resolve => { resolveDone = resolve; });
+    const say = text => { output += text; for (const watcher of watchers) watcher(output); };
+    const end = code => { if (!ended) { ended = true; resolveDone({ code, started: true, output }); } };
+    queueMicrotask(() => {
+      if (command === 'gh' && args[0] === 'auth') {
+        say('! First copy your one-time code: ABCD-1234\nOpen this URL to continue in your web browser: https://github.com/login/device\n');
+        world.githubSignedIn = true;
+        end(0);
+      } else if (command === 'claude') {
+        say('Opening browser to sign in\nIf the browser did not open, visit:\nhttps://claude.ai/oauth/authorize?code=true\nPaste code here if prompted > ');
+      } else end(1);
+    });
+    return {
+      watch: watcher => { watchers.add(watcher); watcher(output); return () => watchers.delete(watcher); },
+      write: text => { if (command === 'claude' && text.trim()) { world.agentSignedIn = true; end(0); } },
+      stop: () => end(null),
+      done
+    };
+  };
+}
+
+// The stand-in coding assistant's answer: seven proposals, two journeys and the checks.
+async function assistantWrites(cwd, behaviour = {}) {
+  await writeFile(join(cwd, '.forge-out-of-scope.json'), JSON.stringify(['One.', 'Two.', 'Three.', 'Four.', 'Five.', 'Six.', 'Seven.']));
+  await writeFile(join(cwd, 'harness/END-TO-END.md'), '# End-to-end journeys\n\n## A person signs in\n\n1. Open it.\n\n## A person signs out\n\n1. Close it.\n');
+  await writeFile(join(cwd, 'harness/harness.config.json'), JSON.stringify({ static: '', unit: 'npm test', required_checks: behaviour.checksLeftEmpty ? '' : 'none', protected_paths: 'changed' }));
+}
+
+function standInCommands(behaviour, world = {}) {
+  const refused = text => Object.assign(new Error('gh failed.'), { stderr: text, stdout: '' });
   return async (command, args, options = {}) => {
-    if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+    if (command === 'gh' && args[0] === 'repo' && args[1] === 'clone') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+    if (command === 'gh' && args[0] === 'api' && args[1] === '-i') {
+      if (behaviour.signedOut && !world.githubSignedIn) throw refused('To get started with GitHub CLI, please run:  gh auth login\n');
+      return { stdout: 'HTTP/2.0 200 OK\nX-Oauth-Scopes: repo, workflow\n\n{}' };
+    }
+    if (command === 'gh' && args[0] === 'api' && args[1] === 'user') return { stdout: 'octo 42\n' };
+    if (command === 'gh' && args[0] === 'pr' && args[1] === 'create') { world.pullRequests = (world.pullRequests ?? 0) + 1; return { stdout: `https://github.com/${repository}/pull/${world.pullRequests}\n` }; }
+    if (command === 'gh' && args[0] === 'pr' && args[1] === 'list') return { stdout: '' };
+    if (command === 'gh' && args[0] === 'pr' && args[1] === 'view') return { stdout: world.merged ? 'MERGED\n' : 'OPEN\n' };
+    if (command === 'gh' && args[0] === 'pr' && args[1] === 'merge') {
+      if (args.includes('--auto')) return { stdout: '' };
+      world.mergeTries = (world.mergeTries ?? 0) + 1;
+      if (world.mergeTries === 1) throw refused('Base branch policy prohibits the merge\n');
+      world.merged = true;
+      return { stdout: '' };
+    }
+    if (command === 'gh') return { stdout: '' };
+    if ((command === 'claude' || command === 'codex') && args.includes('status') && behaviour.signedOut && !world.agentSignedIn) throw refused('Not logged in\n');
+    if (command === 'claude' && args[0] === '-p') { await assistantWrites(options.cwd, behaviour); return { stdout: '' }; }
+    if (command === 'git' && args[0] === 'symbolic-ref') return { stdout: 'origin/main\n' };
+    if (command === 'git' && args[0] === 'config') throw refused('');
+    if (command === 'git' && args[0] === 'diff') return { stdout: world.committed ? '' : 'MISSION.md\n' };
+    if (command === 'git' && args[0] === 'commit') { world.committed = true; return { stdout: '' }; }
+    if (command === 'git' && args[0] === 'push' && behaviour.protected && args.at(-1).endsWith('/main')) {
+      throw refused('remote: error: GH006: Protected branch update failed for refs/heads/main.\n');
+    }
     if (command === 'git' && args[0] === 'clone') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
     if (command === 'git' && args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` };
     if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
@@ -161,9 +234,12 @@ function standInCommands(behaviour) {
       await mkdir(join(options.cwd, 'factory'), { recursive: true });
       await mkdir(join(options.cwd, '.factory'), { recursive: true });
       await mkdir(buildToolsSource, { recursive: true });
-      await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
+      await mkdir(join(options.cwd, 'harness'), { recursive: true });
+      await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n\n## Out of scope -- the factory must never build this\n\n<!-- the guidance -->\n\n**<Category>**\n- <thing>\n\n## Hard invariants\n');
       await writeFile(join(options.cwd, 'factory/consumer.py'), '# factory stand-in\n');
       await writeFile(join(options.cwd, '.factory/consumer.json'), JSON.stringify({ source: buildToolsSource }));
+      await writeFile(join(options.cwd, 'harness/END-TO-END.md'), '# Runtime scenarios\n\nExample task-service data.\n');
+      await writeFile(join(options.cwd, 'harness/harness.config.json'), JSON.stringify({ static: '', unit: '', required_checks: '', protected_paths: 'MISSION.md,harness/**' }));
     }
     if (command === 'python3' && args.at(-1) === 'doctor') {
       if (behaviour.doctor === 'fail') throw Object.assign(new Error('python3 failed.'), { stderr: 'doctor failed\n' });
@@ -178,16 +254,19 @@ async function setup(world, { behaviour = {}, faults } = {}) {
   await writeFile(paths.config, JSON.stringify({ ...defaults(root), projectsRoot }));
   world.noCallback = behaviour.noCallback ?? null;
   const output = [];
-  let answer = 0;
   const watched = faults ? { events: [], faults, fired: [] } : null;
   const github = Object.fromEntries(Object.entries(world.github).map(([op, call]) => [op, point('github', op, call)]));
+  const answers = { 'What is this software for?': 'Purpose.', 'Who uses it?': 'Users.', [AGENT_QUESTION]: 'claude', [CODE_QUESTION]: 'the code', [STRIKE_QUESTION]: '2 5' };
+  const start = startPoint(standInStart(world));
   current = watched;
   let code;
   try {
     code = await setupCommand(repository, {
       paths, github, output: line => output.push(line),
-      commands: { run: point('command', 'run', standInCommands(behaviour)) },
-      prompt: point('prompt', 'prompt', async () => ['Purpose.', 'Users.'][answer++ % 2])
+      commands: { run: point('command', 'run', standInCommands(behaviour, world)) },
+      prompt: point('prompt', 'prompt', async question => answers[question]),
+      signIn: context => signIn({ ...context, start }),
+      factorySetup: createFactorySetup({ home: join(root, 'home') })
     });
   } finally {
     current = null;
@@ -246,6 +325,12 @@ const SCENARIOS = [
     await setup(world, { behaviour: { doctor: 'fail' } });
     await writeJson(join(projectState, 'mission.json'), '');
   } },
+  // Neither GitHub nor a coding assistant signed in: setup runs both sign-ins.
+  { name: 'signed out', finish: 'complete', behaviour: { signedOut: true } },
+  // The default branch takes changes only through a pull request, whose first merge GitHub holds for its checks.
+  { name: 'protected branch', finish: 'complete', behaviour: { protected: true } },
+  // The coding assistant names no CI checks for a project that has no CI workflows: none are required.
+  { name: 'no checks named', finish: 'complete', behaviour: { checksLeftEmpty: true } },
   // #100: a temporary a stopped earlier run left beside its saves; the own pid with no save in flight is
   // stale by rule, so the run's sweep looks the folder up and removes the entry.
   { name: 'leftover temporary', finish: 'complete', arrange: async world => {

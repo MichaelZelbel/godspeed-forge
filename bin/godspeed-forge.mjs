@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
 import { runSetupCommand } from '../lib/cli.mjs';
 import { defaultPaths } from '../lib/config.mjs';
-import { run } from '../lib/process.mjs';
+import { run, start } from '../lib/process.mjs';
+import { signIn } from '../lib/signin.mjs';
+import { createFactorySetup } from '../lib/factory-setup.mjs';
 import { answersFrom } from '../lib/setup.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { runDriverCommand, driverAfterSetup } from '../driver/cli.mjs';
@@ -29,6 +31,8 @@ runSetupCommand(repository, async () => {
     paths: defaultPaths(), commands: { run }, github: createGithubAdapter({ input: answers }), input, answers,
     prompt: question => answers.question(`${question} `),
     output: message => console.log(message),
+    signIn: context => signIn({ ...context, start }),
+    factorySetup: createFactorySetup(),
     afterSetup: (repo, config) => driverAfterSetup(repo, { paths: defaultPaths(), config, output: message => console.log(message) })
   };
 });
