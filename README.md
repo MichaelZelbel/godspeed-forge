@@ -2,13 +2,13 @@
 
 An add-on for [Godspeed Mission Control](https://github.com/MichaelZelbel/godspeed-mission-control).
 
-Install it on a Godspeed server with:
+Install it on a Godspeed server, as root, with:
 
 ```bash
 curl -fsSL https://github.com/MichaelZelbel/godspeed-forge/raw/main/install.sh | bash
 ```
 
-The line installs the newest Forge release, never the newest code on main; `FORGE_VERSION=v0.1.0` before `bash` picks a specific release.
+The line installs the newest Forge release, never the newest code on main; `FORGE_VERSION=v0.2.0` before `bash` picks a specific release. It works with Godspeed in Docker (the server from Godspeed's one-line installer) and with a native install, puts on the server everything the factory needs (git, GitHub's `gh`, Python, Node 22, bun, uv, Claude Code and Codex) and gives Godspeed's chat a Forge skill. Then type `godspeed-forge setup owner/repository` in the same terminal.
 
 The Forge gives anyone who has Godspeed and a GitHub project a whole development process:
 
@@ -28,7 +28,7 @@ at one pinned revision, the way his README asks a coding agent to, and everythin
 
 ## Status
 
-Ask Godspeed to “set up the Forge for `owner/repository`”. Before it downloads anything, setup signs the
+Type `godspeed-forge setup owner/repository` in the server's terminal, as root (asked in the chat, Godspeed gives you that line). Before it downloads anything, setup signs the
 server in to GitHub (with permission to change workflow files) and to Claude Code or Codex when either is
 missing, showing the link and code of each tool's own sign-in, and reuses sign-ins that already work. It installs
 the pinned factory, guides you through creating separate builder and release
