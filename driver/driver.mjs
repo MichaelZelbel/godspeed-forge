@@ -34,7 +34,7 @@ import { aiDefaults, providers, factoryProvider, ladderCandidates, launchHelper,
 import { applyReport, applyDueDefaults, actDefaults, notify, plain } from "./act.mjs";
 import { housekeep, hkDefaults } from "./housekeeping.mjs";
 import { stepRound, stepEntries, stepStatus, discoverSteps, runStep } from "./steps.mjs";
-import { loadSettings, DEFAULT_DIR } from "./settings.mjs";
+import { loadSettings, defaultSettingsDir } from "./settings.mjs";
 import { fileCauses, causeDefaults } from "./causes.mjs";
 import { countRescues } from "./rescues.mjs";
 import { forgeArgv } from "./release-driver/release-driver-owner-steps.mjs";
@@ -803,7 +803,7 @@ export function describe(out) {
 export async function cli(argv = process.argv.slice(2), io = {}) {
   const log = io.log || (s => console.log(s)), err = io.err || (s => console.error(s));
   const opt = k => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : undefined; };
-  const dir = opt("--settings-dir") || process.env.FD_SETTINGS_DIR || DEFAULT_DIR;
+  const dir = opt("--settings-dir") || process.env.FD_SETTINGS_DIR || defaultSettingsDir();
   const dry = argv.includes("--dry-run");
   let found, loaded;
   try {

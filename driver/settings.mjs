@@ -6,9 +6,12 @@
 // Steps declare their own keys in `export const SETTINGS = [{ key, required, default, meaning, env? }]`;
 // loadSettings collects them from the step modules it is given (see steps.mjs).
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export const DEFAULT_DIR = "/etc/godspeed-forge";
+// Root on Linux keeps its settings in /etc/godspeed-forge (next to the Forge's own config); anyone else in their own home.
+export const defaultSettingsDir = () => (process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0 ? DEFAULT_DIR : path.join(os.homedir(), ".config", "godspeed-forge"));
 const csv = v => (Array.isArray(v) ? v.join(",") : String(v ?? ""));
 const json = v => (Array.isArray(v) ? JSON.stringify(v) : String(v ?? ""));
 
