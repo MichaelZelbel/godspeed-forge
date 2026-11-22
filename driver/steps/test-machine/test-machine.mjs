@@ -421,8 +421,10 @@ export async function look(env, deps = {}) {
       tools: { scenarios: coverage.ids.length, missing: coverage.missing.map(m => m.id), ...(coverage.why ? { why: coverage.why } : {}) } }));
     log(`test machine: ${health.healthy ? "healthy" : "NOT healthy"}: ${health.why}${c.staged ? ` (release ${c.staged.version}, ${c.staged.commit.slice(0, 10)})` : ""}`);
     if (was !== health.healthy) record({ kind: health.healthy ? "healthy" : "unhealthy", why: health.why, release: state.release, holdout: state.holdout });
-    if (health.healthy) { save(); return { healthy: true, state }; }
-    if (env.DRY) { log("dry run: no repair"); return { healthy: false, state }; }
+    // a persisted halt is reported on every run until --clear-halt, whatever else this look found
+    if (state.halted) stop("repair-halted", haltedText(state));
+    if (health.healthy) { save(); return result({ healthy: true, state }); }
+    if (env.DRY) { log("dry run: no repair"); return result({ healthy: false, state }); }
     save();
     // A scenario without a tool is not a fault of the verifier's environment, so the environment repair
     // would only spend one of the day's three repairs. The factory driver builds the tool (its
@@ -432,7 +434,7 @@ export async function look(env, deps = {}) {
     if (health.tools) {
       log("no repair: the environment works; what is missing is a tool, which the factory driver builds");
       if (state.tools_logged !== state.since) { record({ kind: "tools missing", missing: coverage.missing.map(m => m.id), why: toolsText(state, coverage) }); state.tools_logged = state.since; }
-      save(); return { healthy: false, state };
+      save(); return result({ healthy: false, state });
     }
     // a repair whose audit found a breach stops every further repair until Mission Control looked at it
     if (state.halted) { log(`no repair: halted since ${state.halted.at} (${state.halted.why})`); stop("repair-halted", haltedText(state)); save(); return result({ healthy: false, state }); }

@@ -2,7 +2,7 @@
 // The three folded helpers as steps: what they export, how their settings become the old configuration,
 // that a dead end is a halt and a halt queues no notice, and that nothing of the first owner's is left in
 // the files that ship.
-// test cases: 6
+// test cases: 8
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { testCase } from "../../../test/cases.mjs";
@@ -106,4 +106,31 @@ testCase("nothing of the first owner is left in the files that ship");
   const seen = [];
   for (const f of files.filter(f => fs.existsSync(f))) { seen.push(f); const t = fs.readFileSync(f, "utf8"); for (const re of banned) assert.ok(!re.test(t), `${path.relative(stepsDir, f)} holds ${re}`); }
   assert.ok(seen.length >= 8, "the files were found");
+}
+
+testCase("a malformed state file stops the questions step with an error, not a crash");
+{
+  const dir = fs.mkdtempSync(path.join(tmp, "qbad-"));
+  fs.writeFileSync(path.join(dir, "state.json"), "{ not json");
+  const r = await questions.run({ ...ctx(), settings: { ...settings, server: { ...settings.server, questions_dir: dir } }, projects: [main], env: { OQ_ISSUES_FILE: path.join(dir, "i.json") } });
+  assert.equal(r.ok, false); assert.ok(r.error && r.summary);
+}
+
+testCase("a persisted halt of the test machine is reported on every run until --clear-halt, also when healthy or only a tool is missing");
+{
+  const st = { ...settings, steps: { "test-machine": { holdout: "H-1", state_dir: path.join(tmp, "tmh") } } };
+  fs.mkdirSync(path.join(tmp, "tmh"), { recursive: true });
+  fs.writeFileSync(path.join(tmp, "tmh", "state.json"), JSON.stringify({ halted: { at: "2026-11-22T10:00:00.000Z", why: "wrote to the live tools" }, referee: { done: {}, runs: [] } }));
+  const staged = { id: "r", version: "1.0.0", commit: "a".repeat(40) };
+  const base = { findable: () => ({ ok: true, changed: [], left: [] }) };
+  const healthy = { ...base, coverage: () => ({ ids: ["H-1"], missing: [] }), check: () => ({ staged, target: "/c", smoke: { ok: true }, holdout: { id: "H-1", verdict: "PASS" } }) };
+  const toolsOnly = { ...base, coverage: () => ({ ids: ["H-1", "H-2"], missing: [{ id: "H-2", why: "H-2 has no tool" }] }), check: healthy.check };
+  for (const deps of [healthy, toolsOnly, healthy]) {
+    const r = await tm.run({ ...ctx(), settings: st, deps });
+    assert.equal(r.halt && r.halt.key, "repair-halted");
+    assert.match(r.halt.clear, /--clear-halt/);
+  }
+  const cleared = await tm.run({ ...ctx({ clearHalt: true }), settings: st, deps: healthy });
+  assert.equal(cleared.summary, "halt cleared");
+  assert.equal((await tm.run({ ...ctx(), settings: st, deps: healthy })).halt, undefined, "gone after --clear-halt");
 }

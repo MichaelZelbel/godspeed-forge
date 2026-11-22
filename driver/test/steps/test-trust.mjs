@@ -1,5 +1,5 @@
 // node driver/test/steps/test-trust.mjs   (no network, no AI)
-// test cases: 4
+// test cases: 7
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { testCase } from "../../../test/cases.mjs";
@@ -75,4 +75,40 @@ testCase("one run repeats the pass every two minutes and stops at nine");
   const f = await run({ settings: { ...settings, steps: { trust: { state_dir: path.join(tmp, "bad") } } }, projects: [main], main, env: {}, ...c2, deps: { trustGh: bad } });
   assert.equal(f.ok, false); assert.equal(f.halt, undefined); assert.match(f.error, /GitHub is down/);
   assert.ok(n >= 5, "it kept its cadence");
+}
+
+testCase("the main project keeps the old state folder by its repository, whatever the order, and a project with trust false is left alone");
+{
+  const seen = [];
+  const gh = (args) => { const m = /^repos\/([^/]+\/[^/]+)\/issues\/comments/.exec(String(args[0])); if (m && !seen.includes(m[1])) seen.push(m[1]); return []; };
+  const off = { repository: "acme/off", trust: false, apps: {} };
+  const c = clock();
+  const st = { ...settings, steps: { trust: { state_dir: path.join(tmp, "order") } } };
+  const r = await run({ settings: st, projects: [other, off, main], main, env: {}, ...c, maxMinutes: 1, deps: { trustGh: gh } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(seen, ["acme/app", "acme/side"], "the main project first, the one with trust false never");
+  assert.ok(fs.existsSync(path.join(tmp, "order", "trust.json")), "the main project's cursor is the old file");
+  assert.ok(fs.existsSync(path.join(tmp, "order", "acme--side", "trust.json")), "the other project has its own folder");
+  assert.ok(!fs.existsSync(path.join(tmp, "order", "acme--off")));
+  assert.equal(envFor({ settings: st, env: {} }, main, main.repository === main.repository).STATE_DIR, path.join(tmp, "order"));
+}
+
+testCase("who may decide is restored right after each pass, before any wait");
+{
+  const c = clock(); const during = [];
+  const before = ["boss", "x"].map(x => isTrusted(x)).join();
+  const sleepSeen = [];
+  const gh = () => { during.push(isTrusted("boss")); return []; };
+  await run({ settings: { ...settings, steps: { trust: { state_dir: path.join(tmp, "restore") } } }, projects: [main, other], main, env: {}, nowMs: c.nowMs, sleep: async ms => { sleepSeen.push(isTrusted("boss")); await c.sleep(ms); }, deps: { trustGh: gh } });
+  assert.ok(during.length >= 2 && during.every(x => x === true), "set while a pass runs");
+  assert.ok(sleepSeen.length >= 1 && sleepSeen.every(x => x === false), "never set during a wait");
+  assert.equal(["boss", "x"].map(x => isTrusted(x)).join(), before);
+}
+
+testCase("without keys.env_file the keys file is keys.env in the settings folder");
+{
+  const e = envFor({ settings, env: {}, settingsDir: path.join(tmp, "cfg") }, main, true);
+  assert.equal(e.KEYS_FILE, path.join(tmp, "cfg", "keys.env"));
+  const e2 = envFor({ settings: { ...settings, keys: { ...settings.keys, env_file: "/k/own.env" } }, env: {}, settingsDir: "/cfg" }, main, true);
+  assert.equal(e2.KEYS_FILE, "/k/own.env");
 }

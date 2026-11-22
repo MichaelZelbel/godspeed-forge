@@ -63,7 +63,9 @@ export async function run(ctx) {
   let env;
   try { env = envFor(ctx); } catch (e) { return { ok: false, summary: "not set up", error: e.message }; }
   const log = ctx.log || (() => {});
-  const r = askRun(env, ctx.nowMs ? ctx.nowMs() : Date.now(), log);
+  let r;
+  try { r = askRun(env, ctx.nowMs ? ctx.nowMs() : Date.now(), log); }
+  catch (e) { return { ok: false, summary: "the run failed", error: String(e.message).slice(0, 300) }; }
   const halts = (r.halts || []).map(h => ({ ...h, clear: clearCommand(ctx) }));
   const summary = `${r.sent.length ? `told or relayed: ${r.sent.join("; ")}` : "nothing new"}${halts.length ? `; halted: ${halts.map(h => h.key).join(", ")}` : ""}`;
   return { ok: !!r.ok, summary, ...(halts.length ? { halt: halts[0], halts } : {}), ...(r.ok ? {} : { error: "a project's question list could not be read" }) };
