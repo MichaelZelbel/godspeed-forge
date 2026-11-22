@@ -34,7 +34,7 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           WATCH_REPO: ${{ github.repository }}
-          PRODUCT_RECORDS_REPO: ${{ github.repository }}
+          PRODUCT_RECORDS_REPO: ${{ vars.FACTORY_RECORDS_REPO || github.repository }}
           DRY_RUN: ${{ inputs.dry_run }}
           FACTORY_OWNER: ${{ vars.FACTORY_OWNER }}
           PLAN_PATTERN: ${{ vars.FACTORY_PLAN_PATTERN }}

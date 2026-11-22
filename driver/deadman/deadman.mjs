@@ -25,6 +25,7 @@ export const defaults = (e = process.env) => ({
   DEV: e.DM_DEV || "",
   STATUS: e.DM_STATUS || "/var/lib/godspeed/forge/driver/status.json",
   KEEPER: e.DM_KEEPER || "/var/lib/godspeed/forge/driver/keeper.json",
+  NODE: e.FD_NODE || process.execPath, // server.node: the node the units run
   KEEPER_BIN: e.DM_KEEPER_BIN || "/usr/local/lib/godspeed/forge/keeper/keeper.mjs",
   SPOOL: e.DM_SPOOL || "/var/lib/godspeed/forge/spool",
   STATE: e.DM_STATE || "/var/lib/godspeed/forge/deadman/state.json",
@@ -208,7 +209,10 @@ export async function run(cfg, now = Date.now(), log = console.log, deps = {}) {
   const says = says0.filter(s => sure.has(s.key));
   if (cfg.DRY) { for (const s of says0) log(`  would say (behind the gate): ${s.text}`); return { says: says0, health, step: rs.step }; }
   for (const s of says) { const rc = await tell(cfg, s.text, deps); if (Object.keys(rc).length) state.messages[s.key] = now; done.push({ say: s.key, receipts: rc }); } // told only with a receipt
-  if (rs.step === "rollback") (deps.run || sys)("node", [cfg.KEEPER_BIN, "repair"]);
+  if (rs.step === "rollback") { // the rollback counts as attempted only when the keeper itself exited 0; otherwise it is asked again next time
+    const kr = (deps.run || sys)(cfg.NODE, [cfg.KEEPER_BIN, "repair"]);
+    if (!kr || kr.status !== 0) { if (state.repair) delete state.repair.rollbackAt; done.push({ keeper: "repair failed", why: String((kr && (kr.stderr || (kr.error && kr.error.message))) || "no answer").trim().split(String.fromCharCode(10)).pop().slice(0, 200) }); }
+  }
   else if (rs.step === "codex" || rs.step === "claude") launched = launchRepair(cfg, `factory-repair-${rs.step}-${Math.floor(now / 1000)}`, rs.step, health.reasons.join("; ") + health.spool.map(f => { try { return ` | request: ${fs.readFileSync(path.join(cfg.SPOOL, f), "utf8").slice(0, 1500)}`; } catch { return ""; } }).join(""), rs.step === "claude" ? "a Codex repair run did not make the driver healthy" : "the keeper's rollback did not make the driver healthy", deps.run);
   if ((rs.step === "codex" || rs.step === "claude") && !launched && state.repair) { const fk = rs.step + "Fails"; state.repair[fk] = (state.repair[fk] || 0) + 1; if (state.repair[fk] < 3) delete state.repair[rs.step + "At"]; } // the run did not start: that rung is tried again, up to 3 times; after that it counts, so the ladder always reaches the owner
   else if (tellStep && sure.has(health.key)) { const rc = await tell(cfg, `The program that keeps your software factory moving is still broken after an automatic rollback and two repair attempts (${health.reasons.join("; ")}). The dead-man keeps checking; nothing is needed from you unless a later message says so.`, deps); done.push({ say: health.key, receipts: rc }); if (!Object.keys(rc).length && state.repair) state.repair.toldAt = null; }

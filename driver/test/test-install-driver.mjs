@@ -27,8 +27,20 @@ function server(edit = () => {}) {
   fs.writeFileSync(path.join(settingsDir, "driver.json"), JSON.stringify(files.d));
   fs.writeFileSync(path.join(settingsDir, "projects", "owner--repository.json"), JSON.stringify(files.p));
   const unitsDir = p("etc/systemd/system"), calls = [];
-  const deps = { isRoot: () => true, hasSystemd: () => true, unitsDir, run: (cmd, args) => { calls.push([cmd, ...args].join(" ")); return { status: 0, stdout: "", stderr: "" }; } };
-  return { root, settingsDir, unitsDir, calls, deps, p, files };
+  const s = { root, settingsDir, unitsDir, calls, p, files, round: "good", active: [], journal: "" };
+  // a systemd that only records what it was asked; the first round (`systemctl start factory-driver.service`) is good, fails, or ends without a status file
+  s.deps = { isRoot: () => true, hasSystemd: () => true, unitsDir, run: (cmd, args) => {
+    calls.push([cmd, ...args].join(" "));
+    if (cmd === "systemctl" && args[0] === "start" && args[1] === "factory-driver.service") {
+      if (s.round === "fail") return { status: 1, stdout: "", stderr: "Job for factory-driver.service failed." };
+      if (s.round === "good") { fs.mkdirSync(files.d.server.state_dir, { recursive: true }); fs.writeFileSync(path.join(files.d.server.state_dir, "status.json"), "{}"); }
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (cmd === "systemctl" && args[0] === "is-active") return { status: 0, stdout: s.active.includes(args[1]) ? "active\n" : "inactive\n", stderr: "" };
+    if (cmd === "journalctl") return { status: 0, stdout: s.journal, stderr: "" };
+    return { status: 0, stdout: "", stderr: "" };
+  } };
+  return s;
 }
 const stop = async fn => { try { await fn(); } catch (e) { if (e instanceof InstallStop) return e.message; throw e; } return ""; };
 
@@ -67,19 +79,56 @@ test("the units reproduce today's: the driver with flock, its limits and the kee
   assert.ok(!/MichaelZelbel|godspeed-archon|\/home\/godspeed/.test(drv + dm), "no name of anyone");
 });
 
-test("systemd is reloaded and the driver's and the dead-man's timers are enabled; the units the driver replaces are switched off only with --switch, and never deleted", async () => {
+test("systemd is reloaded and the driver's and the dead-man's timers are enabled; without --switch nothing old is touched", async () => {
   const s = server();
   fs.mkdirSync(s.unitsDir, { recursive: true });
   for (const n of ["auto-stage.timer", "auto-stage.service", "old-trust.timer"]) fs.writeFileSync(path.join(s.unitsDir, n), "[Unit]\n");
-  await installDriver({ source, settingsDir: s.settingsDir, deps: s.deps });
+  const lines = await installDriver({ source, settingsDir: s.settingsDir, deps: s.deps });
   assert.ok(s.calls.includes("systemctl daemon-reload"));
   assert.ok(s.calls.includes("systemctl enable --now factory-driver.timer") && s.calls.includes("systemctl enable --now factory-deadman.timer"));
-  assert.ok(!s.calls.some(c => /\bdisable\b/.test(c)), "nothing is switched off without --switch");
+  assert.ok(!s.calls.some(c => /\b(disable|stop)\b/.test(c)), "nothing is switched off or stopped without --switch");
+  assert.ok(lines.some(l => /still on: add --switch/.test(l)));
+});
+
+test("--switch is one transaction: the old timers are stopped, not disabled; one round runs; only after a good round are the old units disabled (never deleted) and the timers enabled", async () => {
+  const s = server();
+  s.active = ["auto-stage.timer", "old-trust.timer"];
+  fs.mkdirSync(s.unitsDir, { recursive: true });
+  for (const n of ["auto-stage.timer", "auto-stage.service", "old-trust.timer"]) fs.writeFileSync(path.join(s.unitsDir, n), "[Unit]\n");
   const lines = await installDriver({ source, settingsDir: s.settingsDir, switchOver: true, deps: s.deps });
-  for (const n of ["auto-stage.timer", "auto-stage.service", "old-trust.timer"]) assert.ok(s.calls.includes(`systemctl disable --now ${n}`), n);
+  const at = c => s.calls.indexOf(c);
+  assert.ok(at("systemctl stop auto-stage.timer") >= 0 && at("systemctl stop old-trust.timer") >= 0, "the old timers are stopped");
+  assert.ok(at("systemctl start factory-driver.service") > at("systemctl stop auto-stage.timer"), "the round runs after they are stopped");
+  for (const n of ["auto-stage.timer", "auto-stage.service", "old-trust.timer"]) assert.ok(at(`systemctl disable --now ${n}`) > at("systemctl start factory-driver.service"), `${n} is disabled only after the good round`);
+  assert.ok(at("systemctl enable --now factory-driver.timer") > at("systemctl start factory-driver.service") && at("systemctl enable --now factory-deadman.timer") > at("systemctl start factory-driver.service"), "the timers are enabled after it");
   assert.ok(!s.calls.some(c => /\b(rm|mask|delete)\b/.test(c)));
   for (const n of ["auto-stage.timer", "auto-stage.service", "old-trust.timer"]) assert.ok(fs.existsSync(path.join(s.unitsDir, n)), `${n} is still there`);
-  assert.ok(lines.some(l => /Switched off 3 of the 3 units/.test(l)));
+  assert.ok(lines.some(l => /did one good round/.test(l)) && lines.some(l => /Switched off 3 of the 3 old units/.test(l)));
+});
+
+test("a first round that fails, or ends with no fresh status.json, puts the previous unit files back, starts the old timers that were running again, disables nothing, and says the round's error in one sentence", async () => {
+  for (const round of ["fail", "nostatus"]) {
+    const s = server(); s.round = round; s.journal = "Error: the world could not be read: gh is not signed in\n"; s.active = ["auto-stage.timer"];
+    fs.mkdirSync(path.join(s.unitsDir, "factory-driver.service.d"), { recursive: true });
+    const olds = { "factory-driver.service": "[Service]\nExecStart=/old/driver\n", "factory-driver.timer": "[Timer]\nOLD\n", "factory-driver.service.d/keeper.conf": "[Unit]\nOnSuccess=old\n" };
+    for (const [n, t] of Object.entries(olds)) fs.writeFileSync(path.join(s.unitsDir, n), t);
+    fs.writeFileSync(path.join(s.unitsDir, "auto-stage.timer"), "[Unit]\n");
+    // the status file of an earlier round is not a sign that this one worked
+    fs.mkdirSync(s.files.d.server.state_dir, { recursive: true });
+    const status = path.join(s.files.d.server.state_dir, "status.json"); fs.writeFileSync(status, "{}"); const old = new Date(Date.now() - 3600000); fs.utimesSync(status, old, old);
+    const m = await stop(() => installDriver({ source, settingsDir: s.settingsDir, switchOver: true, deps: s.deps }));
+    assert.match(m, /^The switch did not happen: /, round);
+    assert.match(m, round === "fail" ? /gh is not signed in/ : /without writing a fresh status\.json/, "the round's error, in the sentence");
+    assert.ok(!m.includes("\n"), "one sentence");
+    for (const [n, t] of Object.entries(olds)) assert.equal(fs.readFileSync(path.join(s.unitsDir, n), "utf8"), t, `${n} is back as it was`);
+    for (const n of ["factory-deadman.service", "factory-deadman.timer", "factory-driver-keeper.service", "factory-driver-rollback.service", "factory-driver-repair.service"]) assert.equal(fs.existsSync(path.join(s.unitsDir, n)), false, `${n} did not exist before: it is gone again`);
+    assert.ok(!s.calls.some(c => /\bdisable\b/.test(c)), "no old unit was disabled");
+    assert.ok(!s.calls.some(c => /enable --now/.test(c)), "no timer was turned on");
+    const i = s.calls.indexOf("systemctl start factory-driver.service");
+    assert.ok(s.calls.indexOf("systemctl daemon-reload", i) > i, "systemd reads the previous units again");
+    assert.ok(s.calls.indexOf("systemctl start auto-stage.timer") > i, "the old timer that was running runs again");
+    assert.ok(!s.calls.includes("systemctl start old-trust.timer"), "one that was not running is not started");
+  }
 });
 
 test("a missing setting is named and nothing is changed; so is a server without systemd, or a driver folder inside the add-on's own", async () => {
@@ -126,6 +175,8 @@ test("--watcher puts the three watcher files into the watch repository only when
   assert.deepEqual(Object.keys(store).sort(), [".github/workflows/factory-notify.yml", ".github/workflows/factory-watch.yml", "scripts/factory-watch.mjs"]);
   assert.ok(first.some(l => /Put \.github\/workflows\/factory-watch\.yml into owner\/records/.test(l)));
   assert.ok(calls.some(c => c.startsWith("variable set FACTORY_OWNER --repo owner/records --body your-github-login")) && calls.some(c => c.startsWith("variable set FACTORY_PLAN_PATTERN")));
+  assert.ok(calls.some(c => c.startsWith("variable set FACTORY_RECORDS_REPO --repo owner/records --body owner/records")), "the records repository is a variable of its own");
+  assert.match(store[".github/workflows/factory-watch.yml"], /PRODUCT_RECORDS_REPO: \$\{\{ vars\.FACTORY_RECORDS_REPO/, "the workflow reads the plans from it, not from its own repository");
   for (const [f, t] of Object.entries(store)) assert.ok(!/MichaelZelbel|godspeed-archon/.test(t), `${f} names no one`);
   assert.match(store[".github/workflows/factory-notify.yml"], /vars\.FACTORY_OWNER/); assert.match(store[".github/workflows/factory-watch.yml"], /vars\.FACTORY_PLAN_PATTERN/);
   calls.length = 0;

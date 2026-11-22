@@ -7,7 +7,10 @@ import { GODSPEED_RELEASE } from "./journal.mjs";
 import { readReleases, pickPlans, itemIssues, releaseLabel, planRepository, excludedIssues, requiredState, compareVersions, releaseVersion } from "./release-driver/release-driver.mjs";
 
 // a unit this driver replaced (settings legacy_units, with or without .service/.timer) belongs to the old program, not to the factory
-export const isLegacy = (env, unit) => (env.LEGACY_UNITS || []).some(l => l === unit || `${l}.service` === unit || `${l}.timer` === unit);
+// ONE predicate, used wherever a unit is started, restarted, re-enabled or turned into an obstacle: an entry with .service or .timer
+// names that unit; an entry without a suffix covers both its .service and its .timer.
+export const legacyEntries = env => (Array.isArray(env.LEGACY_UNITS) ? env.LEGACY_UNITS : String(env.LEGACY_UNITS || "").split(",")).map(x => String(x).trim()).filter(Boolean);
+export const isLegacy = (env, unit) => { const u = String(unit || "").trim(); return legacyEntries(env).some(l => l === u || `${l}.service` === u || `${l}.timer` === u); };
 const iso = v => (v ? new Date(v).toISOString() : null);
 const num = v => (Number.isFinite(Number(v)) ? Number(v) : null);
 

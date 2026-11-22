@@ -313,6 +313,9 @@ test("a dry run is safe beside a driver that still runs on the same state folder
   assert.deepEqual(snapshot(stateDir), before, "not one file of the shared state folder changed");
   assert.equal(refused.length, attempts, "the read-only lock never had to refuse anything");
   assert.ok(out.stepStatus && out.stepStatus.alpha, "status.steps is still worked out (and not written)");
+  const said = describe(out);
+  assert.match(said, /^step alpha: last run fine at 2026-11-18 15:00Z; would launch forge-step-alpha$/m, "one line per step: its last result and what the round would do");
+  assert.match(said, /^step inl: never ran; inline: would run in this round$/m);
   // the lock itself: a write outside the temporary folder, and a command that changes something, are refused
   const restore2 = enforceReadOnly();
   try {

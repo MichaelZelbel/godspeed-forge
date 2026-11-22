@@ -262,3 +262,22 @@ test("`driver.mjs --step <name> --clear-halt <key> --owner-said ... --owner-ref 
   assert.equal(await cli(["--step", "nope", "--settings-dir", dir], io), 2);
   } finally { for (const k of Object.keys(process.env)) if (!(k in envBefore)) delete process.env[k]; Object.assign(process.env, envBefore); }
 });
+
+test("one predicate decides what a replaced unit is: a suffixless entry covers its .service and its .timer wherever a unit is started, restarted, re-enabled or made an obstacle", async () => {
+  const { legacyEntries } = await import("../world.mjs");
+  assert.deepEqual(legacyEntries({ LEGACY_UNITS: " a.timer, b ,," }), ["a.timer", "b"], "a list or the settings' comma form");
+  const L = { LEGACY_UNITS: ["a.timer", "b"] };
+  assert.ok(isLegacy(L, "a.timer") && !isLegacy(L, "a.service") && isLegacy(L, "b.service") && isLegacy(L, "b.timer") && isLegacy(L, "b") && !isLegacy(L, "c.timer"));
+  const calls = [];
+  const env = { ...defaultsFor(TEST_ENV), LEGACY_UNITS: ["archonfactory-old"], SYSTEMCTL: "systemctl", FORGE_NETNS: "" };
+  const server = { failedUnits: ["archonfactory-old.timer", "archonfactory-old.service", "godspeed-forge-web.service"], anonymousFailedUnits: [], logins: {} };
+  const out = await housekeep(env, { server, timersToStart: ["archonfactory-old.timer", "archonfactory-new.timer"], factories: [] }, { run: argv => { calls.push(argv.join(" ")); return { status: 0, stdout: "", stderr: "" }; }, sleep: async () => {} });
+  assert.ok(!calls.some(c => /archonfactory-old/.test(c)), `a replaced unit named without a suffix is never started: ${calls.join(" | ")}`);
+  assert.ok(!out.failed.some(f => /archonfactory-old/.test(f)), "and it is not even mentioned as left alone");
+  assert.ok(calls.some(c => /start archonfactory-new\.timer/.test(c)), "an ordinary factory timer still is started");
+  // the same function everywhere: housekeeping imports it, and no module keeps its own copy of the rule
+  const root = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
+  const hk = fs.readFileSync(path.join(root, "housekeeping.mjs"), "utf8");
+  assert.match(hk, /import \{[^}]*isLegacy[^}]*\} from "\.\/world\.mjs"/);
+  assert.ok(!/LEGACY_UNITS \|\| \[\]\)\.(some|includes)/.test(hk), "no copy of the rule in housekeeping");
+});

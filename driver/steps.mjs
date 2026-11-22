@@ -96,15 +96,18 @@ function apply(s, r, endedAt) {
 export async function stepRound(ctx, deps = {}) {
   const D = { ...realDeps, ...deps };
   const now = ctx.now, st = (ctx.state.steps ||= {});
-  const out = { launched: [], collected: [], running: {}, errors: [] };
+  const out = { launched: [], collected: [], running: {}, errors: [], plan: [] };
+  const when = ms => iso(ms).slice(0, 16).replace("T", " ") + "Z";
+  const lastOf = s => (s.lastRunAt ? `last run ${s.lastOk ? "fine" : "failed"} at ${when(s.lastRunAt)}` : "never ran");
   const driverMjs = ctx.driverMjs || path.join(HERE, "driver.mjs");
   for (const mod of ctx.steps || []) {
     const name = mod.STEP.name, cfg = stepConfig(ctx.settings, mod);
     const s = (st[name] ||= { firstSeenAt: now });
     s.enabled = cfg.enabled;
-    if (!cfg.enabled) continue;
+    if (!cfg.enabled) { out.plan.push({ name, enabled: false, text: "off: the settings turn it off" }); continue; }
     try {
       if (mod.STEP.inRound) {
+        out.plan.push({ name, enabled: true, text: `${lastOf(s)}; inline: ${ctx.dry ? "would run in this round" : "runs in this round"}` });
         if (ctx.dry) continue;
         let r;
         try { r = await mod.run(stepContext(ctx, mod)); } catch (e) { r = { ok: false, error: `${String(e && e.message).slice(0, 300)}` }; }
@@ -128,8 +131,9 @@ export async function stepRound(ctx, deps = {}) {
         s.settledLaunch = s.launchedAt;
         out.collected.push({ name, ok: false, summary: s.lastError });
       }
-      if (active) { out.running[name] = { startedAt: s.launchedAt || now, maxMin: cfg.max }; continue; }
       const due = !s.launchedAt || now >= s.launchedAt + cfg.every * MIN;
+      out.plan.push({ name, enabled: true, text: `${lastOf(s)}; ${active ? `running since ${when(s.launchedAt || now)}, so nothing is started` : due ? `${ctx.dry ? "would launch" : "launches"} ${unit}` : `not due until ${when(s.launchedAt + cfg.every * MIN)}`}` });
+      if (active) { out.running[name] = { startedAt: s.launchedAt || now, maxMin: cfg.max }; continue; }
       if (!due || ctx.dry) continue;
       const argv = [`--unit=${unit}`, "--collect", "--quiet", `--description=Factory driver step: ${name}`, "-p", `RuntimeMaxSec=${cfg.max * 60}`, "-p", "CollectMode=inactive-or-failed", "-p", "TimeoutStopSec=30",
         "--setenv=HOME=/root", "--setenv=LANG=C.UTF-8",

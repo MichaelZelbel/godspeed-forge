@@ -3,10 +3,12 @@
 //   1. the settings are read and checked (a missing key is named);
 //   2. the keeper saves the set installed now, then the driver (this add-on's driver/ without test/) is copied into
 //      server.driver_dir, and the keeper and the dead-man, which live outside that set, into server.keeper_dir;
-//   3. the units are written (driver, its timer, the keeper's three units and drop-in, the dead-man and its timer), systemd
-//      reloads, and the driver and dead-man timers are enabled;
-//   4. --switch turns off the units the driver replaces (legacy_units): disabled, never deleted;
-//   5. every installed file is compared with the add-on's (sha256), and a difference fails the install; the keeper records the set;
+//   3. the units are written (driver, its timer, the keeper's three units and drop-in, the dead-man and its timer), the files
+//      are compared with the add-on's (sha256; a difference puts the previous units back and fails), systemd reloads;
+//   4. without --switch the driver's and the dead-man's timers are enabled;
+//   5. with --switch the hand-over is one transaction: the old timers are stopped (not disabled), one round runs now, and only when
+//      it exits 0 and wrote a fresh status.json are the old units disabled (never deleted) and the timers enabled; otherwise the
+//      previous unit files are put back, the old timers that were running run again, and the install stops with the round's error;
 //   6. one plain line is printed for each thing done.
 // --watcher also puts the outside watcher's workflows into notices.watch_repo (only when they differ) and sets its repository variables.
 // All effects on the machine go through `deps`, so the tests run on any computer.
@@ -44,6 +46,10 @@ const realDeps = {
 function fill(template, values) {
   return template.replace(/\{\{([A-Z_]+)\}\}/g, (all, k) => { if (!(k in values)) throw new InstallStop(`a unit template names ${k}, which the installer does not know`); return values[k]; });
 }
+const lastLine = t => String(t || "").trim().split(String.fromCharCode(10)).filter(Boolean).pop() || "";
+const firstError = r => lastLine(r.stderr) || lastLine(r.stdout) || `exit ${r.status}`;
+// What the first round said went wrong: the last line its unit logged, else what systemctl said.
+const roundError = (D, r) => { const j = D.run("journalctl", ["-u", "factory-driver.service", "-n", "30", "--no-pager", "-o", "cat"]); return lastLine(j.stdout) || firstError(r); };
 const stateDirective = (dir, key = "StateDirectory") => {
   const rel = path.posix.relative("/var/lib", dir);
   return rel && !rel.startsWith("..") && !path.posix.isAbsolute(rel) ? `${key}=${rel}\n` : ""; // a state folder outside /var/lib is made by the installer instead
@@ -100,31 +106,65 @@ export async function installDriver({ source = HERE, settingsDir = defaultSettin
   say.push(`Put the keeper and the dead-man into ${keeperDir}, outside the driver's own folder, so each can put the other back.`);
   for (const d of [g("server.state_dir"), g("server.spool_dir"), g("server.deadman_state_dir"), g("server.questions_dir")]) fs.mkdirSync(d, { recursive: true });
   fs.writeFileSync(envFile, renderEnvFile(loaded.env), { mode: 0o644 });
-  // 3. units
+  // 3. units: the files they replace are remembered first, so that the way back is always there
   const units = renderUnits(src, loaded, envFile, driverDir, D.unitsDir);
+  const previous = {};
+  for (const name of Object.keys(units)) { const to = path.join(D.unitsDir, name); previous[name] = fs.existsSync(to) ? fs.readFileSync(to, "utf8") : null; }
   for (const [name, text] of Object.entries(units)) { const to = path.join(D.unitsDir, name); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.writeFileSync(to, text); }
-  const reload = D.run("systemctl", ["daemon-reload"]);
-  if (reload.status !== 0) throw new InstallStop(`systemd did not reload its units: ${String(reload.stderr || "").trim().split("\n").pop() || `exit ${reload.status}`}`);
-  for (const t of ["factory-driver.timer", "factory-deadman.timer"]) {
-    const r = D.run("systemctl", ["enable", "--now", t]);
-    if (r.status !== 0) throw new InstallStop(`${t} could not be turned on: ${String(r.stderr || "").trim().split("\n").pop() || `exit ${r.status}`}`);
-  }
-  say.push("Wrote the units of the driver, the keeper and the dead-man, and turned on the driver's timer and the dead-man's timer.");
-  // 4. the units this driver replaces
-  if (switchOver) {
-    const legacy = g("legacy_units") || [];
-    const off = [];
-    for (const u of legacy) { const r = D.run("systemctl", ["disable", "--now", u]); if (r.status === 0) off.push(u); }
-    say.push(legacy.length ? `Switched off ${off.length} of the ${legacy.length} units the driver replaces (${off.join(", ") || "none were on"}); none was deleted.` : "No units are listed as replaced, so none was switched off.");
-  } else if ((g("legacy_units") || []).length) say.push(`The ${g("legacy_units").length} units the driver replaces are still on: add --switch to turn them off (they are never deleted).`);
-  // 5. what is installed is what is in the add-on
+  // 4. what is installed is what is in the add-on
   const wrong = [];
   for (const f of files) { try { if (sha(path.join(src, f)) !== sha(path.join(driverDir, f))) wrong.push(f); } catch { wrong.push(f); } }
   for (const [file, to] of [["keeper.mjs", keeperBin], [path.join("deadman", "deadman.mjs"), path.join(keeperDir, "deadman.mjs")]]) { if (sha(path.join(src, file)) !== sha(to)) wrong.push(to); }
   for (const [name, text] of Object.entries(units)) { if (fs.readFileSync(path.join(D.unitsDir, name), "utf8") !== text) wrong.push(name); }
-  if (wrong.length) throw new InstallStop(`The installed files differ from the add-on's: ${wrong.slice(0, 5).join(", ")}${wrong.length > 5 ? ` and ${wrong.length - 5} more` : ""}. The install failed.`);
+  const putBack = () => { // the previous unit files, from what was remembered
+    for (const [name, text] of Object.entries(previous)) {
+      const to = path.join(D.unitsDir, name);
+      if (text === null) { fs.rmSync(to, { force: true }); try { fs.rmdirSync(path.dirname(to)); } catch { /* the drop-in folder is not empty or is the units folder */ } } else fs.writeFileSync(to, text);
+    }
+  };
+  if (wrong.length) { putBack(); throw new InstallStop(`The installed files differ from the add-on's: ${wrong.slice(0, 5).join(", ")}${wrong.length > 5 ? ` and ${wrong.length - 5} more` : ""}. The install failed and the previous units are back.`); }
+  say.push("Checked every installed file against the add-on's.");
+  const reload = D.run("systemctl", ["daemon-reload"]);
+  if (reload.status !== 0) { putBack(); throw new InstallStop(`systemd did not reload its units: ${firstError(reload)}. The previous units are back.`); }
+  say.push("Wrote the units of the driver, the keeper and the dead-man.");
+  const legacy = g("legacy_units") || [];
+  const legacyUnits = [...new Set(legacy.flatMap(l => (/\.(service|timer)$/.test(l) ? [l] : [`${l}.timer`, `${l}.service`])))];
+  if (!switchOver) {
+    for (const t of ["factory-driver.timer", "factory-deadman.timer"]) {
+      const r = D.run("systemctl", ["enable", "--now", t]);
+      if (r.status !== 0) throw new InstallStop(`${t} could not be turned on: ${firstError(r)}`);
+    }
+    say.push("Turned on the driver's timer and the dead-man's timer.");
+    if (legacy.length) say.push(`The ${legacy.length} units the driver replaces are still on: add --switch to hand over to the driver (they are turned off only after the driver has done one good round, and never deleted).`);
+  } else {
+    // 5. the switch, which never leaves the server without a driver: the old timers are stopped (not disabled), one round runs now,
+    // and only when it was good are the old units disabled and the timers turned on; otherwise everything is put back.
+    const stoppable = legacyUnits.filter(u => u.endsWith(".timer"));
+    const wasActive = stoppable.filter(u => String(D.run("systemctl", ["is-active", u]).stdout || "").trim() === "active");
+    for (const u of wasActive) D.run("systemctl", ["stop", u]);
+    const statusFile = path.join(g("server.state_dir"), "status.json");
+    const t0 = Date.now() - 2000;
+    let failure = "";
+    const r = D.run("systemctl", ["start", "factory-driver.service"], { timeout: 11 * 60000 });
+    if (r.status !== 0) failure = `the first round failed: ${roundError(D, r)}`;
+    else { let at = NaN; try { at = fs.statSync(statusFile).mtimeMs; } catch { /* no status file */ } if (!(at >= t0)) failure = "the first round ended without writing a fresh status.json"; }
+    if (failure) {
+      putBack();
+      D.run("systemctl", ["daemon-reload"]);
+      for (const u of wasActive) D.run("systemctl", ["start", u]);
+      throw new InstallStop(`The switch did not happen: ${failure}. The previous units are back and ${wasActive.length ? `the old timers run again (${wasActive.join(", ")})` : "no old timer had been running"}.`);
+    }
+    say.push("The driver did one good round on its own.");
+    const off = [];
+    for (const u of legacyUnits) { const x = D.run("systemctl", ["disable", "--now", u]); if (x.status === 0) off.push(u); }
+    for (const t of ["factory-driver.timer", "factory-deadman.timer"]) {
+      const x = D.run("systemctl", ["enable", "--now", t]);
+      if (x.status !== 0) throw new InstallStop(`${t} could not be turned on: ${firstError(x)}`);
+    }
+    say.push(legacy.length ? `Switched off ${off.length} of the ${legacyUnits.length} old units (${off.join(", ") || "none were on"}); none was deleted. The driver's timer and the dead-man's timer are on.` : "No units are listed as replaced, so none was switched off. The driver's timer and the dead-man's timer are on.");
+  }
   const rec = keeper("installed");
-  say.push(rec.status === 0 ? "Checked every installed file against the add-on's, and the keeper recorded this set." : `Checked every installed file against the add-on's; the keeper could not record the set (${String(rec.stderr || "").trim().split("\n").pop() || `exit ${rec.status}`}).`);
+  say.push(rec.status === 0 ? "The keeper recorded this set." : `The keeper could not record the set (${firstError(rec)}).`);
   if (watcher) say.push(...installWatcher(src, loaded, D));
   return say;
 }
@@ -146,7 +186,7 @@ export function installWatcher(source, loaded, D = realDeps) {
     if (r.status !== 0) throw new InstallStop(`${to} could not be put into ${repo}: ${String(r.stderr || "").trim().split("\n").pop() || `exit ${r.status}`}`);
     say.push(`Put ${to} into ${repo}.`);
   }
-  const vars = { FACTORY_OWNER: g("owner.github_login"), FACTORY_PLAN_PATTERN: g("releases.plan_pattern") || "" };
+  const vars = { FACTORY_OWNER: g("owner.github_login"), FACTORY_PLAN_PATTERN: g("releases.plan_pattern") || "", FACTORY_RECORDS_REPO: g("releases.records_repo") || "" }; // the watcher reads the release plans from the records repository, wherever the watcher itself lives
   for (const [name, value] of Object.entries(vars)) {
     if (!value) continue;
     const r = gh("variable", "set", name, "--repo", repo, "--body", value);

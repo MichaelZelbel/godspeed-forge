@@ -402,7 +402,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       try { appendEvents(journalFile, [...ce, ...owed]); for (const k of Object.keys(debt)) delete debt[k]; }
       catch (e) { for (const x of ce) debt[x.key] = (debt[x.key] || 0) + x.ms; record({ kind: "credit not written", why: String(e.message).slice(0, 160) }); } // fails closed: the debt counts until it is written
     }
-    out.stepStatus = deps.stepsCtx ? stepStatus(state, deps.stepsCtx.steps, deps.stepsCtx.settings, stepRes.running) : {}; out.journalHead = jread.head; out.clock = clock; out.inventory = adv.rows; out.violations = adv.violations.length; out.actRunsToday = runsToday; out.pauses = pauses;
+    out.stepPlan = stepRes.plan || []; out.stepStatus = deps.stepsCtx ? stepStatus(state, deps.stepsCtx.steps, deps.stepsCtx.settings, stepRes.running) : {}; out.journalHead = jread.head; out.clock = clock; out.inventory = adv.rows; out.violations = adv.violations.length; out.actRunsToday = runsToday; out.pauses = pauses;
     // one sentence per entry; when many reach rung 3 together (an old backlog), ONE message names the count and the first three
     const allTells = adv.actions.tell, singles = allTells.filter(r => r.entry.remindOnly || r.entry.reminder);
     // THE GATE (gate.mjs): nothing reaches Michael on one reading. (a) the same condition on 3 reads at least 10 minutes apart; (b) a fresh re-read of
@@ -791,6 +791,7 @@ export function describe(out) {
   lines.push(`unreadable: ${(w.unreadable || []).map(u => `${u.part} (${u.error})`).join("; ") || "nothing"}`);
   lines.push(`inventory (${(out.inventory || []).length} entries, ${out.violations || 0} rule violations, ${out.actRunsToday || 0} acting runs in the last 24 h):`);
   for (const r of out.inventory || []) lines.push(`  ${describeRow(r, Date.now())}`);
+  for (const p of out.stepPlan || []) lines.push(`step ${p.name}: ${p.text}`);
   lines.push(`obstacles (${out.steps.length}):`);
   for (const s of out.steps) lines.push(`  ${s.kind} ${s.key} since ${s.since}: ${s.do}${s.provider ? ` on ${s.provider}/${s.model}` : ""}${s.note ? ` (${s.note})` : ""}`);
   return lines.join("\n");

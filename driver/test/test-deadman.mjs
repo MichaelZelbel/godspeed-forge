@@ -12,7 +12,7 @@ function world() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dm-"));
   const rel = (name, status) => { fs.mkdirSync(path.join(dir, "r", name), { recursive: true }); fs.writeFileSync(path.join(dir, "r", name, "plan.md"), `---\nrelease: ${name}\n---\nStatus: ${status}\n`); };
   rel("godspeed-2.0.0-beta.28-b", "approved"); rel("godspeed-2.0.0-beta.29-c", "approved"); rel("godspeed-2.0.0-beta.30-d", "draft");
-  const cfg = { RELEASES: path.join(dir, "r"), DEV: dir, STATUS: path.join(dir, "status.json"), KEEPER: path.join(dir, "keeper.json"), KEEPER_BIN: "/none", SPOOL: path.join(dir, "spool"), STATE: path.join(dir, "state.json"), ACTS: path.join(dir, "acts"), NOTICES: path.join(dir, "notices.json"), TG_ENV: path.join(dir, "none.env"), WATCH_REPO: "o/w", BRAIN: dir, HEALTH: "x", PLAN_PATTERN: "^godspeed-\\d", KEEPER_HOME: "/usr/local/lib/godspeed-factory-driver", STATE_DIR: "/var/lib/godspeed-factory-driver", DRIVER_DIR: "/d", OWNER: "MichaelZelbel", DRY: false };
+  const cfg = { RELEASES: path.join(dir, "r"), DEV: dir, STATUS: path.join(dir, "status.json"), KEEPER: path.join(dir, "keeper.json"), KEEPER_BIN: "/none", SPOOL: path.join(dir, "spool"), STATE: path.join(dir, "state.json"), ACTS: path.join(dir, "acts"), NOTICES: path.join(dir, "notices.json"), TG_ENV: path.join(dir, "none.env"), WATCH_REPO: "o/w", BRAIN: dir, HEALTH: "x", PLAN_PATTERN: "^godspeed-\\d", NODE: "/opt/node/bin/node", KEEPER_HOME: "/usr/local/lib/godspeed-factory-driver", STATE_DIR: "/var/lib/godspeed-factory-driver", DRIVER_DIR: "/d", OWNER: "MichaelZelbel", DRY: false };
   return { dir, cfg };
 }
 const git = at => () => ({ stdout: `${new Date(at).toISOString()}\n` });
@@ -52,7 +52,7 @@ test("a whole dead-man run: it says the release sentence once, and with the driv
   const deps = { ref: "testref", health: () => ({ stdout: JSON.stringify({ ok: true, version: "2.0.0-beta.28" }) }), run: (c, a) => { calls.push([c, ...a]); return c === "git" ? { stdout: `${new Date(NOW - 80 * HOUR).toISOString()}\n` } : { status: 0, stdout: JSON.stringify([{ user: { login: "github-actions[bot]" }, body: "@MichaelZelbel x <!-- ref:testref -->", html_url: "https://github.com/o/w/issues/1" }]) }; }, fetch: async () => ({ json: async () => ({}) }), sleep: async () => {}, polls: 1, gateCfg: { reads: 1, gapMs: 0, toleranceMs: 0 } };
   const r1 = await run(w.cfg, NOW, () => {}, deps);
   assert.equal(r1.says.length, 1); assert.equal(r1.step, "rollback");
-  assert.ok(calls.some(c => c[0] === "node" && c.includes("repair")), "the keeper's repair ran first");
+  assert.ok(calls.some(c => c[0] === "/opt/node/bin/node" && c.includes("repair")), "the keeper's repair ran first");
   assert.ok(!calls.some(c => c[0] === "systemd-run"), "no AI yet");
   assert.equal(JSON.parse(fs.readFileSync(w.cfg.NOTICES, "utf8")).notices.length, 1, "Godspeed's own queue too");
   fresh(w.cfg, 1);
@@ -139,4 +139,22 @@ test("the dead-man: an unreadable status file is no verdict; different failures 
   const running = runningVersion(w.cfg, () => ({ stdout: JSON.stringify({ ok: true, version: "2.0.0-beta.28" }) }));
   assert.equal(approvedNewer(w.cfg, running, git(NOW - 200 * HOUR)).unreadable, true, "a malformed staging record is unreadable, not 'not installed'");
   assert.equal(approvedNewer(w.cfg, running, () => ({ stdout: "" })).unreadable, true, "a plan history that cannot be read is not guessed from a file time");
+});
+
+test("the keeper runs with the configured node, and its rung counts as attempted only when it exits 0: a failed keeper is asked again at the next run", async () => {
+  const w = world(); const calls = []; let keeperStatus = 1;
+  const deps = { ref: "testref", health: () => ({ stdout: JSON.stringify({ ok: true, version: "2.0.0-beta.28" }) }), run: (c, a) => { calls.push([c, ...a]); return c === "git" ? { stdout: `${new Date(NOW - 80 * HOUR).toISOString()}
+` } : c === "/opt/node/bin/node" ? { status: keeperStatus, stderr: "keeper: cannot restore" } : { status: 0, stdout: "" }; }, fetch: async () => ({ json: async () => ({ ok: false }) }) };
+  const r1 = await run(w.cfg, NOW, () => {}, deps);
+  assert.equal(r1.step, "rollback");
+  assert.ok(calls.some(c => c[0] === "/opt/node/bin/node" && c[1] === w.cfg.KEEPER_BIN && c[2] === "repair"), "the configured node, not a literal `node`");
+  assert.ok(!calls.some(c => c[0] === "node"));
+  assert.equal(JSON.parse(fs.readFileSync(w.cfg.STATE, "utf8")).repair.rollbackAt, undefined, "the keeper failed: the rung is not counted as attempted");
+  assert.ok(r1.done.some(d => d.keeper === "repair failed" && /cannot restore/.test(d.why)));
+  keeperStatus = 0;
+  const r2 = await run(w.cfg, NOW + 5 * MIN, () => {}, deps);
+  assert.equal(r2.step, "rollback", "asked again next time");
+  assert.ok(JSON.parse(fs.readFileSync(w.cfg.STATE, "utf8")).repair.rollbackAt, "now it counts");
+  const r3 = await run(w.cfg, NOW + 10 * MIN, () => {}, deps);
+  assert.notEqual(r3.step, "rollback", "once attempted it is not asked a third time");
 });

@@ -18,7 +18,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { ANONYMOUS_UNIT } from "./world.mjs";
+import { ANONYMOUS_UNIT, isLegacy } from "./world.mjs";
 import { forgeArgv } from "./release-driver/release-driver-owner-steps.mjs";
 
 export const RELEASE_PROGRAMS = /^(auto-stage|freeze|stage-server)$/, STOP_MAX_HOURS = 2;
@@ -100,7 +100,7 @@ export async function housekeep(env0, world, deps = {}) {
     if (!/^[A-Za-z0-9_.@-]+\.(service|timer|socket)$/.test(name)) { out.failed.push(`${name}: not a unit name`); continue; }
     if (NEVER_TOUCH.includes(name) || FORBIDDEN.test(name)) { out.failed.push(`${name} is one of the owner's own services: never touched`); continue; }
     if (/^factory-helper-/.test(name)) continue; // a helper's own unit: the driver collects it
-    if ((env.LEGACY_UNITS || []).some(l => l === name || `${l}.service` === name || `${l}.timer` === name)) continue; // a unit of the program this driver replaced: left alone, never started
+    if (isLegacy(env, name)) continue; // a unit of the program this driver replaced: left alone, never started
     let argv = null;
     if (!user && ALLOWED_RESTART.includes(name)) {
       // a unit with a timer of its own (the test machine, auto-stage, the login) is left to that timer:
@@ -161,7 +161,7 @@ export async function housekeep(env0, world, deps = {}) {
   }
 
   // ---- a factory timer the round found stopped for two rounds (while the network guard was not running)
-  for (const name of ((world && world.timersToStart) || []).filter(n => !(env.LEGACY_UNITS || []).includes(n))) {
+  for (const name of ((world && world.timersToStart) || []).filter(n => !isLegacy(env, n))) {
     if (!/^archonfactory-[A-Za-z0-9_.-]+\.timer$/.test(String(name))) { out.failed.push(`${name}: not one of the factory's timers; left alone`); continue; }
     try {
       const r = exec(asForge(env, ["systemctl", "--user", "start", name]));
