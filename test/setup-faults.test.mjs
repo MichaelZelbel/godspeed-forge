@@ -36,7 +36,8 @@ const SEAM_CALL = /\bfiles\.\w+\(|\bcommands\.run\(|\brunCommand\(|\bgithub\.\w+
 // Modules whose points setup never reaches in this test, and why.
 const EXEMPT = {
   'files.mjs': 'the file operations themselves, which this test makes fail where setup calls them',
-  'github-adapter.mjs': 'the real GitHub, which this test replaces with the stand-in whose every call it makes fail'
+  'github-adapter.mjs': 'the real GitHub, which this test replaces with the stand-in whose every call it makes fail',
+  'factory-control.mjs': 'the chat\'s inbox handlers, which setup never calls; test/factory-control.test.mjs makes their commands and files fail'
 };
 const sources = new Map();
 for (const name of await readdir(lib)) {
