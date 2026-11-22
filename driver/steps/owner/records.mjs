@@ -104,6 +104,17 @@ export function setUpProjects(state = DEFAULT_STATE) {
   return out;
 }
 
+// Whether a project's factory starts work by itself. Cole Medin's consumer.py `schedule install` writes
+// .factory/trigger.json (and `schedule remove --apply` removes it); `pause` writes .factory/PAUSE and `halt`
+// .factory/STOP, either of which keeps the timer from starting a lap. These are the files "turn on automatic work"
+// and "pause the factory" change (lib/factory-control.mjs: schedule install --apply, then unpause; pause). Right
+// after setup there is no trigger.json: automatic work is off. -> true | false | null (the checkout is unknown).
+export function automaticWork(checkout) {
+  if (!checkout || !fs.existsSync(checkout)) return null;
+  const there = name => fs.existsSync(path.join(checkout, ".factory", name));
+  return there("trigger.json") && !there("PAUSE") && !there("STOP");
+}
+
 const loose = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 
 // Which set-up repository the owner's words name: "owner/repository", the repository's name, or that name

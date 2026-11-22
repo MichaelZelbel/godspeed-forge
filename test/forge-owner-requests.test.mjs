@@ -2,7 +2,7 @@
 // tokens they use (lib/app-token.mjs), against a stand-in GitHub on 127.0.0.1 and a stand-in bridge to Godspeed.
 // The acceptance of tickets 02 (filing) and 05 (go, take it back, release status) of the Forge 0.1.0 plan, and the
 // answer half of ticket 03. No network, no AI.
-// test cases: 14
+// test cases: 15
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -350,12 +350,33 @@ testCase('taking back the first public version, with nothing before it, changes 
   assert.equal((await takeBack({ id: 'f-tb2', kind: 'take-back', project: 'first', words: 'take it back' }, ctx())).say, text, 'and says the same again');
 }
 
+testCase('right after setup, when automatic work is off, the plan\'s reply says nothing is built yet and how to start it; with automatic work on it stays as it is');
+{
+  const factoryFiles = { 'auto-off': [], 'auto-on': ['trigger.json', 'schedule.json'], 'auto-paused': ['trigger.json', 'schedule.json', 'PAUSE'] };
+  const said = {};
+  for (const [name, present] of Object.entries(factoryFiles)) {
+    const checkout = tmpDir(`forge-${name}-`);
+    fs.mkdirSync(path.join(checkout, '.factory'));
+    for (const f of present) fs.writeFileSync(path.join(checkout, '.factory', f), '{}\n');
+    setUpProject(state, gh, `acme/${name}`, { checkout });
+    const r = await plan({ id: `p-${name}`, kind: 'plan', project: `acme/${name}`, words: 'yes', ...goodPlan, version: '0.1.0' }, ctx());
+    assert.equal(r.ok, true, r.say);
+    said[name] = r.say;
+  }
+  const off = name => `Started. ${name} 0.1.0 is planned, with 2 changes. I will tell you when it is ready to try. Automatic work is off, so nothing is built yet: say "run one lap" to watch the first change being made, then "turn on automatic work".`;
+  assert.equal(said['auto-off'], off('auto-off'), 'right after setup: no schedule installed');
+  assert.equal(said['auto-on'], 'Started. auto-on 0.1.0 is being built now, with 2 changes. I will tell you when it is ready to try.');
+  assert.equal(said['auto-paused'], off('auto-paused'), 'the factory is paused');
+  assertPlain(assert, said['auto-off']);
+  assert.equal(gh.repo('acme/auto-off').issues.length, 2, 'the plan is filed all the same');
+}
+
 testCase('every sentence the owner can get from these requests and steps is plain words: no long dash, no internal name, no item number, at most one link');
 {
   const R = 'acme/my-app', U = 'https://github.example/acme/my-app/releases/1';
   const texts = [
     projectWords.noneSetUp(), projectWords.unknown('x', [R, 'acme/side']), projectWords.several([R, 'acme/side']),
-    planWords.started(R, '1.3.0', 1), planWords.already(R, '1.3.0', T), planWords.noAccess(R, '1.3.0'), planWords.githubFailed(R, '1.3.0'),
+    planWords.started(R, '1.3.0', 1), planWords.startedOff(R, '1.3.0', 1), planWords.already(R, '1.3.0', T), planWords.noAccess(R, '1.3.0'), planWords.githubFailed(R, '1.3.0'),
     ...['building', 'checking', 'staged'].map(s => planWords.busy(R, '1.3.0', s)),
     ...[planWords.reasons.noYes, planWords.reasons.version('x'), planWords.reasons.notNewer('1.0.0', '1.2.0'), planWords.reasons.noItems, planWords.reasons.tooMany(8), planWords.reasons.item(1), planWords.reasons.notPlain(2), planWords.reasons.summaryNotPlain].map(reason => planWords.refused(R, '1.3.0', reason)),
     ...Object.values(goWords).map(f => f(R, '1.3.0', U)), ...Object.values(takeBackWords).map(f => f(R, '1.3.0', '1.2.0')),

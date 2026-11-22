@@ -25,6 +25,8 @@ export const projectWords = {
 // ---------------------------------------------------------------- plan
 export const planWords = {
   started: (repository, version, n) => `Started. ${N(repository)} ${version} is being built now, with ${plural(n, "change", "changes")}. I will tell you when it is ready to try.`,
+  // the same, while the project's factory does not start work by itself (automatic work is off, as after setup)
+  startedOff: (repository, version, n) => `Started. ${N(repository)} ${version} is planned, with ${plural(n, "change", "changes")}. I will tell you when it is ready to try. Automatic work is off, so nothing is built yet: say "run one lap" to watch the first change being made, then "turn on automatic work".`,
   refused: (repository, version, reason) => `I did not start ${N(repository)}${version ? ` ${version}` : ""}: ${reason} Nothing was started.`,
   already: (repository, version, ms) => `${N(repository)} ${version} was already started on ${day(ms)}, so I did not start it again.`,
   noAccess: (repository, version) => `I could not start ${N(repository)} ${version}: this server cannot reach the project on GitHub. Run setup for ${repository} again on the server, then ask me again.`,
