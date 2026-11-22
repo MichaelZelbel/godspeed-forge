@@ -29,6 +29,7 @@ export const planWords = {
   already: (repository, version, ms) => `${N(repository)} ${version} was already started on ${day(ms)}, so I did not start it again.`,
   noAccess: (repository, version) => `I could not start ${N(repository)} ${version}: this server cannot reach the project on GitHub. Run setup for ${repository} again on the server, then ask me again.`,
   githubFailed: (repository, version) => `I could not finish starting ${N(repository)} ${version}: GitHub refused part of it. Ask me again in a few minutes and I will carry on where I stopped.`,
+  busy: (repository, version, state) => `${N(repository)} ${version} ${state === "staged" ? "is waiting for your go" : state === "checking" || state === "checked" ? "is still being checked" : "is still being built"}. I can plan the next release once it is public or taken back.`,
   reasons: {
     noYes: "I need your own yes to start it.",
     version: v => `"${v}" is not a version number like 1.2.0.`,
@@ -55,7 +56,8 @@ export const goWords = {
 };
 export const takeBackWords = {
   done: (repository, version, previous) => `${N(repository)} ${version} is taken back. ${previous} is public again.`,
-  doneNoPrevious: (repository, version) => `${N(repository)} ${version} is taken back. There was no earlier version to return to, so the live copy stays on ${version} until the next release.`,
+  doneNoPrevious: (repository, version) => `${N(repository)} ${version} is taken back. No version was public before it, so none is public now, and the live copy is back where it was before.`,
+  first: (repository, version) => `${N(repository)} ${version} is the first public version, so there is nothing earlier to go back to, and I changed nothing. To replace it, ask me to plan a fix.`,
   already: (repository, version) => `${N(repository)} ${version} was already taken back, so nothing changed.`,
   nothing: repository => `I have not made any version of ${N(repository)} public, so there is nothing to take back.`,
   failed: (repository, version) => `I could not finish taking back ${N(repository)} ${version}: GitHub refused a step. Ask me again in a few minutes and I will finish it.`,

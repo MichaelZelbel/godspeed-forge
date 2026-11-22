@@ -2,7 +2,7 @@
 // tokens they use (lib/app-token.mjs), against a stand-in GitHub on 127.0.0.1 and a stand-in bridge to Godspeed.
 // The acceptance of tickets 02 (filing) and 05 (go, take it back, release status) of the Forge 0.1.0 plan, and the
 // answer half of ticket 03. No network, no AI.
-// test cases: 12
+// test cases: 14
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -132,6 +132,16 @@ testCase('a second filing of the same version is refused, and nothing is filed a
   assert.equal(app.issues.length, 2);
 }
 
+testCase('a new plan while another release of the project is still being built is refused in one plain sentence, and nothing is filed');
+{
+  const before = gh.S.calls.length;
+  const r = await plan({ id: 'req-next', kind: 'plan', project: 'my-app', words: 'yes', ...goodPlan, version: '1.4.0' }, ctx());
+  assert.deepEqual(r, { ok: false, say: 'my-app 1.3.0 is still being built. I can plan the next release once it is public or taken back.' });
+  assertPlain(assert, r.say);
+  assert.deepEqual(writesSince(before), []);
+  assert.equal(releaseRecord(state, REPO, '1.4.0'), null, 'nothing is kept of it either');
+}
+
 testCase('a filing GitHub stops part way carries on where it stopped next time, without a second copy of any issue');
 {
   const sidePlan = { version: '0.2.0', summary: 'Two small fixes.', items: [goodPlan.items[0], goodPlan.items[1]], later: '' };
@@ -158,6 +168,7 @@ testCase('go makes the staged candidate public through the release App, records 
   facts.newestPublicRelease = { version: '1.2.0', tag: 'v1.2.0' }; // as the driver's refresh writes it
   await bridge.writeWorkspaceFile(factsFile(REPO), JSON.stringify(facts));
   assert.equal(await status({ id: 's0', kind: 'status', project: 'my-app' }, ctx()).then(r => r.say), 'my-app 1.3.0 is ready to try at https://github.example/acme/my-app/releases/5001 and waits for your go. 1.2.0 is public.');
+  assert.equal((await plan({ id: 'req-staged', kind: 'plan', project: 'my-app', words: 'yes', ...goodPlan, version: '1.4.0' }, ctx())).say, 'my-app 1.3.0 is waiting for your go. I can plan the next release once it is public or taken back.');
   const before = gh.S.calls.length;
   const r = await go({ id: 'go-1', kind: 'go', project: 'my-app', words: 'go', at: '2026-11-22T10:01:00Z' }, ctx());
   assert.deepEqual(r, { ok: true, say: 'my-app 1.3.0 is public now: https://github.example/acme/my-app/releases/5001' });
@@ -187,6 +198,7 @@ testCase('a go for a candidate that moved, while nothing is staged, or while it 
   Object.assign(side, { state: 'checking', candidate: { commit: C1, tag: 'candidate/0.2.0' } });
   await saveRelease(state, side);
   assert.deepEqual(await go({ id: 'g2', kind: 'go', project: 'side', words: 'go' }, ctx()), { ok: false, say: 'side 0.2.0 is still being checked, so there is nothing to make public yet.' });
+  assert.equal((await plan({ id: 'side-next', kind: 'plan', project: 'side', words: 'yes', ...goodPlan, version: '0.3.0' }, ctx())).say, 'side 0.2.0 is still being checked. I can plan the next release once it is public or taken back.');
   side.state = 'staged';
   await saveRelease(state, side);
   gh.repo(SIDE).refs['tags/candidate/0.2.0'] = 'd'.repeat(40);
@@ -207,7 +219,9 @@ testCase('take it back makes the earlier release the latest again, moves live ba
   assert.equal(app.latestId, 900, 'the earlier release is the latest again');
   const rel = app.releases.find(x => x.id === 5001);
   assert.equal(rel.name, '1.3.0 (taken back)');
-  assert.ok(rel.body.startsWith('Taken back on 2026-11-22 at the owner\'s word: "take it back". Nothing was deleted.'));
+  assert.equal(rel.body, 'Taken back on 2026-11-22. 1.2.0 is public again.\n\nWhat changes in 1.3.0:\n\n- People stay signed in after they close the app.\n- People can sort any list by the date they added things.\n');
+  assert.ok(!JSON.stringify(gh.S.calls.slice(before)).includes('take it back'), 'the owner\'s words never reach GitHub');
+  assert.equal(releaseRecord(state, REPO, '1.3.0').takenBack.words, 'take it back', 'they are kept only in the Forge\'s private state');
   assert.equal(app.refs['heads/live'], P0, 'live is back on the earlier version');
   assert.equal(app.refs['tags/v1.3.0'], C1, 'the tag stays');
   assert.equal(app.refs['tags/candidate/1.3.0'], C1);
@@ -301,8 +315,9 @@ testCase('a move of live GitHub refuses the release App because it brings in a w
   assert.deepEqual(writes.filter(w => w.role === 'owner').map(w => `${w.method} ${w.path}`), ['PATCH /repos/acme/wf/git/refs/heads/live']);
   assert.ok(writes.filter(w => w.role !== 'owner').every(w => w.role === 'release'), 'the tag and the release stayed with the release App');
   gh.S.workflowShas.add(L0);
-  assert.deepEqual(await takeBack({ id: 'wf-tb', kind: 'take-back', project: 'wf', words: 'take it back' }, c), { ok: true, say: 'wf 1.0.0 is taken back. There was no earlier version to return to, so the live copy stays on 1.0.0 until the next release.' });
-  assert.equal(gh.repo('acme/wf').refs['heads/live'], L0, 'take it back moved live back the same way');
+  assert.deepEqual(await takeBack({ id: 'wf-tb', kind: 'take-back', project: 'wf', words: 'take it back' }, c), { ok: true, say: 'wf 1.0.0 is taken back. No version was public before it, so none is public now, and the live copy is back where it was before.' });
+  assert.equal(gh.repo('acme/wf').refs['heads/live'], L0, 'take it back moved live back to exactly where it was before the go, the same way');
+  assert.equal(gh.repo('acme/wf').releases.at(-1).body.split('\n')[0], 'Taken back on 2026-11-22. No earlier release is public.');
   assert.equal(ownerGh.calls().length, 2);
   gh.S.fail.push({ method: 'PATCH', path: /^\/repos\/acme\/wf2\/git\/refs\/heads\/live$/, status: 403, times: 1 });
   const refused = await go({ id: 'wf2-go', kind: 'go', project: 'wf2', words: 'go' }, c);
@@ -311,12 +326,37 @@ testCase('a move of live GitHub refuses the release App because it brings in a w
   assert.equal(ownerGh.calls().length, 2, 'another refusal never uses the owner\'s sign-in');
 }
 
+testCase('taking back the first public version, with nothing before it, changes nothing on GitHub and says so plainly; go recorded where live was');
+{
+  const full = 'acme/first', F = '9'.repeat(40);
+  setUpProject(state, gh, full);
+  gh.repo(full).refs['tags/candidate/0.1.0'] = F;
+  await saveRelease(state, {
+    repository: full, version: '0.1.0', summary: 'The first version.', later: '', words: 'yes', at: '2026-11-22T09:00:00Z', requestId: 'f', filedAt: '2026-11-22T09:00:00Z', state: 'staged',
+    items: [{ n: 1, title: 'It starts', outcome: 'The app starts.', size: 'light', why: 'A first version.', issue: { number: 1 } }],
+    candidate: { commit: F, tag: 'candidate/0.1.0', at: '2026-11-22T09:30:00Z' }
+  });
+  assert.equal((await go({ id: 'f-go', kind: 'go', project: 'first', words: 'go' }, ctx())).ok, true);
+  const record = releaseRecord(state, full, '0.1.0');
+  assert.deepEqual([record.liveBefore, record.previous], [null, null], 'go recorded that live did not exist and nothing was public before');
+  assert.equal(gh.repo(full).refs['heads/live'], F);
+  const before = gh.S.calls.length;
+  const text = 'first 0.1.0 is the first public version, so there is nothing earlier to go back to, and I changed nothing. To replace it, ask me to plan a fix.';
+  assert.deepEqual(await takeBack({ id: 'f-tb', kind: 'take-back', project: 'first', words: 'take it back' }, ctx()), { ok: false, say: text });
+  assertPlain(assert, text);
+  assert.deepEqual(writesSince(before), [], 'nothing on GitHub changed');
+  assert.deepEqual([gh.repo(full).refs['heads/live'], gh.repo(full).latestId, releaseRecord(state, full, '0.1.0').state], [F, gh.repo(full).releases.at(-1).id, 'public']);
+  assert.equal(releaseRecord(state, full, '0.1.0').takenBack, undefined);
+  assert.equal((await takeBack({ id: 'f-tb2', kind: 'take-back', project: 'first', words: 'take it back' }, ctx())).say, text, 'and says the same again');
+}
+
 testCase('every sentence the owner can get from these requests and steps is plain words: no long dash, no internal name, no item number, at most one link');
 {
   const R = 'acme/my-app', U = 'https://github.example/acme/my-app/releases/1';
   const texts = [
     projectWords.noneSetUp(), projectWords.unknown('x', [R, 'acme/side']), projectWords.several([R, 'acme/side']),
     planWords.started(R, '1.3.0', 1), planWords.already(R, '1.3.0', T), planWords.noAccess(R, '1.3.0'), planWords.githubFailed(R, '1.3.0'),
+    ...['building', 'checking', 'staged'].map(s => planWords.busy(R, '1.3.0', s)),
     ...[planWords.reasons.noYes, planWords.reasons.version('x'), planWords.reasons.notNewer('1.0.0', '1.2.0'), planWords.reasons.noItems, planWords.reasons.tooMany(8), planWords.reasons.item(1), planWords.reasons.notPlain(2), planWords.reasons.summaryNotPlain].map(reason => planWords.refused(R, '1.3.0', reason)),
     ...Object.values(goWords).map(f => f(R, '1.3.0', U)), ...Object.values(takeBackWords).map(f => f(R, '1.3.0', '1.2.0')),
     statusWords.building(R, '1.3.0', 1, 1), statusWords.stuck(R, '1.3.0'), statusWords.checking(R, '1.3.0'), statusWords.staged(R, '1.3.0', U), statusWords.failed(R, '1.3.0'), statusWords.stagingFailed(R, '1.3.0'), statusWords.idle(R),
