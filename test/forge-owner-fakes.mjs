@@ -1,7 +1,7 @@
 // Stand-ins for the owner requests' and steps' tests: a GitHub served on 127.0.0.1 from memory (it checks each
 // App's signed JWT with the App's public key and hands out installation tokens for one repository), a bridge to
-// Godspeed that keeps every message it is given (it never drops a repeat, so a test sees every send), and the
-// Forge's private state for a project set up with two Apps. No network, no AI.
+// Godspeed that says each message once per id as the real one does (and keeps every attempt, so a test also sees
+// a repeat the bridge dropped), and the Forge's private state for a project set up with two Apps. No network, no AI.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -227,11 +227,15 @@ export function standInGh(github, dir = tmpDir('forge-gh-')) {
 }
 
 // ---------------------------------------------------------------- the bridge to Godspeed
+// Like the real bridge (lib/godspeed.mjs), it says a message once per id: `sent` holds what reached the owner,
+// `attempts` every call, repeats included.
 export function standInBridge(workspace = tmpDir('forge-workspace-')) {
   const sent = [];
+  const attempts = [];
   return {
     workspace,
     sent,
+    attempts,
     async readWorkspaceFile(rel) {
       try { return fs.readFileSync(path.join(workspace, rel), 'utf8'); } catch { return null; }
     },
@@ -241,6 +245,8 @@ export function standInBridge(workspace = tmpDir('forge-workspace-')) {
       fs.writeFileSync(file, content);
     },
     async sendToOwner(text, { id } = {}) {
+      attempts.push({ text, id });
+      if (id && sent.some(s => s.id === id)) return 'already';
       sent.push({ text, id });
       return 'notice';
     },

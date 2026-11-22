@@ -190,6 +190,18 @@ testCase('the step says once when the questions issue disappears while the facto
   assertPlain(assert, bridge.sent.at(-1).text);
   assert.equal(readQuestions(state).questions.find(x => x.handle === 'F2').status, 'withdrawn');
   assert.deepEqual(bridge.json(WAITING_FILE).items, [], 'nothing waits on the owner any more');
+  // the list comes back, and goes again while the factory still waits: said once more, under its own message id
+  sideIssue.state = 'open';
+  await questionsStep.run(ctxFor([{ repository: SIDE }]));
+  assert.equal(sentSince(n).length, 1, 'nothing is said when it comes back');
+  sideIssue.state = 'closed';
+  await questionsStep.run(ctxFor([{ repository: SIDE }]));
+  await questionsStep.run(ctxFor([{ repository: SIDE }]));
+  const gone = sentSince(n);
+  assert.equal(gone.length, 2, 'the second disappearance reached the owner through a bridge that says each id once');
+  assert.equal(gone[1].text, gone[0].text);
+  assert.notEqual(gone[1].id, gone[0].id);
+  assert.equal(bridge.attempts.filter(a => a.text === gone[0].text).length, 2, 'and nothing was sent a third time');
 }
 
 testCase('a project the Forge has not set up, or without App details here, is skipped quietly, and the older questions step keeps its projects to itself');
