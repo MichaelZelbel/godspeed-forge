@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-inventory.mjs   (pure: no machine, no network)
 import { test } from "node:test";
 import assert from "node:assert/strict";

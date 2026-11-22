@@ -21,19 +21,26 @@ import { fileURLToPath } from "node:url";
 const HOUR = 3600000, MIN = 60000;
 export const RULES = { ceilingHours: 72, silenceHours: 24, driverStaleMinutes: 20, failedRounds: 3, rollbackGraceMinutes: 20, repairHours: 1 };
 export const defaults = (e = process.env) => ({
-  RELEASES: e.DM_RELEASES || "/usr/local/lib/godspeed-forge/godspeed-dev/releases",
-  DEV: e.DM_DEV || "/usr/local/lib/godspeed-forge/godspeed-dev",
-  STATUS: e.DM_STATUS || "/var/lib/godspeed-factory-driver/status.json",
-  KEEPER: e.DM_KEEPER || "/var/lib/godspeed-factory-driver/keeper.json",
-  KEEPER_BIN: e.DM_KEEPER_BIN || "/usr/local/lib/godspeed-factory-driver/keeper.mjs",
-  SPOOL: e.DM_SPOOL || "/var/lib/godspeed-factory-spool",
-  STATE: e.DM_STATE || "/var/lib/godspeed-factory-deadman/state.json",
-  ACTS: e.DM_ACTS || "/var/lib/godspeed-factory-deadman/acts",
-  NOTICES: e.DM_NOTICES || "/root/godspeed/.godspeed/notices.json",
-  HEALTH: e.DM_HEALTH || "http://127.0.0.1:47831/health",
-  TG_ENV: e.DM_TG_ENV || (fs.existsSync("/etc/godspeed-forge/telegram-machine.env") ? "/etc/godspeed-forge/telegram-machine.env" : "/root/.hermes/.env"),
-  WATCH_REPO: e.DM_WATCH_REPO || "MichaelZelbel/godspeed-dev",
-  BRAIN: e.DM_BRAIN || "/root/godspeed",
+  RELEASES: e.DM_RELEASES || "",
+  DEV: e.DM_DEV || "",
+  STATUS: e.DM_STATUS || "/var/lib/godspeed/forge/driver/status.json",
+  KEEPER: e.DM_KEEPER || "/var/lib/godspeed/forge/driver/keeper.json",
+  KEEPER_BIN: e.DM_KEEPER_BIN || "/usr/local/lib/godspeed/forge/keeper/keeper.mjs",
+  SPOOL: e.DM_SPOOL || "/var/lib/godspeed/forge/spool",
+  STATE: e.DM_STATE || "/var/lib/godspeed/forge/deadman/state.json",
+  ACTS: e.DM_ACTS || "/var/lib/godspeed/forge/deadman/acts",
+  NOTICES: e.DM_NOTICES || "",
+  HEALTH: e.DM_HEALTH || e.FD_HEALTH_URL || "",
+  OWNER: e.FD_OWNER_LOGIN || "",
+  FACTORY_HOME: e.FD_FORGE_HOME || "/home/factory",
+  CLAUDE_BIN: (() => { const v = e.FD_CLAUDE_BIN || ""; try { const j = JSON.parse(v); return Array.isArray(j) ? j[0] : v; } catch { return v || `${e.FD_FORGE_HOME || "/home/factory"}/.local/bin/claude`; } })(),
+  DRIVER_DIR: e.FD_LIB || "/usr/local/lib/godspeed/forge/driver",
+  KEEPER_HOME: e.FD_KEEPER_HOME || "/usr/local/lib/godspeed/forge/keeper",
+  STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed/forge/driver",
+  PLAN_PATTERN: e.FD_PLAN_PATTERN || "",
+  TG_ENV: e.DM_TG_ENV || ((e.TG_MACHINE_ENV && fs.existsSync(e.TG_MACHINE_ENV)) ? e.TG_MACHINE_ENV : (e.TG_ENV || "")),
+  WATCH_REPO: e.DM_WATCH_REPO || e.WATCH_ISSUES_REPO || e.WATCH_REPO || "",
+  BRAIN: e.DM_BRAIN || "/root/brain",
   DRY: process.argv.includes("--dry-run"),
 });
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
@@ -61,7 +68,7 @@ export function approvedNewer(cfg, running, run = sys) {
   let names = []; try { names = fs.readdirSync(cfg.RELEASES); } catch { return []; }
   const out = []; out.unreadable = false;
   for (const n of names) {
-    if (!(cfg.PRODUCT || /^godspeed-\d/).test(n)) continue; // the server runs Godspeed only: another product's plan is not 'not running on your server'
+    if (!(cfg.PRODUCT || (cfg.PLAN_PATTERN ? new RegExp(cfg.PLAN_PATTERN) : /(?!)/)).test(n)) continue; // the server runs the main project only: another product's plan is not 'not running on your server'
     const v = versionOf(n); if (!v) continue;
     let text = ""; try { text = fs.readFileSync(path.join(cfg.RELEASES, n, "plan.md"), "utf8"); } catch { continue; }
     if (!/^\s*status:\s*approved/im.test(text)) continue;
@@ -107,13 +114,13 @@ export function repairStep(rep, health, now, rules = RULES) {
   if (r.claudeAt && !r.toldAt && now - r.claudeAt >= rules.repairHours * HOUR) return { step: "tell", rep: { ...r, toldAt: now } };
   return { step: null, rep: r };
 }
-const REPAIR_BRIEF = (why, tried) => `You are the factory dead-man's repair run: root on the AX41, in Mission Control's brain folder (AGENTS.md and rules/ bind you). The software factory's driver (/usr/local/lib/godspeed-forge/factory-driver, one round every 5 minutes, unit factory-driver.service; state /var/lib/godspeed-factory-driver) is not healthy: ${why}. ${tried ? `Earlier repair attempts: ${tried}\n` : ""}Make it healthy: read its journal (journalctl -u factory-driver.service), its decisions log and status, fix the cause, and leave a good round behind within 30 minutes (the keeper rolls an install back by itself otherwise). You may write the driver's install; you may NEVER touch the dead-man (/usr/local/lib/godspeed-forge/factory-deadman.mjs and its units), the journal (/var/lib/godspeed-factory-driver/journal.jsonl) or the outside watcher. Never anything outward to people, never spend money, never loosen a check. Your last line: RESULT: resolved | RESULT: unresolved`;
+const REPAIR_BRIEF = (why, tried, cfg = defaults()) => `You are the factory dead-man's repair run: root on this server, in Mission Control's brain folder (AGENTS.md and rules/ bind you). The software factory's driver (${cfg.DRIVER_DIR}, one round every 5 minutes, unit factory-driver.service; state ${cfg.STATE_DIR}) is not healthy: ${why}. ${tried ? `Earlier repair attempts: ${tried}\n` : ""}Make it healthy: read its journal (journalctl -u factory-driver.service), its decisions log and status, fix the cause, and leave a good round behind within 30 minutes (the keeper rolls an install back by itself otherwise). You may write the driver's install; you may NEVER touch the dead-man (${cfg.KEEPER_HOME}/deadman.mjs and its units), the journal (${cfg.STATE_DIR}/journal.jsonl) or the outside watcher. Never anything outward to people, never spend money, never loosen a check. Your last line: RESULT: resolved | RESULT: unresolved`;
 // a driver-repair run: writable driver install, read-only dead-man, journal and units
 export function launchRepair(cfg, unit, provider, why, tried, run = sys) {
   const dir = path.join(cfg.ACTS, unit); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify({ provider, model: provider === "claude" ? "claude-opus-5-5" : "gpt-5.6-sol", brain: cfg.BRAIN, prompt: REPAIR_BRIEF(why, tried), actsDir: cfg.ACTS, minutes: 50 }));
+  fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify({ provider, model: provider === "claude" ? "claude-opus-5-5" : "gpt-5.6-sol", brain: cfg.BRAIN, factoryHome: cfg.FACTORY_HOME, claudeBin: cfg.CLAUDE_BIN, prompt: REPAIR_BRIEF(why, tried, cfg), actsDir: cfg.ACTS, minutes: 50 }));
   const r = run("systemd-run", [`--unit=${unit}`, "--collect", "--quiet", "-p", "RuntimeMaxSec=3300", "-p", "NoNewPrivileges=yes", "-p", "CapabilityBoundingSet=~CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_SYS_MODULE CAP_SYS_BOOT CAP_SYS_TIME CAP_SYS_RAWIO", "-p", "ProtectControlGroups=yes", "-p", "ProtectKernelModules=yes",
-    "-p", "ReadOnlyPaths=/usr/local/lib/godspeed-forge/factory-deadman.mjs /etc/systemd/system /var/lib/godspeed-factory-driver /usr/local/lib/godspeed-factory-driver", "-p", `ReadWritePaths=${cfg.ACTS} ${cfg.SPOOL}`,
+    "-p", `ReadOnlyPaths=${cfg.KEEPER_HOME}/deadman.mjs /etc/systemd/system ${cfg.STATE_DIR} ${cfg.KEEPER_HOME}`, "-p", `ReadWritePaths=${cfg.ACTS} ${cfg.SPOOL}`,
     "--setenv=HOME=/root", process.execPath, fileURLToPath(import.meta.url), "--run", dir]);
   return r.status === 0;
 }
@@ -123,12 +130,12 @@ function runJob(dir) { // inside the repair unit (this file's own runner: no dri
   const root = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
   if (job.provider === "claude") {
     const home = path.join(job.actsDir, "claude-home"); fs.mkdirSync(home, { recursive: true });
-    for (const [from, to] of [["/home/godspeed-forge/.claude/.credentials.json", ".credentials.json"], ["/home/godspeed-forge/.claude.json", ".claude.json"]]) if (!fs.existsSync(path.join(home, to))) { try { fs.symlinkSync(from, path.join(home, to)); } catch {} }
-    r = spawnSync("/home/godspeed-forge/.local/bin/claude", ["-p", "--model", job.model, "--dangerously-skip-permissions"], { input: job.prompt, cwd: job.brain, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: `/home/godspeed-forge/.local/bin:${root}`, HOME: "/root", CLAUDE_CONFIG_DIR: home, IS_SANDBOX: "1" } });
+    for (const [from, to] of [[`${job.factoryHome}/.claude/.credentials.json`, ".credentials.json"], [`${job.factoryHome}/.claude.json`, ".claude.json"]]) if (!fs.existsSync(path.join(home, to))) { try { fs.symlinkSync(from, path.join(home, to)); } catch {} }
+    r = spawnSync(job.claudeBin, ["-p", "--model", job.model, "--dangerously-skip-permissions"], { input: job.prompt, cwd: job.brain, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: `${path.dirname(job.claudeBin)}:${root}`, HOME: "/root", CLAUDE_CONFIG_DIR: home, IS_SANDBOX: "1" } });
     fs.writeFileSync(last, r.stdout || "");
   } else {
     const home = path.join(job.actsDir, "codex-home"); fs.mkdirSync(home, { recursive: true });
-    if (!fs.existsSync(path.join(home, "auth.json"))) fs.symlinkSync("/home/godspeed-forge/.codex/auth.json", path.join(home, "auth.json"));
+    if (!fs.existsSync(path.join(home, "auth.json"))) fs.symlinkSync(`${job.factoryHome}/.codex/auth.json`, path.join(home, "auth.json"));
     r = spawnSync("codex", ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "danger-full-access", "-m", job.model, "-C", job.brain, "-o", last, "-"], { input: job.prompt, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: root, HOME: "/root", CODEX_HOME: home } });
   }
   fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify({ at: new Date().toISOString(), said: (fs.existsSync(last) ? fs.readFileSync(last, "utf8") : "").slice(-3000) }));
@@ -143,7 +150,7 @@ export async function tell(cfg, text, deps = {}) {
   // transport B: the notify workflow opens an issue authored by github-actions[bot] that names the owner (his own token would notify nobody)
   try {
     const run = deps.run || sys, ref = deps.ref || crypto.createHash("sha1").update(`deadman|${text}|${Math.floor(Date.now() / 86400000)}`).digest("hex").slice(0, 12);
-    const find = () => { try { const hit = JSON.parse(run("gh", ["api", `repos/${cfg.WATCH_REPO}/issues?state=all&per_page=100`]).stdout).find(i => i.user && i.user.login === "github-actions[bot]" && String(i.body || "").startsWith("@MichaelZelbel") && String(i.body || "").includes(`<!-- ref:${ref} -->`)); return hit ? hit.html_url : null; } catch { return null; } };
+    const find = () => { try { const hit = JSON.parse(run("gh", ["api", `repos/${cfg.WATCH_REPO}/issues?state=all&per_page=100`]).stdout).find(i => i.user && i.user.login === "github-actions[bot]" && String(i.body || "").startsWith(`@${cfg.OWNER}`) && String(i.body || "").includes(`<!-- ref:${ref} -->`)); return hit ? hit.html_url : null; } catch { return null; } };
     let url = find();
     if (!url) {
       const d = run("gh", ["workflow", "run", "factory-notify.yml", "-R", cfg.WATCH_REPO, "-f", `title=The software factory needs a look`, "-f", `body=${text.slice(0, 900)}`, "-f", `ref=${ref}`]);

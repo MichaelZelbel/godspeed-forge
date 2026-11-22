@@ -62,7 +62,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { TRUSTED, isTrusted, blockerRefs, loopWords, capState, codexTrouble, TROUBLE_WORDS, secondCheck, codexJson, forgeArgv, tell, askMichael, pruneQuestions, trustLook, landingLook, genuineRelay, firstWithMarker, asManagerDecision, asQuestion, ownerHeaded, ownerOnlyReason, MANAGER_HEADING, KEEP_CHECKS_DECISION, technicalWords } from "./release-driver-owner-steps.mjs";
+import { ownerLogin, isTrusted, blockerRefs, loopWords, capState, codexTrouble, TROUBLE_WORDS, secondCheck, codexJson, forgeArgv, tell, askMichael, pruneQuestions, trustLook, landingLook, genuineRelay, firstWithMarker, asManagerDecision, asQuestion, ownerHeaded, ownerOnlyReason, MANAGER_HEADING, KEEP_CHECKS_DECISION, technicalWords } from "./release-driver-owner-steps.mjs";
 import { isProtected as guardIsProtected, DECISION_BODY } from "./release-driver-guard.mjs";
 import { cutLook, routedToDeadEnd, factoryFacts } from "./release-driver-cut.mjs";
 
@@ -70,33 +70,33 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOUR = 3600 * 1000;
 export const MARKER_PREFIX = "release-driver:";
 export const OWNER_TITLE = "Owner decisions needed";
-export const DRIVER_EMAIL = "release-driver@godspeed-archon.invalid";
+export const DRIVER_EMAIL = "release-driver@factory.invalid";
 
 export const defaults = (argv = process.argv, e = process.env) => ({
-  REPO: e.RD_REPO || "MichaelZelbel/godspeed-mission-control",
-  RELEASES_DIR: e.RD_RELEASES_DIR || "/usr/local/lib/godspeed-forge/godspeed-dev/releases",
-  STATE_DIR: e.RD_STATE_DIR || "/var/lib/godspeed-release-driver",
-  QUESTIONS_DIR: e.RD_QUESTIONS_DIR || "/var/lib/godspeed-forge-questions",
-  WORKER_DIR: e.RD_WORKER_DIR || "/var/lib/godspeed-mc-queue-worker",
-  FORGE_USER: e.FORGE_USER || "godspeed-forge",
-  SOURCE_CHECKOUT: e.RD_SOURCE_CHECKOUT || "/home/godspeed-forge/godspeed-mission-control",
-  WORK_ROOT: e.RD_WORK_ROOT || "/home/godspeed-forge/release-driver",
+  REPO: e.RD_REPO || "owner/repository",
+  RELEASES_DIR: e.RD_RELEASES_DIR || "/var/lib/godspeed/forge/records/releases",
+  STATE_DIR: e.RD_STATE_DIR || "/var/lib/godspeed/forge/driver/steps/trust",
+  QUESTIONS_DIR: e.RD_QUESTIONS_DIR || "/var/lib/godspeed/forge/questions",
+  WORKER_DIR: e.RD_WORKER_DIR || "/var/lib/godspeed/forge/driver/steps/trust/queue-worker",
+  FORGE_USER: e.FORGE_USER || "factory",
+  SOURCE_CHECKOUT: e.RD_SOURCE_CHECKOUT || "/home/factory/repository",
+  WORK_ROOT: e.RD_WORK_ROOT || e.FD_WORK_ROOT || "/home/factory/factory-driver",
   BRIEF: e.RD_BRIEF || (fs.existsSync(path.join(HERE, "release-driver-brief.md")) ? path.join(HERE, "release-driver-brief.md") : path.join(HERE, "brief.md")),
   GUARD: e.RD_GUARD || path.join(HERE, "release-driver-guard.mjs"),
-  TOKEN_SCRIPT: e.RD_TOKEN_SCRIPT || "/usr/local/lib/godspeed-forge/gh-app-token.mjs",
-  KEYS_FILE: e.RD_KEYS_FILE || "/etc/godspeed-forge/keys.env",
+  TOKEN_SCRIPT: e.RD_TOKEN_SCRIPT || "/usr/local/bin/gh-app-token.mjs",
+  KEYS_FILE: e.RD_KEYS_FILE || "/etc/godspeed-forge/keys-file",
   MODEL: e.RD_MODEL || "gpt-5.6-terra",
   STRONG_MODEL: e.RD_STRONG_MODEL || "gpt-5.6-sol",
   IDLE_HOURS: Number(e.RD_IDLE_HOURS || 3),
   MIN_GAP_MINUTES: Number(e.RD_MIN_GAP_MINUTES || 60),
   MAX_RUNS_PER_DAY: Number(e.RD_MAX_RUNS_PER_DAY || 6), // AI runs in 24 hours that moved nothing
   MAX_RUNS_24H: Number(e.RD_MAX_RUNS_24H || 16), // the spend ceiling: every AI run in 24 hours
-  GODSPEED_DIR: e.RD_GODSPEED_DIR || "/root/godspeed",
+  GODSPEED_DIR: e.RD_GODSPEED_DIR || "/root/brain",
   NOTICES_FILE: e.RD_NOTICES_FILE,
-  AUTO_STAGE_STATE: e.RD_AUTO_STAGE_STATE || "/var/lib/godspeed-auto-stage/state.json",
-  DEV_CHECKOUT: e.RD_DEV_CHECKOUT || "/usr/local/lib/godspeed-forge/godspeed-dev",
-  TOOLS_DIR: e.RD_TOOLS_DIR || "/home/godspeed-forge/.archon/holdout-tools/MichaelZelbel-godspeed-mission-control",
-  TM_STATE: e.RD_TM_STATE || "/var/lib/godspeed-test-machine/state.json", // the test machine's watcher (scripts/test-machine/)
+  AUTO_STAGE_STATE: e.RD_AUTO_STAGE_STATE || "/var/lib/godspeed/forge/driver/steps/stage/state.json",
+  DEV_CHECKOUT: e.RD_DEV_CHECKOUT || "/var/lib/godspeed/forge/records",
+  TOOLS_DIR: e.RD_TOOLS_DIR || "/home/factory/holdout-tools",
+  TM_STATE: e.RD_TM_STATE || "/var/lib/godspeed/forge/driver/steps/test-machine/state.json", // the test machine's watcher (scripts/test-machine/)
   AI_MINUTES: Number(e.RD_AI_MINUTES || 45),
   DRY: argv.includes("--dry-run"), ONCE: argv.includes("--once"), CLEAR_HALT: argv.includes("--clear-halt"), TRUST_ONLY: argv.includes("--trust-only"),
   RD_GH_CMD: e.RD_GH_CMD,
@@ -370,7 +370,7 @@ export function renderBrief(template, ctx) {
   const s = sections(ctx);
   const values = { ...s, RELEASE: ctx.plan.version, REPO: ctx.world.repo, RUN_ID: ctx.runId, NOW: utc(iso(ctx.now)), DATE: iso(ctx.now).slice(0, 10), MINUTES: String(ctx.minutes || 60),
     MODEL: ctx.model, MARKER: markerOf(ctx.runId), OWNER_ISSUE: String((ctx.world.owner && ctx.world.owner.number) || "?"), PROTECTED: (ctx.protected || []).join(", "),
-    MAIN_SHA: String((ctx.world.main && ctx.world.main.sha) || "?").slice(0, 10), RUN_DIR: ctx.runDir || "..", PLAN_PATH: ctx.plan.dir || ctx.plan.id, PLAN: excerpt(ctx.plan.plan, 14000) };
+    MAIN_SHA: String((ctx.world.main && ctx.world.main.sha) || "?").slice(0, 10), RUN_DIR: ctx.runDir || "..", PLAN_PATH: ctx.plan.dir || ctx.plan.id, OWNER_LOGIN: process.env.FD_OWNER_LOGIN || "the owner", BUILDER_LOGIN: `${process.env.FD_BUILDER_APP || "builder"}[bot]`, RELEASE_LOGIN: `${process.env.FD_RELEASE_APP || "release"}[bot]`, PLAN: excerpt(ctx.plan.plan, 14000) };
   return String(template).replace(/\{\{([A-Z_]+)\}\}/g, (all, k) => (k in values ? values[k] : all));
 }
 
@@ -400,11 +400,15 @@ export function validReport(r) {
 }
 
 // ---------------------------------------------------------------- the audit (pure)
-const AUDIT = [
+const rx = t => String(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const HOME_DIR = () => process.env.FD_FORGE_HOME || "/home/factory";
+const PROJECT_DIR = () => String(process.env.FD_SOURCE_CHECKOUT || "/home/factory/repository").split("/").pop();
+const SETTINGS_DIR = () => process.env.FD_SETTINGS_DIR || "/etc/godspeed-forge";
+const AUDIT_RULES = () => [
   [/\/holdouts\b|holdout-tools/i, "touched the hidden holdout scenarios"],
-  [/\/home\/godspeed-forge\/(godspeed-mission-control|godspeed-forge|\.archon|\.config\/gh|\.ssh|\.codex|holdouts)\b/, "touched the factory's own files or a login"],
-  [/(~|\$HOME|\/home\/godspeed-forge)\/(bin|\.local\/bin)\b/, "touched the factory user's own programs"],
-  [/\/etc\/godspeed-forge|keys\.env|\bgh\s+auth\s+token\b|\bGH_TOKEN=|\bGITHUB_TOKEN=|hosts\.yml/, "touched a key or token"],
+  [new RegExp(`${rx(HOME_DIR())}/(${rx(PROJECT_DIR())}|\\.archon|\\.config/gh|\\.ssh|\\.codex|holdouts)\\b`), "touched the factory's own files or a login"],
+  [new RegExp(`(~|\\$HOME|${rx(HOME_DIR())})/(bin|\\.local/bin)\\b`), "touched the factory user's own programs"],
+  [new RegExp(`${rx(SETTINGS_DIR())}|keys\\.env|\\bgh\\s+auth\\s+token\\b|\\bGH_TOKEN=|\\bGITHUB_TOKEN=|hosts\\.yml`), "touched a key or token"],
   [/(^|[\s;&|'"(`])\/(usr\/)?bin\/(gh|git)\b/, "called gh or git around the guard"],
   [/--no-verify\b/, "skipped hooks"],
   [/\b(send-pack|http-push|git-remote-https?|git-receive-pack|remote-https?)\b/, "sent to GitHub around git push"],
@@ -414,6 +418,7 @@ const AUDIT = [
 ];
 // codex --json events -> [{why, what}]. runDir: the run's own folder; a file changed outside it is a breach.
 export function auditEvents(text, { runDir = "" } = {}) {
+  const auditRules = AUDIT_RULES();
   const out = [], seen = new Set();
   const add = (why, what) => { const k = why + "\n" + what; if (!seen.has(k)) { seen.add(k); out.push({ why, what: String(what).slice(0, 300) }); } };
   for (const line of String(text || "").split("\n")) {
@@ -421,7 +426,7 @@ export function auditEvents(text, { runDir = "" } = {}) {
     let e; try { e = JSON.parse(line); } catch { continue; }
     const it = e && e.item;
     if (!it || (e.type !== "item.started" && e.type !== "item.completed")) continue;
-    if (it.type === "command_execution") for (const [re, why] of AUDIT) if (re.test(String(it.command || ""))) add(why, it.command);
+    if (it.type === "command_execution") for (const [re, why] of auditRules) if (re.test(String(it.command || ""))) add(why, it.command);
     if (it.type === "file_change") for (const ch of it.changes || []) {
       const raw = String(ch.path || "");
       if (!raw || !runDir) continue;
@@ -678,8 +683,9 @@ export function mintToken(env, permissions = TOKEN_PERMISSIONS) {
   if (r.status !== 0 || !/^[\w.-]+$/.test(token)) throw new Error("no builder token: " + ((r.stderr || "").trim().split("\n").pop() || r.status));
   return token;
 }
+const builderLogin = env => `${env.BUILDER_APP || process.env.FD_BUILDER_APP || "builder"}[bot]`;
 export function writeLogin(env, ghDir, token) {
-  const hosts = ["github.com:", "    git_protocol: https", "    users:", "        godspeed-dev-builder[bot]:", `            oauth_token: ${token}`, `    oauth_token: ${token}`, "    user: godspeed-dev-builder[bot]", ""].join("\n");
+  const hosts = ["github.com:", "    git_protocol: https", "    users:", `        ${builderLogin(env)}:`, `            oauth_token: ${token}`, `    oauth_token: ${token}`, `    user: ${builderLogin(env)}`, ""].join("\n");
   sh(env, `set -eu; umask 077; mkdir -p "${ghDir}"; t="$(mktemp "${ghDir}/.hosts.XXXXXXXX")"; cat > "$t"; mv -f "$t" "${ghDir}/hosts.yml"`, hosts);
 }
 // The run folder's parts (pure). work: the run's own folder under the factory user's home.
@@ -1149,7 +1155,7 @@ async function runLocked(env, deps, { now, log, stateFile, decisionsFile }) {
       // the loop and the manager write reviews, contracts and manager decisions as this same App, so
       // those count only when they carry this driver's marker; an owner decision or question the loop never
       // writes, so one no helper's state confirms is the run's
-      const during = all.filter(c => isTrusted(c.user && c.user.login) && (c.user && c.user.login) !== "MichaelZelbel" && String(c.created_at || "") >= startedAt.slice(0, 19) && DECISION_BODY.test(String(c.body || ""))
+      const during = all.filter(c => isTrusted(c.user && c.user.login) && (c.user && c.user.login) !== ownerLogin() && String(c.created_at || "") >= startedAt.slice(0, 19) && DECISION_BODY.test(String(c.body || ""))
         && !postedIds.has(c.id) && (String(c.body || "").includes(MARKER_PREFIX) || (ownerHeaded(c.body) && !isRelay(c))));
       for (const c of during) {
         try { ghw(["-X", "DELETE", `repos/${env.REPO}/issues/comments/${c.id}`]); } catch {}

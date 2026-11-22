@@ -25,7 +25,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { secondCheck, codexJson, tell, askMichael, loginOf, asManagerDecision, asQuestion, ownerOnlyReason, technicalWords, KEEP_CHECKS_DECISION } from "./release-driver/release-driver-owner-steps.mjs";
+import { secondCheck, codexJson, tell, askMichael, loginOf, ownerLogin, trustedLogins, asManagerDecision, asQuestion, ownerOnlyReason, technicalWords, KEEP_CHECKS_DECISION } from "./release-driver/release-driver-owner-steps.mjs";
 import { planCutRule, planItemNames, ticketItem, versionWords } from "./release-driver/release-driver-cut.mjs";
 
 const HOUR = 3600 * 1000;
@@ -44,14 +44,14 @@ export const DEADLINE_HOURS = { min: 4, max: 72, dflt: 12 };
 // (<GODSPEED_DIR>/.godspeed/notices.json), the one path by which a program reaches Michael's chat.
 // MODEL, FORGE_USER and FORGE_NETNS: the second check's Codex run as the factory user, in its namespace.
 export const actDefaults = (e = process.env) => ({
-  REPO: e.FD_REPO || "MichaelZelbel/godspeed-mission-control",
-  STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed-factory-driver",
-  QUESTIONS_DIR: e.FD_QUESTIONS_DIR || "/var/lib/godspeed-forge-questions",
-  GODSPEED_DIR: e.FD_GODSPEED_DIR || "/root/godspeed",
+  REPO: e.FD_REPO || "owner/repository",
+  STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed/forge/driver",
+  QUESTIONS_DIR: e.FD_QUESTIONS_DIR || "/var/lib/godspeed/forge/questions",
+  GODSPEED_DIR: e.FD_GODSPEED_DIR || "",
   NOTICES_FILE: e.FD_NOTICES_FILE,
   MODEL: e.FD_CHECK_MODEL || "gpt-5.6-terra",
-  FORGE_USER: e.FORGE_USER || "godspeed-forge",
-  FORGE_NETNS: e.FD_FORGE_NETNS !== undefined ? e.FD_FORGE_NETNS : "godspeed-forge",
+  FORGE_USER: e.FORGE_USER || "factory",
+  FORGE_NETNS: e.FD_FORGE_NETNS !== undefined ? e.FD_FORGE_NETNS : "",
 });
 // Plain words for Michael: no em or en dashes, ever.
 export const plain = t => String(t || "").replace(/\s*[—–]\s*/g, ", ").replace(/\s+/g, " ").trim();
@@ -159,7 +159,7 @@ function michaelSince(gh, repo, n, since) {
     const page = gh([`repos/${repo}/issues/${n}/comments?since=${encodeURIComponent(since)}&per_page=100&page=${p}`]) || [];
     rows.push(...page); if (page.length < 100) break;
   }
-  return rows.filter(c => loginOf(c.user && c.user.login) === "MichaelZelbel" && String(c.created_at || "") >= String(since).slice(0, 19) && DECISION_HEAD.test(String(c.body || "")));
+  return rows.filter(c => loginOf(c.user && c.user.login) === ownerLogin() && String(c.created_at || "") >= String(since).slice(0, 19) && DECISION_HEAD.test(String(c.body || "")));
 }
 const removeLabel = (gh, repo, n, label) => { try { gh(["-X", "DELETE", `repos/${repo}/issues/${n}/labels/${encodeURIComponent(label)}`]); } catch (e) { if (!/404|not found|does not exist/i.test(e.message)) throw e; } };
 
@@ -389,7 +389,7 @@ export async function applyDueDefaults(env, deps = {}) {
       try {
         const rows = deps.gh([`repos/${renv.REPO}/issues/${n}/comments?since=${encodeURIComponent(q.at)}&per_page=100`]) || [];
         answered = rows.some(c => String(c.created_at || "") >= String(q.at).slice(0, 19) && DECISION_HEAD.test(String(c.body || "")) && !String(c.body || "").includes(MARKER_PREFIX)
-          && ["MichaelZelbel", "godspeed-dev-builder[bot]", "godspeed-dev-release[bot]"].includes(loginOf(c.user && c.user.login)));
+          && trustedLogins().includes(loginOf(c.user && c.user.login)));
       } catch (e) { out.failed.push(`#${n}: its answer could not be read (${short(e.message).slice(0, 150)}); asked again next round`); keep.push(q); continue; }
       if (answered) { out.done.push(`#${n}: Michael answered; the question is closed`); continue; }
       // no deadline decides anything for him: an unanswered question stays until he answers (2026-11-19)

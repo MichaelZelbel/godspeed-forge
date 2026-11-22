@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-*.mjs
 // The replay's own machinery, and the stalls the driver was built against. The held-back stalls are only
 // ever run by `node replay/replay.mjs`; no test runs the driver on them (the last test only checks that their

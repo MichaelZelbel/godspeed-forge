@@ -32,13 +32,12 @@ What was tried before, newest last (do something different from it):
 
 ## Never
 
-- Never touch Michael's live Godspeed: `godspeed-integrated-notebook.service`, `hermes-gateway.service`,
-  `/root/godspeed`, `/root/.hermes`, ports 47831 to 47833.
+- Never touch the owner's own services on this server: {{NEVER_TOUCH}}.
 - Never delete data you cannot name as a leftover; never remove a process that belongs to an active
   run; never stop a job younger than three times its allowed time.
 - Never print, copy or log a key, token or login file. Never change firewall rules, users or keys.
 - Never edit the product, the holdouts or the releases' scope files.
-- Never change the hidden-check tools (`/home/godspeed-forge/.archon/holdout-tools/`) or the test
+- Never change the hidden-check tools (the factory user's `.archon/holdout-tools/` folder) or the test
   machine's files: they belong to the tests helper. When they are the cause, say so in `cause`.
 - Never mention people with `@`.
 

@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node test-release-driver-cut.mjs   (no network, no AI, no git)
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
 import { planCutRule, planItemNames, findDeadEnds, routedToDeadEnd, factoryDown, proofOnly, machineHold, amendment, cutLook, cutSentence, cutComment, versionWords, CUT_MARKER, PROVIDER_FAILURE } from "../release-driver/release-driver-cut.mjs";

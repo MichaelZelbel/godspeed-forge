@@ -5,12 +5,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { containment, containmentCommits } from "./journal.mjs";
+import { containment, containmentCommits, GODSPEED_RELEASE } from "./journal.mjs";
 import { deliver, readEnvFile, telegramCreds, pollSeen, seenKey } from "./facts.mjs";
 
 const HOUR = 3600000, MIN = 60000;
 const sysRun = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: "utf8", timeout: 60000, env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: "/root" }, ...opts });
-export const WATCH_REPO = env => env.WATCH_REPO || "MichaelZelbel/godspeed-dev";
+export const WATCH_REPO = env => env.WATCH_REPO || process.env.WATCH_REPO || "";
 export const WATCH_WORKFLOW = "factory-watch.yml";
 
 // ---------------------------------------------------------------- 9.9 "told" means seen
@@ -41,7 +41,7 @@ export async function sendNotice(env, id, title, text, now, deps = {}, entries =
 // ---------------------------------------------------------------- 8.10 / 9.8 the heartbeat on GitHub and the watcher's health
 // The driver publishes a small status as a repository variable of the private watch repository every round:
 // its time, the journal head, and the rung 3 entries with their receipts. The workflow reads it with its own code.
-// The heartbeat lives in the body of ONE issue of godspeed-dev, marked <!-- factory-heartbeat --> (the watcher's own token can read issues, but not
+// The heartbeat lives in the body of ONE issue of the watch repository, marked <!-- factory-heartbeat --> (the watcher's own token can read issues, but not
 // repository variables, and it must re-read the heartbeat fresh before it alarms). The driver edits it every round: an edit by the owner's own login
 // names nobody, so it notifies nobody.
 export const HEARTBEAT_MARK = "<!-- factory-heartbeat -->";
@@ -127,14 +127,14 @@ export function supersessionLook(jv, world, run = sysRun, checkout = "", install
 // Within 6 hours after an install: a next release is approved or proposed, or there is provably nothing to plan
 // (no open bug or priority issue). -> { needed, installedAt, why } or null
 export async function nextReleaseFacts(env, world, jv, now, run = sysRun, plansDir = env.RELEASES_DIR) {
-  const inst = Object.values(jv.releases).filter(r => r.installed && /^godspeed-\d/.test(r.id)).sort((a, b) => b.installed.at - a.installed.at)[0];
+  const inst = Object.values(jv.releases).filter(r => r.installed && GODSPEED_RELEASE.test(r.id)).sort((a, b) => b.installed.at - a.installed.at)[0];
   if (!inst) return null;
   const installedAt = inst.installed.at;
   if ((world.releases || []).length) return { needed: false, installedAt };
   let proposed = false;
   try {
     for (const n of fs.readdirSync(plansDir)) {
-      if (n === inst.id || !/^godspeed-\d/.test(n)) continue;
+      if (n === inst.id || !GODSPEED_RELEASE.test(n)) continue;
       const t = fs.readFileSync(path.join(plansDir, n, "plan.md"), "utf8");
       const st = /^\s*status:\s*(\w+)/im.exec(t);
       if (st && /approved|proposed|draft|planning/i.test(st[1]) && !fs.existsSync(path.join(plansDir, n, "staging.json"))) proposed = true;

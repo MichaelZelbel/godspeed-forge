@@ -10,7 +10,7 @@
 //   node driver.mjs --dry-run   read everything and print what the round would do; launch nothing,
 //                               post nothing, write nothing (not even its own state)
 //
-// State in STATE_DIR (/var/lib/godspeed-factory-driver): state.json (obstacles first seen, each
+// State in STATE_DIR (server.state_dir in the settings): state.json (obstacles first seen, each
 // obstacle's history, running helpers, what Michael was told), ledger.json, decisions.jsonl (every
 // action), heartbeat (the end of the last round), round.lock (pid; a dead pid's lock is taken over),
 // helpers/<unit>/ (ai.mjs).
@@ -47,13 +47,13 @@ export const HISTORY_KEEP = 20;
 export const FRESH_AFTER_MINUTES = 30; // a machine obstacle that comes back after this long starts again at housekeeping
 
 export const driverDefaults = (e = process.env, argv = process.argv) => ({
-  ...worldDefaults(e), ...aiDefaults(e), ...actDefaults(e), ...hkDefaults(e), ...causeDefaults(e), ACT: { ...onDutyDefaults(e), ACT_DIR: e.FD_ACT_DIR || `${e.FD_STATE_DIR || "/var/lib/godspeed-factory-driver"}/acts` },
-  STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed-factory-driver",
+  ...worldDefaults(e), ...aiDefaults(e), ...actDefaults(e), ...hkDefaults(e), ...causeDefaults(e), ACT: { ...onDutyDefaults(e), ACT_DIR: e.FD_ACT_DIR || `${e.FD_STATE_DIR || "/var/lib/godspeed/forge/driver"}/acts` },
+  STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed/forge/driver",
   MAX_HELPERS: Number(e.FD_MAX_HELPERS || MAX_HELPERS),
-  DEV_CHECKOUT: e.FD_DEV_CHECKOUT || "/usr/local/lib/godspeed-forge/godspeed-dev",
-  TOOLS_DIR: e.FD_TOOLS_DIR || "/home/godspeed-forge/.archon/holdout-tools/MichaelZelbel-godspeed-mission-control",
-  HOLDOUTS_DIR: e.FD_HOLDOUTS_DIR || "/home/godspeed-forge/holdouts/godspeed-mission-control",
-  HELPERS_DIR: e.FD_HELPERS_DIR || path.join(HERE, "helpers"),
+  DEV_CHECKOUT: e.FD_DEV_CHECKOUT || "",
+  TOOLS_DIR: e.FD_TOOLS_DIR || "",
+  HOLDOUTS_DIR: e.FD_HOLDOUTS_DIR || "",
+  HELPERS_DIR: e.FD_HELPERS_DIR || path.join(HERE, "briefs"),
   DRY: argv.includes("--dry-run"),
   // helper kinds not launched on this server for now (a drop-in sets it; e.g. "tests" while another
   // session rebuilds the hidden-check tools): the obstacle waits and the round says why
@@ -621,7 +621,8 @@ function pendingQuestions(env) {
 
 
 // ---------------------------------------------------------------- pauses, locks, shipping fallbacks
-const HOLD_FILE = e => e.HOLD_FILE || "/usr/local/lib/godspeed-factory-driver/HOLD";
+const IMAGE_WF = env => env.IMAGE_WORKFLOW || process.env.IMAGE_WORKFLOW || "";
+const HOLD_FILE = e => e.HOLD_FILE || path.join(e.FD_KEEPER_HOME || "/usr/local/lib/godspeed/forge/keeper", "HOLD");
 const when = s => { const t = Date.parse(s); return Number.isFinite(t) ? t : NaN; };
 // Every pause that is in force: the keeper's HOLD file, a project's PAUSE or STOP file written by a person (a
 // program's STOP is housekeeping's), and a deliberately parked project (its units in a paused-<date> folder).
@@ -630,7 +631,7 @@ export function readPauses(env, now, world = {}) {
   const out = readPauseFiles(env, now, world);
   // a pause record counts as his only with his Telegram user id and the message it came from (9.6), re-checked each round
   const recs = (() => { try { return JSON.parse(fs.readFileSync(path.join(env.STATE_DIR, "pauses.json"), "utf8")); } catch { return []; } })();
-  const allowed = String(readEnvFile(env.TG_ENV || "/root/.hermes/.env").TELEGRAM_ALLOWED_USERS || "").split(",").map(s => s.trim()).filter(Boolean);
+  const allowed = String(process.env.FD_ALLOWED_USERS || readEnvFile(env.TG_ENV || "").TELEGRAM_ALLOWED_USERS || "").split(",").map(s => s.trim()).filter(Boolean);
   for (const p of out) {
     const rec = (Array.isArray(recs) ? recs : []).find(x => x && x.target === p.id);
     if (rec && rec.messageId && rec.telegramUser && allowed.includes(String(rec.telegramUser))) { p.ownerRef = `Telegram message ${rec.messageId}`; if (rec.until) p.expiresAt = Date.parse(rec.until); }
@@ -651,10 +652,10 @@ function readPauseFiles(env, now, world = {}) {
     }
   }
   try {
-    const base = path.join(env.FORGE_HOME || "/home/godspeed-forge", ".config/systemd/user");
+    const base = path.join(env.FORGE_HOME || "/home/factory", ".config/systemd/user");
     for (const d of fs.readdirSync(base).filter(n => /^paused-/.test(n))) {
       const names = fs.readdirSync(path.join(base, d)).filter(n => /^archonfactory-.*\.timer$/.test(n) && !/-manager\.timer$/.test(n)).map(n => n.replace(/^archonfactory-|\.timer$/g, ""));
-      if (names.length) { const m = /(\d{4})(\d\d)(\d\d)/.exec(d); out.push({ id: `parked:${d}`, repos: names.map(n => `${String(env.REPO || "MichaelZelbel/x").split("/")[0]}/${n}`), what: `parked projects (${names.join(", ")})`, since: m ? when(`${m[1]}-${m[2]}-${m[3]}`) : fs.statSync(path.join(base, d)).mtimeMs, expiresAt: NaN, line: "" }); }
+      if (names.length) { const m = /(\d{4})(\d\d)(\d\d)/.exec(d); out.push({ id: `parked:${d}`, repos: names.map(n => `${String(env.REPO || "owner/x").split("/")[0]}/${n}`), what: `parked projects (${names.join(", ")})`, since: m ? when(`${m[1]}-${m[2]}-${m[3]}`) : fs.statSync(path.join(base, d)).mtimeMs, expiresAt: NaN, line: "" }); }
     }
   } catch {}
   return out;
@@ -662,7 +663,7 @@ function readPauseFiles(env, now, world = {}) {
 // Locks older than the longest run of their job: the round's own (10 minutes + margin), the acting-run folder's
 // is a unit with its own limit, auto-stage's (its unit's 200 minutes). -> [{file, ageMin}] removed
 export function expireLocks(env, now, locks = env.LOCKS) {
-  const list = locks || [{ file: path.join(env.STATE_DIR, "round.lock"), maxMin: 20 }, { file: "/var/lib/godspeed-auto-stage/auto-stage.lock", maxMin: 210 }, { file: "/var/lib/godspeed-auto-stage/lock", maxMin: 210 }];
+  const list = locks || [{ file: path.join(env.STATE_DIR, "round.lock"), maxMin: 20 }, ...(env.AUTO_STAGE_STATE ? [{ file: path.join(path.dirname(env.AUTO_STAGE_STATE), "auto-stage.lock"), maxMin: 210 }, { file: path.join(path.dirname(env.AUTO_STAGE_STATE), "lock"), maxMin: 210 }] : [])];
   const out = [];
   for (const l of list) {
     try { const age = (now - fs.statSync(l.file).mtimeMs) / MIN; if (age > l.maxMin) { fs.rmSync(l.file, { force: true }); out.push({ file: l.file, ageMin: Math.round(age) }); } } catch {}
@@ -686,13 +687,13 @@ export async function shippingFallbacks(env, stage, state, now, run = (cmd, args
     }
   }
   const m = /image\s+\S+:v2-sha-([0-9a-f]{7,40})\s+is not in the registry/i.exec(String(stage.reason || ""));
-  if (m) {
+  if (m && IMAGE_WF(env)) {
     const done = (state.fallbacks ||= {});
     const key = `image:${m[1]}`;
     if (!done[key] || now - done[key] >= 2 * HOUR) {
-      const r = run("gh", ["workflow", "run", env.IMAGE_WORKFLOW || "v2-integrated.yml", "-R", env.REPO, "--ref", "main"]);
+      const r = run("gh", ["workflow", "run", IMAGE_WF(env), "-R", env.REPO, "--ref", "main"]);
       done[key] = now;
-      out.push({ did: `dispatched ${env.IMAGE_WORKFLOW || "v2-integrated.yml"} on main: the image for ${m[1]} was not built`, ok: r.status === 0, why: r.status === 0 ? "" : String(r.stderr || "").slice(0, 200) });
+      out.push({ did: `dispatched ${IMAGE_WF(env)} on main: the image for ${m[1]} was not built`, ok: r.status === 0, why: r.status === 0 ? "" : String(r.stderr || "").slice(0, 200) });
     }
   }
   return out;

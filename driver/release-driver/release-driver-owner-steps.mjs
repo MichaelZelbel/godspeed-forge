@@ -23,12 +23,13 @@ const short = t => String(t || "").replace(/\s+/g, " ").trim();
 // ---------------------------------------------------------------- trust (pure)
 // Who may decide for the repository: Michael and the factory's two Apps (the driver's, the queue
 // worker's, the helper's and the loop's own comments are all posted by the builder App).
-export const TRUSTED = ["MichaelZelbel", "godspeed-dev-builder[bot]", "godspeed-dev-release[bot]"];
+export const ownerLogin = (e = process.env) => e.FD_OWNER_LOGIN || "";
+export const trustedLogins = (e = process.env) => String(e.FD_TRUSTED_LOGINS || "").split(",").map(s => s.trim()).filter(Boolean);
 // A login as REST gives it ("godspeed-dev-builder[bot]"), or an author as GraphQL gives it ({login:
 // "godspeed-dev-builder", __typename: "Bot"}): the bare name counts as the App only when GitHub says it
 // is a bot, since a person could register that name.
 export const loginOf = a => (a && typeof a === "object" ? (a.__typename === "Bot" && !String(a.login || "").endsWith("[bot]") ? `${a.login}[bot]` : String(a.login || "")) : String(a || ""));
-export const isTrusted = (who, trusted = TRUSTED) => trusted.includes(loginOf(who));
+export const isTrusted = (who, trusted = trustedLogins()) => trusted.includes(loginOf(who));
 // The comment kinds the loop and the manager treat as authority (loop-review.md: an `Owner decision`
 // or `Manager decision` comment approves a judge change; loop-work.md: a `Contract` comment is the
 // acceptance contract; `Loop review:` is the reviewer's verdict the merge gate reads).
@@ -39,7 +40,7 @@ export const HEADED = { test: body => HEADED_LINE.test((String(body || "").split
 export const NEUTRAL_PREFIX = "Neutralised by Mission Control's release driver";
 export const neutralBody = (login, at) => `${NEUTRAL_PREFIX} on ${iso(at).slice(0, 10)}: this comment came from an account that may not decide for this repository (${String(login).replace(/@/g, "")}), so it is not an owner decision, contract or review, and the factory does not act on it. Its original text stays in GitHub's edit history and in the driver's log.`;
 // -> the comments that must be neutralised: decision-style, from someone else, not neutralised yet
-export const untrustedHeaded = (comments, trusted = TRUSTED) => (comments || []).filter(c => c && !isTrusted(c.user && c.user.login, trusted)
+export const untrustedHeaded = (comments, trusted = trustedLogins()) => (comments || []).filter(c => c && !isTrusted(c.user && c.user.login, trusted)
   && HEADED.test(String(c.body || "")) && !String(c.body || "").startsWith(NEUTRAL_PREFIX));
 const numberOf = url => { const m = /\/(?:issues|pulls)\/(\d+)$/.exec(String(url || "")); return m ? Number(m[1]) : null; };
 
@@ -122,7 +123,7 @@ export function blockerRefs(text, self = []) {
 }
 // The loop's newest words on an item: the last few comments by the builder App that are not claims and
 // not this driver's own, newest last.
-export const loopWords = (nodes, n = 3) => [...(nodes || [])].filter(c => isTrusted(c.author) && loginOf(c.author) !== "MichaelZelbel"
+export const loopWords = (nodes, n = 3) => [...(nodes || [])].filter(c => isTrusted(c.author) && loginOf(c.author) !== ownerLogin()
   && !/^\s*Loop claim\b/i.test(c.body || "") && !String(c.body || "").includes("release-driver:")).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(-n);
 
 // ---------------------------------------------------------------- the verifier could not observe (pure)
@@ -395,7 +396,8 @@ export function tell(env, state, key, text, about, now, log = () => {}) {
   state.told ||= {};
   if (state.told[key]) return false;
   if (env.DRY) { log(`would tell Michael (${key}): ${text}`); return false; }
-  const file = env.NOTICES_FILE || path.join(env.GODSPEED_DIR || "/root/godspeed", ".godspeed", "notices.json");
+  const file = env.NOTICES_FILE || (env.GODSPEED_DIR ? path.join(env.GODSPEED_DIR, ".godspeed", "notices.json") : "");
+  if (!file) return false;
   queueNotice(file, { id: `release-driver-${sha(key).slice(0, 12)}`, text, about, at: iso(now) });
   state.told[key] = iso(now);
   return true;
@@ -464,7 +466,7 @@ export function trustLook(env, gh, state, now, record) {
   }
   // An issue an untrusted account opened stays parked on sight, but once Michael adopted it it is left
   // alone (2026-11-18: the nightly scenario bot's failure issue was re-parked 8 times after the owner
-  // lifted the park). Adopted means: an issue comment by MichaelZelbel starting "Owner decision" that is
+  // lifted the park). Adopted means: an issue comment by the owner starting "Owner decision" that is
   // not a driver comment (the heading test of the driver's ownerDecisionsOf, narrowed to Michael). Not the Apps (an AI run can post
   // as the builder App) and not a label (the AI run can add labels). Comments are fetched only for an
   // untrusted issue that is not parked, and an adoption is remembered. -> { by, at }, null, or "unknown".
@@ -472,7 +474,7 @@ export function trustLook(env, gh, state, now, record) {
     if ((state.trust.adoptedByMichael || {})[String(i.number)]) return { by: "an earlier look", at: "" };
     let cs = [];
     try { cs = page(`repos/${repo}/issues/${i.number}/comments?x=1`); } catch { return "unknown"; } // not known: neither park nor adopt, the next look tries again
-    const c = cs.find(c => c.user && c.user.login === "MichaelZelbel" && /^\s*Owner decision\b/i.test(c.body || "") && !String(c.body || "").includes("release-driver:"));
+    const c = cs.find(c => c.user && c.user.login === ownerLogin() && /^\s*Owner decision\b/i.test(c.body || "") && !String(c.body || "").includes("release-driver:"));
     return c ? { by: c.user.login, at: c.created_at || iso(now) } : null;
   };
   for (const i of items) {

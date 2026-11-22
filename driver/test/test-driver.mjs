@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-driver.mjs   (offline: GitHub, the server and the AIs are stand-ins)
 // A full round over today's real state (2026-11-18): 25 open items carry needs-owner, the release's
 // pull requests #708, #713 and #715 were parked because a hidden-check tool is missing, and the
@@ -26,7 +27,7 @@ const REFUSED = "Loop review: refused. The hidden check H-35 cannot run: its too
 
 function fixture({ questions = null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fd-round-"));
-  const env = { ...driverDefaults({}, []), STATE_DIR: path.join(root, "state"), QUESTIONS_DIR: path.join(root, "questions"), NOTICES_FILE: path.join(root, "notices.json"), REPO };
+  const env = { ...driverDefaults(TEST_ENV, []), STATE_DIR: path.join(root, "state"), QUESTIONS_DIR: path.join(root, "questions"), NOTICES_FILE: path.join(root, "notices.json"), REPO };
   if (questions) { fs.mkdirSync(env.QUESTIONS_DIR, { recursive: true }); fs.writeFileSync(path.join(env.QUESTIONS_DIR, "driver-questions.json"), JSON.stringify({ [REPO]: questions })); }
   const posted = [];
   const gh = (args, input) => {
@@ -102,7 +103,7 @@ test("today's real state: a diagnose helper for each parked release ticket and o
   assert.equal(idle.unit, `factory-helper-${obstacleId("factory-idle", "factory")}-1`);
   for (const l of f.launched) {
     assert.equal(l.provider, "codex", "the first of the rotation (the subscription the factory does not use)");
-    assert.match(l.briefFile, /helpers[\\/]diagnose\.md$/);
+    assert.match(l.briefFile, /briefs[\\/]diagnose\.md$/);
     assert.equal(l.ownerIssue, 600);
   }
   const t1 = f.launched.find(l => l.context.TICKET_KEY === `${ID}#1`);
@@ -225,7 +226,7 @@ test("a held helper kind is not launched (FD_HOLD_KINDS=tests while another sess
   const out = await round(f.env, f.deps);
   assert.equal(f.launched.filter(l => l.kind === "tests").length, 0);
   assert.match(out.steps.find(s => s.key === `${ID}#1`).note, /held: tests helpers are paused on this server/);
-  assert.deepEqual(driverDefaults({ FD_HOLD_KINDS: "tests, ops" }, []).HOLD_KINDS, ["tests", "ops"]);
+  assert.deepEqual(driverDefaults({ ...TEST_ENV, FD_HOLD_KINDS: "tests, ops" }, []).HOLD_KINDS, ["tests", "ops"]);
 });
 
 test("one tests helper at a time on the tools folder: a new set of missing tools waits while the last set's helper still runs", async () => {
@@ -319,7 +320,7 @@ test("words for Michael are plain and name the item", () => {
   const world = { releases: [{ id: ID, tickets: [{ item: 1, issue: 704, title: "Work is ready only when checked" }] }], items: {} };
   const t = tellText({ kind: "parked", ticketKey: `${ID}#1`, since: "2026-11-17T12:00:00Z" }, world, NOW);
   assert.equal(t, "\"Work is ready only when checked\" in Beta 29 has not moved for 28 hours. Mission Control is on it and tries a different way each time; you need to do nothing unless it asks you.");
-  const c = contextFor(driverDefaults({}, []), { id: "x", kind: "unit-failed", since: "s", evidence: ["unit x failed"] }, { approachNote: "" }, { releases: [], main: { sha: "abc" } }, []);
+  const c = contextFor(driverDefaults(TEST_ENV, []), { id: "x", kind: "unit-failed", since: "s", evidence: ["unit x failed"] }, { approachNote: "" }, { releases: [], main: { sha: "abc" } }, []);
   assert.match(c.TICKET, /no ticket/);
   assert.equal(c.HISTORY, "Nothing yet.");
 });

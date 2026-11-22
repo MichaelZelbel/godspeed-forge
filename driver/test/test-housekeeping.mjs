@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-housekeeping.mjs   (offline: every command goes to a stand-in)
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -92,8 +93,8 @@ test("housekeeping never touches root's notebook or Hermes, whatever the world s
     assert.ok(!/godspeed-integrated-notebook|hermes|\/root\/godspeed|\/root\/\.hermes|4783[1-3]/.test(c), c);
   }
   assert.deepEqual(kills(s.calls), []);
-  assert.ok(r.failed.some(f => /godspeed-integrated-notebook\.service is Michael's live Godspeed/.test(f)));
-  assert.ok(r.failed.some(f => /hermes-gateway\.service is Michael's live Godspeed/.test(f)));
+  assert.ok(r.failed.some(f => /godspeed-integrated-notebook\.service is one of the owner's own services/.test(f)));
+  assert.ok(r.failed.some(f => /hermes-gateway\.service is one of the owner's own services/.test(f)));
   // even a direct order reaches no such command: the runner refuses it
   assert.ok(!s.calls.some(c => c.includes("hermes-gateway.service")));
 });

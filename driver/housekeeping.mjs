@@ -22,9 +22,9 @@ import { ANONYMOUS_UNIT } from "./world.mjs";
 import { forgeArgv } from "./release-driver/release-driver-owner-steps.mjs";
 
 export const RELEASE_PROGRAMS = /^(auto-stage|freeze|stage-server)$/, STOP_MAX_HOURS = 2;
-export const ALLOWED_RESTART = ["godspeed-forge-web.service", "test-machine.service", "auto-stage.service", "godspeed-forge-login.service"];
-export const NEVER_TOUCH = ["godspeed-integrated-notebook.service", "hermes-gateway.service"];
-const FORBIDDEN = /godspeed-integrated-notebook|hermes|\/root\/godspeed|\/root\/\.hermes|\b4783[1-3]\b/i;
+export const ALLOWED_RESTART = String(process.env.FD_RESTART_UNITS || "").split(",").map(x => x.trim()).filter(Boolean);
+export const NEVER_TOUCH = String(process.env.FD_NEVER_TOUCH || "").split(",").map(x => x.trim()).filter(Boolean);
+const FORBIDDEN = process.env.FD_NEVER_TOUCH_PATTERN ? new RegExp(process.env.FD_NEVER_TOUCH_PATTERN, "i") : /(?!)/;
 export const FACTORY_USER_UNIT = /^(archonfactory-[A-Za-z0-9_.@-]+|docker)\.(service|timer)$/;
 export const STALE_CMD = /standin_ai\.py|chromium|main\.mjs/;
 export const DISK_PCT = 85, MEM_PCT = 15, MEM_RESTORE_PCT = 40;
@@ -33,14 +33,16 @@ const SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bi
 const LOWERED = /^# factory-driver: MAX_LAPS lowered from (\S+) at (\S+)$/m;
 
 export const hkDefaults = (e = process.env) => ({
-  FORGE_USER: e.FORGE_USER || "godspeed-forge",
-  FORGE_UID: String(e.FORGE_UID || "1001"),
-  FORGE_NETNS: e.FD_FORGE_NETNS !== undefined ? e.FD_FORGE_NETNS : "godspeed-forge",
+  FORGE_USER: e.FORGE_USER || "factory",
+  FORGE_UID: String(e.FORGE_UID || "1000"),
+  FORGE_NETNS: e.FD_FORGE_NETNS !== undefined ? e.FD_FORGE_NETNS : "",
   SYSTEMCTL: e.FD_SYSTEMCTL || "systemctl",
-  FACTORY_ENV: e.FD_FACTORY_ENV || "/home/godspeed-forge/.factory-env",
-  FACTORY_CHECKOUT: e.FD_FACTORY_CHECKOUT || "/home/godspeed-forge/godspeed-mission-control",
+  FACTORY_ENV: e.FD_FACTORY_ENV || "/home/factory/.factory-env",
+  FACTORY_CHECKOUT: e.FD_FACTORY_CHECKOUT || "/home/factory/repository",
   STALE_MINUTES: Number(e.FD_STALE_MINUTES || 180),
   LOWER_LAPS: e.FD_LOWER_LAPS === "1",
+  LOGIN_UNIT: e.FD_LOGIN_UNIT || "",
+  LEGACY_UNITS: String(e.FD_LEGACY_UNITS || "").split(",").map(x => x.trim()).filter(Boolean),
 });
 
 function run(argv) {
@@ -64,10 +66,10 @@ const unitOf = u => {
 // deps: {run(argv) -> {status, stdout, stderr}, sleep(ms), now(), readFile, writeFile}
 // -> {done: [string], failed: [string]}
 export async function housekeep(env0, world, deps = {}) {
-  const env = { ...hkDefaults({}), ...env0 };
+  const env = { ...hkDefaults(process.env), ...env0 };
   const exec = argv => {
     const line = argv.join(" ");
-    if (FORBIDDEN.test(line)) throw new Error(`refused: ${line.slice(0, 200)} touches Michael's live Godspeed`);
+    if (FORBIDDEN.test(line)) throw new Error(`refused: ${line.slice(0, 200)} touches a service of the owner's that the factory never touches`);
     return (deps.run || run)(argv);
   };
   const sleep = deps.sleep || (ms => new Promise(r => setTimeout(r, ms)));
@@ -96,8 +98,9 @@ export async function housekeep(env0, world, deps = {}) {
   for (const u of server.failedUnits || []) {
     const { name, user } = unitOf(u);
     if (!/^[A-Za-z0-9_.@-]+\.(service|timer|socket)$/.test(name)) { out.failed.push(`${name}: not a unit name`); continue; }
-    if (NEVER_TOUCH.includes(name) || FORBIDDEN.test(name)) { out.failed.push(`${name} is Michael's live Godspeed: never touched`); continue; }
+    if (NEVER_TOUCH.includes(name) || FORBIDDEN.test(name)) { out.failed.push(`${name} is one of the owner's own services: never touched`); continue; }
     if (/^factory-helper-/.test(name)) continue; // a helper's own unit: the driver collects it
+    if ((env.LEGACY_UNITS || []).some(l => l === name || `${l}.service` === name || `${l}.timer` === name)) continue; // a unit of the program this driver replaced: left alone, never started
     let argv = null;
     if (!user && ALLOWED_RESTART.includes(name)) {
       // a unit with a timer of its own (the test machine, auto-stage, the login) is left to that timer:
@@ -130,10 +133,10 @@ export async function housekeep(env0, world, deps = {}) {
   }
 
   // ---- the factory's GitHub login
-  if (server.logins && server.logins.gh === false) {
+  if (server.logins && server.logins.gh === false && env.LOGIN_UNIT) {
     try {
-      const r = exec([env.SYSTEMCTL, "start", "godspeed-forge-login.service"]);
-      if (r.status === 0) out.done.push("renewed the factory's GitHub login (godspeed-forge-login.service)");
+      const r = exec([env.SYSTEMCTL, "start", env.LOGIN_UNIT]);
+      if (r.status === 0) out.done.push(`renewed the factory's GitHub login (${env.LOGIN_UNIT})`);
       else out.failed.push(`the factory's GitHub login was not renewed: ${lastLine(r.stderr).slice(0, 200) || `exit ${r.status}`}`);
     } catch (e) { out.failed.push(`login: ${lastLine(e.message).slice(0, 200)}`); }
   }
@@ -158,7 +161,7 @@ export async function housekeep(env0, world, deps = {}) {
   }
 
   // ---- a factory timer the round found stopped for two rounds (while the network guard was not running)
-  for (const name of (world && world.timersToStart) || []) {
+  for (const name of ((world && world.timersToStart) || []).filter(n => !(env.LEGACY_UNITS || []).includes(n))) {
     if (!/^archonfactory-[A-Za-z0-9_.-]+\.timer$/.test(String(name))) { out.failed.push(`${name}: not one of the factory's timers; left alone`); continue; }
     try {
       const r = exec(asForge(env, ["systemctl", "--user", "start", name]));

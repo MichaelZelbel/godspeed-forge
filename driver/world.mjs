@@ -3,39 +3,44 @@
 // tests run without GitHub or the server.
 import fs from "node:fs";
 import path from "node:path";
+import { GODSPEED_RELEASE } from "./journal.mjs";
 import { readReleases, pickPlans, itemIssues, releaseLabel, planRepository, excludedIssues, requiredState, compareVersions, releaseVersion } from "./release-driver/release-driver.mjs";
 
+// a unit this driver replaced (settings legacy_units, with or without .service/.timer) belongs to the old program, not to the factory
+export const isLegacy = (env, unit) => (env.LEGACY_UNITS || []).some(l => l === unit || `${l}.service` === unit || `${l}.timer` === unit);
 const iso = v => (v ? new Date(v).toISOString() : null);
 const num = v => (Number.isFinite(Number(v)) ? Number(v) : null);
 
 export const defaultsFor = (e = process.env) => ({
-  REPO: e.FD_REPO || "MichaelZelbel/godspeed-mission-control",
-  RELEASES_DIR: e.FD_RELEASES_DIR || "/usr/local/lib/godspeed-forge/godspeed-dev/releases",
-  AUTO_STAGE_STATE: e.FD_AUTO_STAGE_STATE || "/var/lib/godspeed-auto-stage/state.json",
+  REPO: e.FD_REPO || "owner/repository",
+  RELEASES_DIR: e.FD_RELEASES_DIR || "",
+  AUTO_STAGE_STATE: e.FD_AUTO_STAGE_STATE || "/var/lib/godspeed/forge/driver/steps/stage/state.json",
   // The factory's main project (the one releases come from); every other archonfactory-<project>.timer
   // of the factory user is read too (Querino joined on 2026-11-18, D-425).
-  PROJECT: e.FD_PROJECT || "godspeed-mission-control",
-  FORGE_HOME: e.FD_FORGE_HOME || "/home/godspeed-forge",
+  PROJECT: e.FD_PROJECT || "repository",
+  FORGE_HOME: e.FD_FORGE_HOME || "/home/factory",
   // A fixed command for the runs (tests); unset, each project's own Archon CLI is asked, the way the
   // factory itself asks it (factory/consumer.py native_json: bun <source>/packages/cli/src/cli.ts).
   ARCHON_RUNS: e.FD_ARCHON_RUNS || "",
   SCENARIOS_WORKFLOW: e.FD_SCENARIOS_WORKFLOW || "scenarios.yml",
   // long-running units of the factory that must run: one that is enabled but stopped counts as down
   // (a plain stop leaves it inactive, not failed, and its own Restart=on-failure does not bring it back)
-  MUST_RUN: String(e.FD_MUST_RUN || "godspeed-forge-web.service").split(",").map(x => x.trim()).filter(Boolean),
-  FORGE_UID: e.FD_FORGE_UID || "1001",
+  LEGACY_UNITS: String(e.FD_LEGACY_UNITS || "").split(",").map(x => x.trim()).filter(Boolean), // units this driver replaces: never a factory timer, never must-run, never an obstacle
+  NETNS_GUARD: e.FD_NETNS_GUARD || "",
+  MUST_RUN: String(e.FD_MUST_RUN || "").split(",").map(x => x.trim()).filter(Boolean).filter(u => !isLegacy({ LEGACY_UNITS: String(e.FD_LEGACY_UNITS || "").split(",").map(x => x.trim()).filter(Boolean) }, u)),
+  FORGE_UID: e.FD_FORGE_UID || e.FORGE_UID || "1000",
   STALE_MINUTES: Number(e.FD_STALE_MINUTES || 180),
-  QUESTIONS_DIR: e.FD_QUESTIONS_DIR || "/var/lib/godspeed-forge-questions",
+  QUESTIONS_DIR: e.FD_QUESTIONS_DIR || "/var/lib/godspeed/forge/questions",
   // The test machine's own module: its toolCoverage() says which hidden checks have no tool that can run
   // (2026-11-18: the driver never saw a missing tool; only Michael was told, by the test machine).
-  TM_MODULE: e.FD_TM_MODULE || "/usr/local/lib/godspeed-test-machine/test-machine/test-machine.mjs",
+  TM_MODULE: e.FD_TM_MODULE || "",
 });
 
 const realDeps = env => ({
   readFile: p => fs.readFileSync(p, "utf8"),
   mtime: p => fs.statSync(p).mtimeMs,
   readDir: p => fs.readdirSync(p),
-  readReleases: (dir, autoStage) => readReleases(dir, autoStage, /^godspeed-\d/),
+  readReleases: (dir, autoStage) => readReleases(dir, autoStage, GODSPEED_RELEASE),
 });
 
 // ------------------------------------------------------------ tickets
@@ -189,7 +194,7 @@ function readServer(env, deps, activeIds, unreadable) {
   const s = { failedUnits: [], anonymousFailedUnits: [], diskPct: null, memAvailPct: null, staleProcs: [], userManagerStarts: null, guardRunning: null, logins: { gh: false, codex: "unknown", claude: "unknown" } };
   const failed = tryRun(deps, "systemctl --failed --no-legend --plain | awk '{print $1}'", false, unreadable, "server/units");
   if (failed !== null) {
-    const names = failed.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    const names = failed.split(/\r?\n/).map(x => x.trim()).filter(Boolean).filter(x => !isLegacy(env, x));
     // systemd-run's generated one-off units (run-u20604.service) belong to nobody: housekeeping clears them, no helper is sent
     s.anonymousFailedUnits = names.filter(x => ANONYMOUS_UNIT.test(x));
     s.failedUnits = names.filter(x => !ANONYMOUS_UNIT.test(x));
@@ -212,7 +217,7 @@ function readServer(env, deps, activeIds, unreadable) {
   if (um !== null) s.userManagerStarts = num(firstLine(um)) ?? 0;
   // the factory's network guard (another session's, never touched here) may pause the factory's timers
   // while it decides; a timer it holds right now is not a stop
-  const guard = tryRun(deps, "systemctl is-active godspeed-forge-netns-guard.service || true", false, unreadable, "server/netns-guard");
+  const guard = tryRun(deps, (env.NETNS_GUARD ? `systemctl is-active ${env.NETNS_GUARD} || true` : "echo inactive"), false, unreadable, "server/netns-guard");
   if (guard !== null) s.guardRunning = /^(active|activating|deactivating|reloading)$/.test(firstLine(guard));
   const gh = tryRun(deps, "gh auth status >/dev/null 2>&1 && echo ok || echo no", true, unreadable, "server/login-gh");
   if (gh !== null) s.logins.gh = firstLine(gh) === "ok";
@@ -301,7 +306,7 @@ function readFactory(env, deps, project, primary, world, unreadable) {
 
 // ------------------------------------------------------------ the world
 export async function readWorld(env0 = {}, deps0 = {}) {
-  const env = { ...defaultsFor({}), ...env0 };
+  const env = { ...defaultsFor(process.env), ...env0 };
   const deps = { ...realDeps(env), ...deps0 };
   const now = deps.now ? deps.now() : Date.now();
   const unreadable = [];
@@ -312,13 +317,13 @@ export async function readWorld(env0 = {}, deps0 = {}) {
   let picks = [];
   world.superseded = [];
   try {
-    const all = deps.readReleases(env.RELEASES_DIR, autoStage).filter(r => /^godspeed-\d/.test(r.id)); // Godspeed's own plans only, before they are picked, ordered or compared
-    picks = pickPlans(all, env.REPO).picks.filter(r => /^godspeed-\d/.test(r.id)); // Godspeed's own release plans only: one definition, everywhere
+    const all = deps.readReleases(env.RELEASES_DIR, autoStage).filter(r => GODSPEED_RELEASE.test(r.id)); // the main project's own plans only, before they are picked, ordered or compared
+    picks = pickPlans(all, env.REPO).picks.filter(r => GODSPEED_RELEASE.test(r.id)); // the main project's own release plans only: one definition, everywhere
     // an approved release older than the version installed on the server is superseded (2026-11-18:
     // beta.27 stayed approved and unfinished after beta.28 was installed): never driven, named once.
     // The installed one itself is done (Michael, 2026-11-18 evening: "a release is done once it is
     // installed on my server; nobody works on it afterwards"), whatever its scenarios said.
-    const inst = all.filter(r => /^godspeed-\d/.test(r.id) && r.staging && r.staging.status === "installed" && releaseVersion(r.id))
+    const inst = all.filter(r => GODSPEED_RELEASE.test(r.id) && r.staging && r.staging.status === "installed" && releaseVersion(r.id))
       .sort((a, b) => compareVersions(releaseVersion(a.id), releaseVersion(b.id))).at(-1);
     const installed = inst ? releaseVersion(inst.id) : null;
     if (installed) {

@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node test-release-driver-owner-steps.mjs   (no network, no AI): the owner-side steps of D-419
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict"; import crypto from "node:crypto";
 import { isTrusted, HEADED, untrustedHeaded, neutralBody, NEUTRAL_PREFIX, blockerRefs, loopWords, verifierBlocked, holdoutIds, workflowJobs, additiveWorkflow, protectedOnlyRefusal, unifiedDiff,

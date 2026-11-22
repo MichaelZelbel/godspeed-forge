@@ -6,10 +6,10 @@
 // timer, a lock left behind) nothing moves and nobody is told until Michael notices. systemd keeps the
 // driver's timer going; this keeps the driver's code good and answers the outside check's "repair".
 //
-// WHAT. The driver's installed file set is its programs and briefs (/usr/local/lib/godspeed-forge/
-// factory-driver/**), the release-driver modules it imports (.../release-driver/**) and its two units
+// WHAT. The driver's installed file set is its programs and briefs (<driver_dir>
+// <driver_dir>/**, release-driver/ included) and its two units
 // (factory-driver.service and .timer). The keeper lives OUTSIDE that set
-// (/usr/local/lib/godspeed-factory-driver/keeper.mjs, its own units and the drop-in that hooks it to the
+// (<keeper_dir>/keeper.mjs, its own units and the drop-in that hooks it to the
 // driver), imports nothing from it at load time, and so still works when the set is broken.
 //
 //   node keeper.mjs before-install   install.sh, before it copies: saves the installed set
@@ -27,9 +27,9 @@
 //                                    the driver's code, journal and state as context (at most one an hour)
 //   node keeper.mjs status           what the keeper knows, as JSON
 //
-// A person who stops the driver on purpose writes a reason into /usr/local/lib/godspeed-factory-driver/HOLD;
+// A person who stops the driver on purpose writes a reason into <keeper_dir>/HOLD;
 // while it is there, repair changes nothing.
-// State: /var/lib/godspeed-factory-driver/keeper.json; every action also goes to decisions.jsonl.
+// State: <state_dir>/keeper.json; every action also goes to decisions.jsonl.
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -42,13 +42,13 @@ const SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bi
 export const CLEAN_TO_GOOD = 3, FAILS_TO_ROLLBACK = 2, BROKEN_MINUTES = 20, STUCK_HOURS = 6, REPAIR_HELPER_EVERY_MINUTES = 60;
 
 export const keeperDefaults = (e = process.env) => ({
-  HOME_DIR: e.FD_KEEPER_HOME || "/usr/local/lib/godspeed-factory-driver",
-  STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed-factory-driver",
-  ROOTS: { fd: e.FD_LIB || "/usr/local/lib/godspeed-forge/factory-driver", rd: e.FD_RD_LIB || "/usr/local/lib/godspeed-forge/release-driver", units: e.FD_UNITS_DIR || "/etc/systemd/system" },
+  HOME_DIR: e.FD_KEEPER_HOME || "/usr/local/lib/godspeed/forge/keeper",
+  STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed/forge/driver",
+  ROOTS: { fd: e.FD_LIB || "/usr/local/lib/godspeed/forge/driver", units: e.FD_UNITS_DIR || "/etc/systemd/system" },
   UNITS: ["factory-driver.service", "factory-driver.timer"],
   SERVICE: "factory-driver.service", TIMER: "factory-driver.timer",
   SYSTEMCTL: e.FD_SYSTEMCTL || "systemctl",
-  GODSPEED_DIR: e.FD_GODSPEED_DIR || "/root/godspeed",
+  GODSPEED_DIR: e.FD_GODSPEED_DIR || "",
   NOTICES_FILE: e.FD_NOTICES_FILE,
   LOCK_POLL_MS: Number(e.FD_LOCK_POLL_MS || 5000),
   LOCK_WAIT_MS: Number(e.FD_LOCK_WAIT_MS || 11 * MIN),
@@ -83,7 +83,7 @@ const walk = (dir, rel = "") => {
 // -> {key: absolute path}, keys "fd/<file>", "rd/<file>", "units/<unit>"
 export function listSet(env) {
   const out = {};
-  for (const root of ["fd", "rd"]) for (const r of walk(env.ROOTS[root])) out[`${root}/${r}`] = path.join(env.ROOTS[root], ...r.split("/"));
+  for (const root of ["fd"]) for (const r of walk(env.ROOTS[root])) out[`${root}/${r}`] = path.join(env.ROOTS[root], ...r.split("/"));
   for (const u of env.UNITS) { const f = path.join(env.ROOTS.units, u); if (fs.existsSync(f)) out[`units/${u}`] = f; }
   return out;
 }
@@ -231,7 +231,7 @@ export function clean(env, deps = {}) {
 const ROLLBACK_TEXT = "Your factory driver failed two rounds in a row after its last update, so Mission Control put back the version that last ran cleanly and the factory keeps moving; the newer version waits for a fix.";
 const ROLLBACK_FAILED_TEXT = "Your factory driver failed two rounds in a row after its last update, and putting back the version that last ran cleanly did not work, so Mission Control's outside check will start a repair.";
 async function defaultTell(env, k, key, text, about, at) {
-  const m = await import(pathToFileURL(path.join(env.ROOTS.rd, "release-driver-owner-steps.mjs")).href);
+  const m = await import(pathToFileURL(path.join(env.ROOTS.fd, "release-driver", "release-driver-owner-steps.mjs")).href);
   return m.tell({ GODSPEED_DIR: env.GODSPEED_DIR, NOTICES_FILE: env.NOTICES_FILE }, k, key, text, about, at);
 }
 export async function failed(env, deps = {}) {
@@ -321,7 +321,7 @@ async function defaultLaunch(env, { unit, kind, context }) {
   const list = await ai.providers(aenv, ai.factoryProvider(aenv));
   if (!list.length) throw new Error("no AI is reachable right now");
   const p = list[0];
-  await ai.launchHelper(aenv, { unit, kind, provider: p.name, model: p.strong || p.model, briefFile: path.join(env.ROOTS.fd, "helpers", "ops.md"), context });
+  await ai.launchHelper(aenv, { unit, kind, provider: p.name, model: p.strong || p.model, briefFile: path.join(env.ROOTS.fd, "briefs", "ops.md"), context });
   return { unit, provider: p.name, model: p.strong || p.model };
 }
 async function defaultResult(env, unit) {

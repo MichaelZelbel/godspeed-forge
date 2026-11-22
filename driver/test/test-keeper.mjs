@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-keeper.mjs   (offline: systemctl, the AI and Michael's queue are stand-ins)
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,15 +12,15 @@ const MIN = 60000;
 const SET_A = {
   "fd/driver.mjs": "export const a = 1;\n",
   "fd/world.mjs": "export const w = 'A';\n",
-  "fd/helpers/ops.md": "# Ops\nversion A\n",
-  "rd/release-driver.mjs": "export const r = 1;\n",
+  "fd/briefs/ops.md": "# Ops\nversion A\n",
+  "fd/release-driver/release-driver.mjs": "export const r = 1;\n",
   "units/factory-driver.service": "[Service]\nExecStart=/usr/local/bin/node driver.mjs\n",
   "units/factory-driver.timer": "[Timer]\nOnCalendar=*:0/5\n",
 };
 
 function fixture(files = SET_A) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fd-keeper-"));
-  const env = keeperDefaults({ FD_KEEPER_HOME: path.join(root, "keeper"), FD_STATE_DIR: path.join(root, "state"), FD_LIB: path.join(root, "fd"), FD_RD_LIB: path.join(root, "rd"), FD_UNITS_DIR: path.join(root, "units") });
+  const env = keeperDefaults({ FD_KEEPER_HOME: path.join(root, "keeper"), FD_STATE_DIR: path.join(root, "state"), FD_LIB: path.join(root, "fd"), FD_UNITS_DIR: path.join(root, "units") });
   fs.mkdirSync(env.STATE_DIR, { recursive: true });
   fs.mkdirSync(path.join(root, "units"), { recursive: true });
   fs.writeFileSync(path.join(root, "units", "godspeed-forge-web.service"), "not part of the set\n");
@@ -56,7 +57,7 @@ function fixture(files = SET_A) {
 function writeSet(env, files) {
   for (const [k, text] of Object.entries(files)) {
     const [root, ...rest] = k.split("/");
-    const base = { fd: env.ROOTS.fd, rd: env.ROOTS.rd, units: env.ROOTS.units }[root];
+    const base = { fd: env.ROOTS.fd, units: env.ROOTS.units }[root];
     const f = path.join(base, ...rest);
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(f, text);
@@ -85,7 +86,7 @@ test("a snapshot restores byte-identical files, removes what the newer set added
   const before = liveTexts(fx.env);
   const saved = snapshot(fx.env, path.join(fx.env.HOME_DIR, "last-good"));
   writeSet(fx.env, { "fd/driver.mjs": "export const a = 2; // broken\n", "fd/causes.mjs": "new in the newer set\n" });
-  fs.rmSync(listSet(fx.env)["fd/helpers/ops.md"]);
+  fs.rmSync(listSet(fx.env)["fd/briefs/ops.md"]);
   const r = restore(fx.env, path.join(fx.env.HOME_DIR, "last-good"), fx.deps);
   assert.equal(r.ok, true);
   assert.deepEqual(liveTexts(fx.env), before);

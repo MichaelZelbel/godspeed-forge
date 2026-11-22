@@ -18,17 +18,17 @@ export function clockCheck(now, run = (cmd, args) => spawnSync(cmd, args, { enco
 export const wentBackwards = (now, lastRoundAt) => Number.isFinite(lastRoundAt) && now < lastRoundAt - 60000;
 
 // ---------------------------------------------------------------- 8.7 "installed" is a fresh fact
-export const HEALTH_URL = "http://127.0.0.1:47831/health";
-export const VERSION_FILE = "/root/godspeed/.godspeed/integrated-runtime/version";
+export const HEALTH_URL = () => process.env.FD_HEALTH_URL || "";
+export const VERSION_FILE = () => process.env.FD_VERSION_FILE || "";
 // A fresh request to the running Godspeed returns the release's version, and the running install's commit
 // (its own version file) equals the frozen candidate's product commit. A recorded or cached value never counts.
 export function verifyInstalled(release, staging, ask = {}) {
-  const health = (ask.health || (() => { const r = spawnSync("curl", ["-s", "-m", "10", HEALTH_URL], { encoding: "utf8" }); try { return JSON.parse(r.stdout); } catch { return null; } }))();
-  const commit = String((ask.commit || (() => { try { return fs.readFileSync(VERSION_FILE, "utf8"); } catch { return ""; } }))()).trim();
+  const health = (ask.health || (() => { const r = spawnSync("curl", ["-s", "-m", "10", HEALTH_URL()], { encoding: "utf8" }); try { return JSON.parse(r.stdout); } catch { return null; } }))();
+  const commit = String((ask.commit || (() => { try { return fs.readFileSync(VERSION_FILE(), "utf8"); } catch { return ""; } }))()).trim();
   const version = String(release.version || (staging && staging.version) || "");
   const frozen = String((staging && (staging.productCommit || staging.commit)) || "").trim();
-  if (!health || health.ok !== true) return { ok: false, why: "the running Godspeed did not answer healthy just now" };
-  if (!version || health.version !== version) return { ok: false, why: `the running Godspeed reports ${health.version || "no version"}, not ${version || "the release's version"}` };
+  if (!health || health.ok !== true) return { ok: false, why: "the running server did not answer healthy just now" };
+  if (!version || health.version !== version) return { ok: false, why: `the running server reports ${health.version || "no version"}, not ${version || "the release's version"}` };
   if (!frozen || !commit || commit !== frozen) return { ok: false, why: "the running install's commit is not the frozen candidate's commit" };
   return { ok: true, version, commit };
 }
@@ -38,11 +38,11 @@ export const readEnvFile = file => { try { return Object.fromEntries(fs.readFile
 // The machine bot (a separate bot from the chat bot; nothing else polls its updates, checked 2026-11-22: no webhook, no
 // other getUpdates) carries transport A and its "Seen" button. Its credentials are a root-only file copied from the machine
 // that already sends with it; the chat bot's own file is the fallback (no button: Hermes polls that one).
-export const MACHINE_BOT_FILE = "/etc/godspeed-forge/telegram-machine.env";
+export const MACHINE_BOT_FILE = "";
 export const telegramCreds = (env = {}) => {
   const m = readEnvFile(env.TG_MACHINE_ENV || MACHINE_BOT_FILE);
   if (m.BOT_TOKEN && m.CHAT_ID) return { token: m.BOT_TOKEN, chat: m.CHAT_ID, owner: m.CHAT_ID, button: true };
-  const e = readEnvFile(env.TG_ENV || "/root/.hermes/.env");
+  const e = readEnvFile(env.TG_ENV || "");
   return { token: e.TELEGRAM_BOT_TOKEN || "", chat: e.TELEGRAM_HOME_CHANNEL || String(e.TELEGRAM_ALLOWED_USERS || "").split(",")[0] || "", owner: "", button: false };
 };
 export const seenKey = noticeId => crypto.createHash("sha1").update(String(noticeId)).digest("hex").slice(0, 12);
@@ -78,15 +78,15 @@ export async function pollSeen(creds, offset = 0, doFetch = fetch) {
   return out;
 }
 // Transport B: an issue authored by github-actions[bot] that names the owner (GitHub sends nobody a notification for their OWN activity,
-// so an issue opened with his token proves nothing). The notify workflow in godspeed-dev opens it with its own token; the receipt is
+// so an issue opened with his token proves nothing). The notify workflow in the watch repository opens it with its own token; the receipt is
 // the issue's URL, looked up by the unique ref the message carries. The same message (same ref) is never opened twice.
 export const NOTIFY_WORKFLOW = "factory-notify.yml";
-export const WATCH_REPO_DEFAULT = "MichaelZelbel/godspeed-dev";
+export const WATCH_REPO_DEFAULT = "";
 export const refOf = id => crypto.createHash("sha1").update(String(id)).digest("hex").slice(0, 12);
 const sysRun = (cmd, args) => spawnSync(cmd, args, { encoding: "utf8", timeout: 60000, env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: "/root" } });
 export function findNotifyIssue(repo, ref, run = sysRun) {
   const r = run("gh", ["api", `repos/${repo}/issues?state=all&per_page=100`]);
-  try { const hit = JSON.parse(r.stdout).find(i => !i.pull_request && i.user && i.user.login === "github-actions[bot]" && String(i.body || "").startsWith("@MichaelZelbel") && String(i.body || "").includes(`<!-- ref:${ref} -->`)); return hit ? hit.html_url : null; } catch { return null; }
+  try { const hit = JSON.parse(r.stdout).find(i => !i.pull_request && i.user && i.user.login === "github-actions[bot]" && String(i.body || "").startsWith(`@${process.env.FD_OWNER_LOGIN || ""}`) && String(i.body || "").includes(`<!-- ref:${ref} -->`)); return hit ? hit.html_url : null; } catch { return null; }
 }
 export async function openIssue(repo, title, body, noticeId, run = sysRun, sleep = ms => new Promise(r => setTimeout(r, ms)), tries = 12) {
   const ref = refOf(noticeId || `${title}|${Date.now()}`);
@@ -102,7 +102,7 @@ export async function deliver(env, { title, text, noticeId }, deps = {}) {
   const out = { receipts: {}, failed: [] };
   const a = await (deps.telegram || ((t, id) => sendTelegram(telegramCreds(env), t, fetch, id)))(text, noticeId);
   if (a.ok) out.receipts.telegram = a.receipt; else out.failed.push(a.why);
-  const b = await (deps.issue || ((ti, bo, id) => openIssue(env.WATCH_REPO || WATCH_REPO_DEFAULT, ti, bo, id)))(title, text, noticeId); // the workflow adds the @-mention
+  const b = await (deps.issue || ((ti, bo, id) => openIssue(env.WATCH_ISSUES_REPO || env.WATCH_REPO || WATCH_REPO_DEFAULT, ti, bo, id)))(title, text, noticeId); // the workflow adds the @-mention
   if (b.ok) out.receipts.github = b.receipt; else out.failed.push(b.why);
   return out;
 }

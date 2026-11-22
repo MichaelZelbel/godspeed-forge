@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-gate.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -22,9 +23,9 @@ test("the three programs carry the same gate and the same definition of a releas
   assert.deepEqual(DM_GATE, GATE, "dead-man and driver: reads, gap and tolerance");
   const watcher = fs.readFileSync(path.join(here, "../watcher/factory-watch.mjs"), "utf8");
   assert.match(watcher, /READS = 3/); assert.match(watcher, /E\.GATE_WAIT_MS \?\? 600000/, "three reads, ten minutes apart");
-  const rx = src => (/\/\^godspeed-\\d\//.exec(src) || [])[0];
-  assert.equal(rx(fs.readFileSync(path.join(here, "../deadman/deadman.mjs"), "utf8")), String(GODSPEED_RELEASE).replace(/\/\^godspeed-\\d\//, m => m).slice(0, 14), "the dead-man's pattern");
-  assert.ok(rx(watcher), "the watcher's pattern");
+  const dm = fs.readFileSync(path.join(here, "../deadman/deadman.mjs"), "utf8");
+  assert.match(dm, /e\.FD_PLAN_PATTERN/, "the dead-man reads the setting"); assert.equal(String(GODSPEED_RELEASE.source), new RegExp(process.env.FD_PLAN_PATTERN).source, "the driver reads the same setting");
+  assert.match(watcher, /E\.PLAN_PATTERN/, "the watcher reads the same setting from a repository variable");
   assert.ok(GODSPEED_RELEASE.test("godspeed-2.0.0-beta.29-x") && !GODSPEED_RELEASE.test("godspeed-forge-0.1.0-first-forge") && !GODSPEED_RELEASE.test("querino-1.0.0-beta.1") && !GODSPEED_RELEASE.test("clerk-0.5.2"));
 });
 test("the driver judges only Godspeed's own release plans: another product's plan is never journaled, never open", () => {

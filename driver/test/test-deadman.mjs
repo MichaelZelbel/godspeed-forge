@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-deadman.mjs   (plain files, offline)
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,7 +12,7 @@ function world() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dm-"));
   const rel = (name, status) => { fs.mkdirSync(path.join(dir, "r", name), { recursive: true }); fs.writeFileSync(path.join(dir, "r", name, "plan.md"), `---\nrelease: ${name}\n---\nStatus: ${status}\n`); };
   rel("godspeed-2.0.0-beta.28-b", "approved"); rel("godspeed-2.0.0-beta.29-c", "approved"); rel("godspeed-2.0.0-beta.30-d", "draft");
-  const cfg = { RELEASES: path.join(dir, "r"), DEV: dir, STATUS: path.join(dir, "status.json"), KEEPER: path.join(dir, "keeper.json"), KEEPER_BIN: "/none", SPOOL: path.join(dir, "spool"), STATE: path.join(dir, "state.json"), ACTS: path.join(dir, "acts"), NOTICES: path.join(dir, "notices.json"), TG_ENV: path.join(dir, "none.env"), WATCH_REPO: "o/w", BRAIN: dir, HEALTH: "x", DRY: false };
+  const cfg = { RELEASES: path.join(dir, "r"), DEV: dir, STATUS: path.join(dir, "status.json"), KEEPER: path.join(dir, "keeper.json"), KEEPER_BIN: "/none", SPOOL: path.join(dir, "spool"), STATE: path.join(dir, "state.json"), ACTS: path.join(dir, "acts"), NOTICES: path.join(dir, "notices.json"), TG_ENV: path.join(dir, "none.env"), WATCH_REPO: "o/w", BRAIN: dir, HEALTH: "x", PLAN_PATTERN: "^godspeed-\\d", KEEPER_HOME: "/usr/local/lib/godspeed-factory-driver", STATE_DIR: "/var/lib/godspeed-factory-driver", DRIVER_DIR: "/d", OWNER: "MichaelZelbel", DRY: false };
   return { dir, cfg };
 }
 const git = at => () => ({ stdout: `${new Date(at).toISOString()}\n` });
@@ -66,7 +67,7 @@ test("a driver-repair run is launched with the dead-man, the journal and the uni
   const w = world(); const calls = [];
   assert.ok(launchRepair(w.cfg, "factory-repair-codex-1", "codex", "its status file is old", "", (c, a) => { calls.push([c, ...a]); return { status: 0 }; }));
   const args = calls[0].join(" ");
-  assert.match(args, /NoNewPrivileges=yes/); assert.match(args, /ReadOnlyPaths=\S*factory-deadman\.mjs[^"]*\/var\/lib\/godspeed-factory-driver/); assert.match(args, /CapabilityBoundingSet=~CAP_SYS_ADMIN/);
+  assert.match(args, /NoNewPrivileges=yes/); assert.match(args, /ReadOnlyPaths=\S*deadman\.mjs[^"]*\/var\/lib\/godspeed-factory-driver/); assert.match(args, /CapabilityBoundingSet=~CAP_SYS_ADMIN/);
   assert.ok(!/ReadOnlyPaths=[^ ]*\/factory-driver\b[^ ]* /.test(calls[0].find(x => /^ReadOnlyPaths=/.test(x)) + " ") || true);
   assert.ok(!calls[0].find(x => /^ReadOnlyPaths=/.test(x)).includes("/usr/local/lib/godspeed-forge/factory-driver"), "the driver's install stays writable for the repair");
 });

@@ -32,10 +32,11 @@ jobs:
           TITLE: ${{ inputs.title }}
           BODY: ${{ inputs.body }}
           REF: ${{ inputs.ref }}
+          OWNER: ${{ vars.FACTORY_OWNER }}
         run: |
           # idempotent: a QUALIFYING issue (authored by this workflow's token, naming the owner) with this ref is never opened twice. The ref is
           # passed to jq as data, never as program text.
-          if gh api "repos/$GITHUB_REPOSITORY/issues?state=all&per_page=100" | jq -e --arg marker "<!-- ref:$REF -->" '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | startswith("@MichaelZelbel")) and ((.body // "") | contains($marker)))] | length > 0' >/dev/null; then echo "already opened"; exit 0; fi
-          gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" --body "@MichaelZelbel $BODY
+          if gh api "repos/$GITHUB_REPOSITORY/issues?state=all&per_page=100" | jq -e --arg marker "<!-- ref:$REF -->" --arg owner "@$OWNER" '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | startswith($owner)) and ((.body // "") | contains($marker)))] | length > 0' >/dev/null; then echo "already opened"; exit 0; fi
+          gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" --body "@$OWNER $BODY
 
           <!-- ref:$REF -->"

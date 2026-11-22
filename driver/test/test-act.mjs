@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-act.mjs   (offline: GitHub, the records and the second check are stand-ins)
 import { test } from "node:test";
 import assert from "node:assert/strict";

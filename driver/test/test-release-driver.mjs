@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node test-release-driver.mjs   (needs git and node; no network, no AI)
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process"; import { fileURLToPath } from "node:url";

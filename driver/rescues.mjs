@@ -30,11 +30,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const MIN = 60000;
+const engineLead = what => { const n = String(process.env.FD_ENGINE_REPO || "").split("/").pop(); return !!n && String(what).startsWith(`${n} `); };
 const iso = ms => new Date(ms).toISOString();
 const SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 export const OVERLAP_MINUTES = 30; // GitHub's `since` is read with this overlap; ids keep it to one count
 export const WEEKS_KEPT = 8;
-export const MICHAEL = "MichaelZelbel";
 // [repository key, path, kind]: a session's commit on a release is a rescue, one on the engine a driver change
 export const COMMIT_PATHS = [["DEV_REPO", "releases", "release"], ["ENGINE_REPO", "scripts/factory-driver", "driver-change"], ["ENGINE_REPO", "scripts/test-machine", "driver-change"], ["ENGINE_REPO", "scripts/factory-sandbox", "driver-change"]];
 const TRAILER = /^co-authored-by:\s*claude\b/im;
@@ -42,17 +42,20 @@ const OWNER_DECISION = /^[\s#>*_`~]*owner\s+(?:decision|question)\b/i;
 const DRIVER_MARK = /factory-driver:/;
 const HIS_WORDS = /\bhis words, verbatim\b|\bin (?:michael's|his) own words\b|factory-owner-questions:/i;
 // The factory's machinery: the system's units and the factory user's own (journal field USER_UNIT).
-const SYS_UNIT = /^(factory-driver\.(service|timer)|factory-helper-[a-z0-9-]+\.service|godspeed-forge-[\w-]+\.(service|timer)|test-machine\.(service|timer)|auto-stage\.(service|timer)|auto-plan\.(service|timer)|user@1001\.service)$/;
+const csvOf = v => String(v || "").split(",").map(x => x.trim()).filter(Boolean);
+const uidOf = () => String(process.env.FD_FORGE_UID || process.env.FORGE_UID || "1000");
+// factory-driver's own units, plus the server's machinery units from the settings (regular expressions, e.g. a unit and its timer)
+const sysUnit = () => new RegExp(`^(factory-driver\\.(service|timer)|factory-helper-[a-z0-9-]+\\.service|forge-step-[\\w-]+\\.service|${[...csvOf(process.env.FD_MACHINERY_UNITS), `user@${uidOf()}\\.service`].join("|")})$`);
 const USER_UNIT = /^(archonfactory-[\w.@-]+\.(service|timer)|docker\.service)$/;
 // a start counts only for what nothing starts on its own (a service's timer runs it every few minutes)
-const START_COUNTED = /^(godspeed-forge-web\.service|[\w.@-]+\.timer|docker\.service)$/;
+const startCounted = () => new RegExp(`^(${[...csvOf(process.env.FD_MUST_RUN).map(u => u.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "[\\w.@-]+\\.timer", "docker\\.service"].join("|")})$`);
 
 export const rescueDefaults = (e = process.env) => ({
-  DEV_REPO: e.FD_DEV_REPO || "MichaelZelbel/godspeed-dev",
-  ENGINE_REPO: e.FD_ENGINE_REPO || "MichaelZelbel/godspeed-engine",
-  REPO: e.FD_REPO || "MichaelZelbel/godspeed-mission-control",
-  STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed-factory-driver",
-  FORGE_UID: String(e.FD_FORGE_UID || e.FORGE_UID || "1001"),
+  DEV_REPO: e.FD_DEV_REPO || "",
+  ENGINE_REPO: e.FD_ENGINE_REPO || "",
+  REPO: e.FD_REPO || "owner/repository",
+  STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed/forge/driver",
+  FORGE_UID: String(e.FD_FORGE_UID || e.FORGE_UID || "1000"),
 });
 
 // ---------------------------------------------------------------- weeks, Berlin time
@@ -87,7 +90,7 @@ export function sessionCommits(commits, repo, where, kind = "release") {
       what: `${repo.split("/")[1]} ${where}: ${String(c.sha).slice(0, 7)} ${first(c.commit.message).slice(0, 100)}` }));
 }
 export function handDecisions(rows, repo) {
-  return (Array.isArray(rows) ? rows : []).filter(c => c && c.user && c.user.login === MICHAEL && !DRIVER_MARK.test(String(c.body || "")) && !HIS_WORDS.test(String(c.body || ""))
+  return (Array.isArray(rows) ? rows : []).filter(c => c && c.user && c.user.login === (process.env.FD_OWNER_LOGIN || "") && !DRIVER_MARK.test(String(c.body || "")) && !HIS_WORDS.test(String(c.body || ""))
     && OWNER_DECISION.test((String(c.body || "").split("\n").find(l => l.trim()) || "").trim()))
     .map(c => ({ id: `comment:${repo}:${c.id}`, at: c.created_at, kind: "decision", what: `${repo}: ${c.html_url || `comment ${c.id}`}` }));
 }
@@ -110,12 +113,12 @@ export function unitRescues(entries, { decisions = [], bootId = null, bootAt = 0
   const autoRestarts = ev.filter(e => /Scheduled restart job/.test(e.msg));
   // systemd's own reasons to end a process: a time limit, a timed-out start or stop, the OOM killer
   const ownEnds = ev.filter(e => /runtime time limit|timed out|OOM killer|Watchdog timeout/i.test(e.msg));
-  const userManager = ev.filter(e => e.unit === "user@1001.service" && e.job);
+  const userManager = ev.filter(e => e.unit === `user@${uidOf()}.service` && e.job);
   const out = [], last = {};
   for (const e of ev) {
     if (bootId && e.boot && e.boot !== bootId) continue;
     if (e.at < bootAt + 10 * MIN) continue;
-    if (!(e.user ? USER_UNIT : SYS_UNIT).test(e.unit)) continue;
+    if (!(e.user ? USER_UNIT : sysUnit()).test(e.unit)) continue;
     // a unit's main process killed with no stop job around it: someone sent the signal by hand
     if (!e.job && /Main process exited, code=killed/.test(e.msg)) {
       if (ev.some(x => x.unit === e.unit && x.job && Math.abs(x.at - e.at) <= 30000)) continue;
@@ -123,7 +126,7 @@ export function unitRescues(entries, { decisions = [], bootId = null, bootAt = 0
       e.job = "kill";
     } else if (e.result !== "done") continue;
     if (e.job === "start") {
-      if (!START_COUNTED.test(e.unit)) continue;
+      if (!startCounted().test(e.unit)) continue;
       if (autoRestarts.some(a => a.unit === e.unit && e.at - a.at >= 0 && e.at - a.at <= 5 * MIN)) continue;
     } else if (!["stop", "restart", "kill"].includes(e.job)) continue;
     if (e.user && userManager.some(u => Math.abs(u.at - e.at) <= 2 * MIN)) continue;
@@ -200,7 +203,7 @@ export async function countRescues(env0, ctx, deps = {}) {
     w.driverChanges ||= [];
     if (!(w.items || []).some(i => i.kind === "commit")) continue;
     for (const i of w.items.filter(x => x.kind === "commit")) {
-      if (/^godspeed-engine /.test(String(i.what))) { if (!w.driverChanges.some(d => d.id === i.id)) w.driverChanges.push({ ...i, kind: "driver-change" }); }
+      if (engineLead(i.what)) { if (!w.driverChanges.some(d => d.id === i.id)) w.driverChanges.push({ ...i, kind: "driver-change" }); }
       else i.kind = "release";
     }
     w.items = w.items.filter(i => i.kind !== "commit");

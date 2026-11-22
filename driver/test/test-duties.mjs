@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-duties.mjs   (offline)
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -104,13 +105,13 @@ test("a Seen tap that arrives before its notice is known is kept, not lost", asy
 });
 
 test("an acting run on a release cannot destroy its supervision: no new privileges, no CAP_SYS_ADMIN, the control plane read-only; a driver-repair run may write the driver's install and never the dead-man or the journal", () => {
-  const a = { ...actDefaults({}), ACT_DIR: "/var/lib/godspeed-factory-driver/acts" };
+  const a = { ...actDefaults(TEST_ENV), ACT_DIR: "/var/lib/godspeed-factory-driver/acts" };
   const props = sandboxProps(a);
   assert.ok(props.includes("NoNewPrivileges=yes") && props.some(p => p.startsWith("CapabilityBoundingSet=~CAP_SYS_ADMIN")));
-  const ro = props.find(p => p.startsWith("ReadOnlyPaths=")); for (const p of ["/usr/local/lib/godspeed-forge/factory-driver", "/usr/local/lib/godspeed-forge/factory-deadman.mjs", "/etc/systemd/system", "/var/lib/godspeed-factory-driver", "/usr/local/lib/godspeed-factory-driver"]) assert.ok(ro.includes(p), p);
+  const ro = props.find(p => p.startsWith("ReadOnlyPaths=")); for (const p of ["/usr/local/lib/godspeed-forge/driver", "/usr/local/lib/godspeed-factory-driver/deadman.mjs", "/etc/systemd/system", "/var/lib/godspeed-factory-driver", "/usr/local/lib/godspeed-factory-driver"]) assert.ok(ro.includes(p), p);
   assert.ok(props.find(p => p.startsWith("ReadWritePaths=")).includes("/acts"), "its own folder stays writable");
-  const repair = controlPlane(a, "repair"); assert.ok(!repair.includes("/usr/local/lib/godspeed-forge/factory-driver"), "a repair run may write the driver's install");
-  assert.ok(repair.includes("/usr/local/lib/godspeed-forge/factory-deadman.mjs") && repair.includes("/var/lib/godspeed-factory-driver") && repair.includes("/etc/systemd/system"), "never the dead-man, the journal or the units");
+  const repair = controlPlane(a, "repair"); assert.ok(!repair.includes("/usr/local/lib/godspeed-forge/driver"), "a repair run may write the driver's install");
+  assert.ok(repair.includes("/usr/local/lib/godspeed-factory-driver/deadman.mjs") && repair.includes("/var/lib/godspeed-factory-driver") && repair.includes("/etc/systemd/system"), "never the dead-man, the journal or the units");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "act-")); const calls = [];
   launchAct({}, { ...a, ACT_DIR: dir }, { unit: "factory-act-abc-1", entry: { kind: "ticket", title: "t", evidence: [] }, provider: "codex" }, (c, args) => { calls.push(args); return { status: 0 }; });
   assert.ok(calls[0].includes("NoNewPrivileges=yes") && calls[0].some(x => /ReadOnlyPaths=/.test(x)), "the real launch carries them");

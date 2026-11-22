@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-onduty.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,11 +10,11 @@ import { prompt, launchAct, actResult, resultOf, queueNotice, markHandled, actDe
 const entry = { id: "ticket:r#1", kind: "ticket", title: "one (#1)", evidence: ["no milestone since X"] };
 test("the brief carries the stuck item, what earlier runs tried, the tools, and the never-list (never a cut, never outward, never Michael's word)", () => {
   const p = prompt(entry, [{ at: "t", provider: "codex", result: "unresolved", summary: "the key was missing" }], "/x/onduty.mjs");
-  for (const s of ["no milestone since X", "the key was missing", "gh-app-token.mjs release", "vendor-addons.py --check", "gh workflow run", "NEVER", "publishing or promoting a release", "recording Michael's go", "Owner decision", "moving an item out of a release", "RESULT: resolved", "--notice", SIGN]) assert.ok(p.includes(s), s);
+  for (const s of ["no milestone since X", "the key was missing", "gh-app-token.mjs release", "gh workflow run", "NEVER", "publishing or promoting a release", "recording the owner's go", "Owner decision", "moving an item out of a release", "RESULT: resolved", "--notice", SIGN]) assert.ok(p.includes(s), s);
 });
 test("an acting run is a transient unit that outlives the round; its result is read from its folder", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "act-"));
-  const a = { ...actDefaults({}), ACT_DIR: dir };
+  const a = { ...actDefaults(TEST_ENV), ACT_DIR: dir };
   const calls = [];
   const l = launchAct({}, a, { unit: "factory-act-abc-1", entry, provider: "claude", tried: [] }, (c, args) => { calls.push([c, ...args]); return { status: 0 }; });
   assert.equal(l.provider, "claude"); assert.equal(l.model, a.CLAUDE_MODEL);

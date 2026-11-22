@@ -34,7 +34,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { isTrusted, loginOf, loopWords, verifierBlocked } from "./release-driver-owner-steps.mjs";
+import { isTrusted, loginOf, loopWords, verifierBlocked, ownerLogin } from "./release-driver-owner-steps.mjs";
 
 const HOUR = 3600 * 1000;
 const iso = ms => new Date(ms).toISOString();
@@ -109,7 +109,7 @@ export function findDeadEnds({ planId, world, decisions, prereqs = {}, now, rele
     const merged = prsOf(it).filter(p => p.merged).map(p => p.url || `#${p.number}`);
     let out = null;
     // (o) Michael moved it out himself
-    const his = (it.comments || []).filter(c => loginOf(c.author) === "MichaelZelbel" && /^\s*Owner decision\b/i.test(c.body || "") && /\b(later|next|another|future)\s+release\b/i.test(c.body || "")).at(-1);
+    const his = (it.comments || []).filter(c => loginOf(c.author) === ownerLogin() && /^\s*Owner decision\b/i.test(c.body || "") && /\b(later|next|another|future)\s+release\b/i.test(c.body || "")).at(-1);
     if (his && releaseLabel && !(it.labels || []).includes(releaseLabel))
       out = { rule: "owner-moved", why: "Michael moved it to a later release himself", evidence: [{ at: his.createdAt, url: his.url || it.url, words: short(his.body).slice(0, 400) }] };
     // (a) authorized twice, nothing merged in AUTH_IDLE_HOURS since
@@ -196,7 +196,7 @@ export function factoryFacts(env, { now, world, mint }) {
   let lastLaunch = 0; try { lastLaunch = Number(JSON.parse(fs.readFileSync(path.join(fdir, "gate.json"), "utf8")).last_launch || 0) * 1000; } catch {}
   const claims = (world.items || []).flatMap(i => [...(i.comments || []), ...(i.prs || []).flatMap(p => p.comments || [])]).filter(c => isTrusted(c.author) && /^\s*Loop claim:\s*run\b/i.test(c.body || "")).map(c => Date.parse(c.createdAt)).filter(Number.isFinite);
   const forge = (cmd, extra = []) => spawnSync("runuser", ["-u", env.FORGE_USER, "--", "env", "-i", `HOME=/home/${env.FORGE_USER}`, "PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", ...extra, ...cmd], { encoding: "utf8", timeout: 60000, env: { PATH: ROOT_PATH } });
-  const timer = String(forge(["systemctl", "--user", "is-active", env.FACTORY_TIMER || "archonfactory-godspeed-mission-control.timer"], [`XDG_RUNTIME_DIR=/run/user/${env.FORGE_UID || 1001}`]).stdout || "").trim() || "unknown";
+  const timer = String(forge(["systemctl", "--user", "is-active", env.FACTORY_TIMER || `archonfactory-${env.PROJECT || String(env.REPO || "").split("/")[1]}.timer`], [`XDG_RUNTIME_DIR=/run/user/${env.FORGE_UID}`]).stdout || "").trim() || "unknown";
   const login = forge(["codex", "login", "status"]);
   const codexLogin = login.status === 0 && /logged in/i.test(`${login.stdout || ""}${login.stderr || ""}`) && !/not logged in/i.test(`${login.stdout || ""}${login.stderr || ""}`);
   let providerFailure = "";

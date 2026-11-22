@@ -1,6 +1,6 @@
-# The outside watcher (architecture 8.10, 9.8): a scheduled GitHub Actions workflow in godspeed-dev. It shares no code with anything
+# The outside watcher (architecture 8.10, 9.8): a scheduled GitHub Actions workflow in the watch repository. It shares no code with anything
 # on the server (the net for the rare case where the driver AND the dead-man die together; GitHub's scheduler on this account runs hours late,
-# so its latency is up to about a day: the on-server pair catches any single fault within minutes) and reads godspeed-dev with its own workflow token (no personal token anywhere). Its alerts are opened with that
+# so its latency is up to about a day: the on-server pair catches any single fault within minutes) and reads that repository with its own workflow token (no personal token anywhere). Its alerts are opened with that
 # token, so the issues are authored by github-actions[bot] and name the owner: GitHub notifies him.
 name: factory-watch
 on:
@@ -36,5 +36,7 @@ jobs:
           WATCH_REPO: ${{ github.repository }}
           PRODUCT_RECORDS_REPO: ${{ github.repository }}
           DRY_RUN: ${{ inputs.dry_run }}
+          FACTORY_OWNER: ${{ vars.FACTORY_OWNER }}
+          PLAN_PATTERN: ${{ vars.FACTORY_PLAN_PATTERN }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then GATE_WAIT_MS=0 node scripts/factory-watch.mjs --dry-run; else node scripts/factory-watch.mjs; fi

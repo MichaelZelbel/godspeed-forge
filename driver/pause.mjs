@@ -9,8 +9,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readEnvFile } from "./facts.mjs";
 
-export const FILE = (e = process.env) => path.join(e.FD_STATE_DIR || "/var/lib/godspeed-factory-driver", "pauses.json");
-export const allowedUsers = (e = process.env) => String(readEnvFile(e.TG_ENV || "/root/.hermes/.env").TELEGRAM_ALLOWED_USERS || "").split(",").map(s => s.trim()).filter(Boolean);
+export const FILE = (e = process.env) => path.join(e.FD_STATE_DIR || "/var/lib/godspeed/forge/driver", "pauses.json");
+export const allowedUsers = (e = process.env) => String(e.FD_ALLOWED_USERS || readEnvFile(e.TG_ENV || "").TELEGRAM_ALLOWED_USERS || "").split(",").map(s => s.trim()).filter(Boolean);
 const read = f => { try { const d = JSON.parse(fs.readFileSync(f, "utf8")); return Array.isArray(d) ? d : []; } catch { return []; } };
 export function setPause(file, rec, allowed, now = new Date()) {
   if (!rec.target || !rec.why) throw new Error("a pause needs a target and a reason");

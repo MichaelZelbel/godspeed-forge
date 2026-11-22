@@ -19,9 +19,12 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 const ts = v => (v ? Date.parse(v) : NaN);
-// The ONE definition of a release this server runs (Godspeed's own release plans: godspeed-<version>-...). The dead-man and the watcher carry the
+// The ONE definition of a release this server runs (the main project's own release plans, by releases.plan_pattern). The dead-man and the watcher carry the
 // same pattern in their own programs (they share no code); test-gate.mjs asserts all three are identical.
-export const GODSPEED_RELEASE = /^godspeed-\d/;
+// Read from FD_PLAN_PATTERN (the main project's releases.plan_pattern) at each use; no pattern means no plan counts.
+let planSource = null, planRx = /(?!)/;
+const planPattern = () => { const s = process.env.FD_PLAN_PATTERN || ""; if (s !== planSource) { planSource = s; planRx = s ? new RegExp(s) : /(?!)/; } return planRx; };
+export const GODSPEED_RELEASE = { test: id => planPattern().test(String(id)), get source() { return planPattern().source; }, toString: () => String(planPattern()) };
 
 function withLock(file, fn) {
   const lock = `${file}.lock`; let got = false;

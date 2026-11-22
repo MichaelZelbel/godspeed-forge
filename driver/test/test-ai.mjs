@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-ai.mjs   (offline: stand-in AI commands, a stand-in systemd)
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -62,7 +63,7 @@ function setup({ factory = "claude" } = {}) {
   fs.writeFileSync(codex, STANDIN_CODEX); fs.writeFileSync(claude, STANDIN_CLAUDE);
   fs.writeFileSync(brief, "Diagnose {{OBSTACLE_ID}} in {{REPO}}. Run {{RUN_ID}}, {{MINUTES}} minutes, marker {{MARKER}}. Unknown {{NOT_GIVEN}}.\n");
   fs.writeFileSync(config, `# Archon\ndefaultAssistant: ${factory}\nassistants:\n  codex:\n    model: gpt-5.6-terra\n`);
-  const env = { ...aiDefaults({}), STATE_DIR: slash(path.join(root, "state")), WORK_ROOT: slash(path.join(root, "work")), ARCHON_CONFIG: config,
+  const env = { ...aiDefaults(TEST_ENV), STATE_DIR: slash(path.join(root, "state")), WORK_ROOT: slash(path.join(root, "work")), ARCHON_CONFIG: config,
     CODEX_BIN: [process.execPath, codex], CLAUDE_BIN: [process.execPath, claude], OPENROUTER_API_KEY: "sk-or-test-not-a-real-key" };
   const active = new Set(), calls = [];
   const deps = {
@@ -92,7 +93,7 @@ test("free models: only zero-priced ones that can call tools and are on the allo
     ["google/gemma-4-31b-it:free", "nvidia/nemotron-3-ultra-550b-a55b:free"]);
   // the router picks any free model itself, a small one too: never, even when a setting names it
   assert.deepEqual(freeToolModels(MODELS.data, ["openrouter/free"]), []);
-  assert.deepEqual(aiDefaults({}).OPENROUTER_ALLOW, FREE_MODEL_ALLOWLIST);
+  assert.deepEqual(aiDefaults(TEST_ENV).OPENROUTER_ALLOW, FREE_MODEL_ALLOWLIST);
   assert.deepEqual(aiDefaults({ FD_OPENROUTER_ALLOW: "a/b:free, c/d:free" }).OPENROUTER_ALLOW, ["a/b:free", "c/d:free"]);
 });
 
@@ -341,7 +342,7 @@ test("two helpers never share a run folder, and collecting one never removes the
 });
 
 test("the route to OpenRouter is Codex with the provider settings", () => {
-  const env = aiDefaults({});
+  const env = aiDefaults(TEST_ENV);
   const cmd = commandFor(env, { provider: "openrouter", model: "nvidia/nemotron-3-ultra-550b-a55b:free", cwd: "/w/repo" }, "/s/helpers/u");
   assert.deepEqual(cmd, ["/usr/local/bin/codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check", "-s", "danger-full-access", "-m", "nvidia/nemotron-3-ultra-550b-a55b:free", "-C", "/w/repo",
     "-o", "/s/helpers/u/last.txt", "-c", "model_provider=openrouter", "-c", "model_providers.openrouter.name=OpenRouter", "-c", "model_providers.openrouter.base_url=https://openrouter.ai/api/v1",
@@ -373,7 +374,7 @@ test("every round renews the login of a running guarded helper older than 20 min
 // ---------------------------------------------------------------- Task 8: the second check rotates too
 test("the second check goes through the same rotation as the helpers: a used-up provider is marked and the next one answers", () => {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), "fd-check-"));
-  const env = { ...aiDefaults({}), STATE_DIR: state, FORGE_NETNS: "godspeed-forge", KEYS_FILE: path.join(state, "none") };
+  const env = { ...aiDefaults(TEST_ENV), STATE_DIR: state, FORGE_NETNS: "godspeed-forge", KEYS_FILE: path.join(state, "none") };
   const seen = [];
   const spawn = (file, args, opts) => {
     seen.push({ file, args, env: opts.env, input: opts.input });
@@ -397,7 +398,7 @@ test("the second check goes through the same rotation as the helpers: a used-up 
 
 test("the second check's OpenRouter key goes through the environment, never the command line; no answer anywhere is 'no answer'", () => {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), "fd-check-"));
-  const env = { ...aiDefaults({}), STATE_DIR: state, FORGE_NETNS: "godspeed-forge" };
+  const env = { ...aiDefaults(TEST_ENV), STATE_DIR: state, FORGE_NETNS: "godspeed-forge" };
   const seen = [];
   const spawn = (file, args, opts) => { seen.push({ args, env: opts.env }); return { status: 1, stdout: "", stderr: "boom" }; };
   const r = checkJson(env, [{ name: "openrouter", model: "m:free" }], { spawn, now: () => NOW, key: () => "sk-or-secret" })("q", {});

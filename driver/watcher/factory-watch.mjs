@@ -5,6 +5,7 @@
 // Runs in GitHub Actions (node 22, no packages). Dry run: node factory-watch.mjs --dry-run (prints, sends nothing).
 const HOUR = 3600000, MIN = 60000;
 const E = process.env, DRY = process.argv.includes("--dry-run");
+const PLAN_RX = E.PLAN_PATTERN ? new RegExp(E.PLAN_PATTERN) : /(?!)/; // the main project's own release plans (repository variable FACTORY_PLAN_PATTERN)
 const H = () => ({ authorization: `Bearer ${E.GH_TOKEN}`, accept: "application/vnd.github+json", "user-agent": "factory-watch" });
 const api = async (path, init = {}) => {
   const r = await fetch(`https://api.github.com/${path}`, { ...init, headers: { ...H(), ...(init.headers || {}) } });
@@ -20,7 +21,7 @@ const text64 = f => (f ? Buffer.from(f.content || "", "base64").toString() : "")
 async function staleReleases(now) {
   const dirs = (await api(`repos/${E.PRODUCT_RECORDS_REPO}/contents/releases`)) || [];
   const rel = [];
-  for (const d of dirs.filter(x => x.type === "dir" && /^godspeed-\d/.test(x.name))) { // the server runs Godspeed only: another product's plan is not "not installed on your server"
+  for (const d of dirs.filter(x => x.type === "dir" && PLAN_RX.test(x.name))) { // the server runs the main project only: another product's plan is not "not installed on your server"
     const v = version(d.name); if (!v) continue;
     const plan = await api(`repos/${E.PRODUCT_RECORDS_REPO}/contents/releases/${d.name}/plan.md`);
     const st = await api(`repos/${E.PRODUCT_RECORDS_REPO}/contents/releases/${d.name}/staging.json`);
@@ -60,7 +61,7 @@ async function alert(key, title, text, now) {
   }
   // authored by github-actions[bot] (this workflow's own token) and naming the owner: GitHub sends him the notification
   let opened = null;
-  try { opened = await api(`repos/${E.WATCH_REPO}/issues`, { method: "POST", body: JSON.stringify({ title, body: `@MichaelZelbel ${text}\n\n<!-- watch:${key} -->` }) }); } catch (e) { console.log(`issue not opened: ${e.message}`); }
+  try { opened = await api(`repos/${E.WATCH_REPO}/issues`, { method: "POST", body: JSON.stringify({ title, body: `@${E.FACTORY_OWNER} ${text}\n\n<!-- watch:${key} -->` }) }); } catch (e) { console.log(`issue not opened: ${e.message}`); }
   // one open issue per condition: the one before is closed only AFTER its replacement exists (a failed opening leaves it open, never "seen")
   if (opened && prev && prev.state === "open") { try { await api(`repos/${E.WATCH_REPO}/issues/${prev.number}/comments`, { method: "POST", body: JSON.stringify({ body: "Repeated in a newer issue: this is still the case." }) }); await api(`repos/${E.WATCH_REPO}/issues/${prev.number}`, { method: "PATCH", body: JSON.stringify({ state: "closed" }) }); } catch {} }
 }

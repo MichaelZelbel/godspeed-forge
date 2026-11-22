@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-watcher.mjs   (runs the real watcher program with a stand-in for GitHub; no network)
 import { test } from "node:test";
 import assert from "node:assert/strict";

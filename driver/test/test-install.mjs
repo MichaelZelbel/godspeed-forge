@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test driver/test/test-install.mjs
 // 2026-11-22: gate.mjs was imported by driver.mjs but missing from the installed set, so the installed driver could not start.
 // Every file an installed entry point imports, however deep, must resolve inside the installed set (driver/ without test/).

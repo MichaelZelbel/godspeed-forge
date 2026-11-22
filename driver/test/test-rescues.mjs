@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-rescues.mjs   (offline: GitHub and the journal are stand-ins)
 // The journal lines are shaped like the AX41's own on 2026-11-18 (journalctl -o json).
 import { test } from "node:test";

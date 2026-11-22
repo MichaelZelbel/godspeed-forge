@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -42,7 +43,7 @@ const deps = extra => ({
 });
 
 test("a failing PR becomes unreadable and the rest is still returned", async () => {
-  const w = await readWorld({}, deps({ failPr: 111 }));
+  const w = await readWorld(TEST_ENV, deps({ failPr: 111 }));
   assert.ok(w.unreadable.some(u => u.part === "pr#111"));
   assert.equal(w.items[10].prs.length, 1);
   assert.equal(w.items[10].prs[0].number, 110);
@@ -52,16 +53,16 @@ test("a failing PR becomes unreadable and the rest is still returned", async () 
 });
 
 test("requiredState and requiredSince come from the PR's required check run", async () => {
-  const ok = await readWorld({}, deps({ prRequired: required("success", "2026-11-18T10:05:00Z") }));
+  const ok = await readWorld(TEST_ENV, deps({ prRequired: required("success", "2026-11-18T10:05:00Z") }));
   assert.equal(ok.items[10].prs[0].requiredState, "success");
   assert.equal(ok.items[10].prs[0].requiredSince, "2026-11-18T10:05:00.000Z");
-  const bad = await readWorld({}, deps({ prRequired: required("failure") }));
+  const bad = await readWorld(TEST_ENV, deps({ prRequired: required("failure") }));
   assert.equal(bad.items[10].prs[0].requiredState, "failure");
   assert.equal(bad.main.required, "failure");
 });
 
 test("scheduler decisions are parsed from the journal", async () => {
-  const w = await readWorld({}, deps());
+  const w = await readWorld(TEST_ENV, deps());
   assert.equal(w.factory.lastDecisions.length, 3);
   assert.match(w.factory.lastDecisions[0].text, /^No launch: workable nothing/);
   assert.match(w.factory.lastDecisions[2].text, /found nothing to start/);
@@ -69,7 +70,7 @@ test("scheduler decisions are parsed from the journal", async () => {
 });
 
 test("tickets carry item, issue and size; active runs and stale processes", async () => {
-  const w = await readWorld({}, deps());
+  const w = await readWorld(TEST_ENV, deps());
   const [t1, t2] = w.releases[0].tickets;
   assert.deepEqual([t1.item, t1.issue], [1, 10]);
   assert.equal(t1.size, "l");
@@ -83,7 +84,7 @@ test("tickets carry item, issue and size; active runs and stale processes", asyn
 });
 
 test("a server command that throws is unreadable, not silently empty", async () => {
-  const w = await readWorld({}, { ...deps(), sh: cmd => { if (/df /.test(cmd)) throw new Error("boom"); return sh(cmd); } });
+  const w = await readWorld(TEST_ENV, { ...deps(), sh: cmd => { if (/df /.test(cmd)) throw new Error("boom"); return sh(cmd); } });
   assert.ok(w.unreadable.some(u => u.part === "server/disk"));
   assert.equal(w.server.diskPct, null);
 });
@@ -162,7 +163,7 @@ function projectDeps({ stop = null, writerArgs = "", scenarios = [], restarts = 
 
 test("every factory project is read: its decisions, its runs (through Archon's own CLI), its repository and its board", async () => {
   const d = projectDeps();
-  const w = await readWorld({}, d);
+  const w = await readWorld(TEST_ENV, d);
   assert.deepEqual(w.factories.map(f => f.project), ["godspeed-mission-control", "querino"]);
   const [gmc, q] = w.factories;
   assert.equal(gmc.primary, true);
@@ -182,19 +183,19 @@ test("every factory project is read: its decisions, its runs (through Archon's o
 
 test("a STOP file: its writer's life and the candidate's scenarios run are read", async () => {
   const stop = "auto-stage 1424860 2026-11-18T13:47:26.709Z\nThe release step pauses the factory while the scenarios run.\n";
-  const live = await readWorld({}, projectDeps({ stop, writerArgs: "/usr/local/bin/node /usr/local/lib/godspeed-forge/godspeed-dev/scripts/release/auto-stage.mjs\n",
+  const live = await readWorld(TEST_ENV, projectDeps({ stop, writerArgs: "/usr/local/bin/node /usr/local/lib/godspeed-forge/godspeed-dev/scripts/release/auto-stage.mjs\n",
     scenarios: [{ status: "in_progress", head_branch: "candidate/2.0.0-beta.28", display_title: "scenarios candidate/2.0.0-beta.28" }] }));
   const s = live.factories[0].stop;
   assert.equal(s.file, "/home/godspeed-forge/godspeed-mission-control/.factory/STOP");
   assert.deepEqual([s.writer, s.pid, s.writerAlive, s.scenariosRunning], ["auto-stage", 1424860, true, true]);
-  const dead = await readWorld({}, projectDeps({ stop, writerArgs: "", scenarios: [{ status: "completed", head_branch: "candidate/2.0.0-beta.28" }, { status: "in_progress", head_branch: "main" }] }));
+  const dead = await readWorld(TEST_ENV, projectDeps({ stop, writerArgs: "", scenarios: [{ status: "completed", head_branch: "candidate/2.0.0-beta.28" }, { status: "in_progress", head_branch: "main" }] }));
   assert.deepEqual([dead.factories[0].stop.writerAlive, dead.factories[0].stop.scenariosRunning], [false, false]);
-  const other = await readWorld({}, projectDeps({ stop, writerArgs: "/usr/bin/sleep 100\n" }));
+  const other = await readWorld(TEST_ENV, projectDeps({ stop, writerArgs: "/usr/bin/sleep 100\n" }));
   assert.equal(other.factories[0].stop.writerAlive, false, "a reused process number is not the writer");
 });
 
 test("the factory user's manager restarts in the last 30 minutes, and tickets a scope amendment moved out are marked", async () => {
-  const w = await readWorld({}, projectDeps({ restarts: "3" }));
+  const w = await readWorld(TEST_ENV, projectDeps({ restarts: "3" }));
   assert.equal(w.server.userManagerStarts, 3);
   const [t1, t2] = w.releases[0].tickets;
   assert.equal(t1.deferred, false);
@@ -202,13 +203,13 @@ test("the factory user's manager restarts in the last 30 minutes, and tickets a 
 });
 
 test("each project's trigger and manager timer are read (a missing one is no timer), and whether the network guard runs right now", async () => {
-  const w = await readWorld({}, projectDeps());
+  const w = await readWorld(TEST_ENV, projectDeps());
   assert.deepEqual(w.factories[0].timers, { "archonfactory-godspeed-mission-control.timer": "active" });
   assert.deepEqual(w.factories[1].timers, { "archonfactory-querino.timer": "inactive", "archonfactory-querino-manager.timer": "active" });
   assert.equal(w.server.guardRunning, true);
   const d = projectDeps();
   const timerCmd = d.calls;
-  await readWorld({}, d);
+  await readWorld(TEST_ENV, d);
   assert.ok(timerCmd.find(c => /show -p Id/.test(c.cmd)).asForge, "the factory user's own manager is asked");
 });
 
@@ -219,7 +220,7 @@ test("an approved release older than the version installed on the server is supe
     { id: "godspeed-2.0.0-beta.27-sees-it-through", dir: "/r/27", plan: plan("2.0.0-beta.27"), staging: null, hasStaging: false, done: false },
     { id: "godspeed-2.0.0-beta.28-keeps-watch", dir: "/r/28", plan: plan("2.0.0-beta.28"), staging: { status: "installed", version: "2.0.0-beta.28" }, hasStaging: true, done: false },
   ];
-  const w = await readWorld({}, { ...deps(), readReleases: () => rels });
+  const w = await readWorld(TEST_ENV, { ...deps(), readReleases: () => rels });
   assert.ok(!w.releases.some(r => r.id === "godspeed-2.0.0-beta.27-sees-it-through"));
   assert.deepEqual(w.superseded, [{ id: "godspeed-2.0.0-beta.27-sees-it-through", version: "2.0.0-beta.27", by: "2.0.0-beta.28" }]);
 });
@@ -230,17 +231,17 @@ test("a release installed on the owner's server is done: nobody works on it afte
     { id: "godspeed-2.0.0-beta.28-keeps-watch", dir: "/r/28", plan: plan("2.0.0-beta.28"), staging: { status: "installed", version: "2.0.0-beta.28", scenarios: { result: "failed" } }, hasStaging: true, done: false },
     { id: "godspeed-2.0.0-beta.29-x", dir: "/r/29", plan: plan("2.0.0-beta.29"), staging: null, hasStaging: false, done: false },
   ];
-  const w = await readWorld({}, { ...deps(), readReleases: () => rels });
+  const w = await readWorld(TEST_ENV, { ...deps(), readReleases: () => rels });
   assert.deepEqual(w.releases.map(r => r.id), ["godspeed-2.0.0-beta.29-x"], "only the newer release is driven");
   assert.equal(w.installed.id, "godspeed-2.0.0-beta.28-keeps-watch"); assert.equal(w.installed.version, "2.0.0-beta.28"); assert.equal(w.installed.staging.status, "installed", "the staging record rides along for the fresh install check"); assert.ok(Array.isArray(w.installed.issues));
   assert.deepEqual(w.superseded, []);
-  const only = await readWorld({}, { ...deps(), readReleases: () => rels.slice(0, 1) });
+  const only = await readWorld(TEST_ENV, { ...deps(), readReleases: () => rels.slice(0, 1) });
   assert.deepEqual(only.releases, [], "nothing newer: nothing to drive");
 });
 
 test("a merged pull request that only mentions the issue is recorded, so the item counts as done", async () => {
   const base = deps();
-  const w = await readWorld({}, { ...base, gh: args => {
+  const w = await readWorld(TEST_ENV, { ...base, gh: args => {
     const a = args.join(" ");
     if (/graphql/.test(a)) return { data: { repository: { issue: { closedByPullRequestsReferences: { nodes: [] }, timelineItems: { nodes: [] },
       refs: { nodes: [{ source: { __typename: "PullRequest", number: 714, merged: true } }, { source: { __typename: "PullRequest", number: 531, merged: false } }, { source: { __typename: "Issue" } }] } } } } };
@@ -251,14 +252,14 @@ test("a merged pull request that only mentions the issue is recorded, so the ite
 });
 
 test("an enabled unit that must run and is not running counts as down, like a failed one", async () => {
-  const w = await readWorld({}, projectDeps());
+  const w = await readWorld(TEST_ENV, projectDeps());
   assert.ok(w.server.failedUnits.includes("godspeed-forge-web.service"));
 });
 
 test("the hidden checks' tools are read the way the test machine reads them; an answer that is not a reading is unreadable", async () => {
   const cov = out => ({ ...deps(), sh: (cmd, o = {}) => (/toolCoverage/.test(cmd) ? (typeof out === "function" ? out(cmd, o) : out) : sh(cmd)) });
   let seen = null;
-  const w = await readWorld({}, cov((cmd, o) => { seen = { cmd, asForge: !!o.asForge }; return `noise\n${JSON.stringify({ ids: ["H-1", "H-2", "H-3"], missing: [{ id: "H-2", why: "H-2 has no tool" }] })}\n`; }));
+  const w = await readWorld(TEST_ENV, cov((cmd, o) => { seen = { cmd, asForge: !!o.asForge }; return `noise\n${JSON.stringify({ ids: ["H-1", "H-2", "H-3"], missing: [{ id: "H-2", why: "H-2 has no tool" }] })}\n`; }));
   assert.deepEqual(w.tools, { scenarios: 3, missing: [{ id: "H-2", why: "H-2 has no tool" }] });
   assert.match(seen.cmd, /import\("\/usr\/local\/lib\/godspeed-test-machine\/test-machine\/test-machine\.mjs"\)/, "the test machine's own check, imported, never copied");
   // its path is never an argument: as process.argv[1] it would make the module think it was started
@@ -266,17 +267,17 @@ test("the hidden checks' tools are read the way the test machine reads them; an 
   assert.doesNotMatch(seen.cmd, /process\.argv|test-machine\.mjs'?\s*$/);
   assert.equal(seen.asForge, false);
   assert.ok(!w.unreadable.some(u => u.part === "tools"));
-  const bad = await readWorld({}, cov(""));
+  const bad = await readWorld(TEST_ENV, cov(""));
   assert.equal(bad.tools, null);
   assert.ok(bad.unreadable.some(u => u.part === "tools"));
-  const noFile = await readWorld({}, cov(JSON.stringify({ ids: [], missing: [], why: "no hidden scenario file", failed: true })));
+  const noFile = await readWorld(TEST_ENV, cov(JSON.stringify({ ids: [], missing: [], why: "no hidden scenario file", failed: true })));
   assert.equal(noFile.tools, null);
   assert.ok(noFile.unreadable.some(u => u.part === "tools" && /no hidden scenario file/.test(u.error)));
 });
 
 test("failed one-off units from systemd-run are collected apart; a named failed unit still counts", async () => {
   const sh2 = cmd => /systemctl --failed/.test(cmd) ? "run-u123.service\nrun-u20610.scope\narchon-loop.service\nrun-my-thing.service\n" : sh(cmd);
-  const w = await readWorld({}, { ...deps(), sh: sh2 });
+  const w = await readWorld(TEST_ENV, { ...deps(), sh: sh2 });
   assert.deepEqual(w.server.anonymousFailedUnits, ["run-u123.service", "run-u20610.scope"]);
   assert.deepEqual(w.server.failedUnits, ["archon-loop.service", "run-my-thing.service"]);
 });

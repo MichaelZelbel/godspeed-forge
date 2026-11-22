@@ -45,24 +45,24 @@ export const GUARDED_KINDS = ["product", "diagnose", "decide", "feasibility", "m
 export const UNIT_RE = /^factory-helper-[a-z0-9]{1,40}-\d{1,6}$/;
 export const MARKER_PREFIX = "factory-driver:";
 export const markerOf = unit => `<!-- ${MARKER_PREFIX}${unit} -->`;
-export const DRIVER_EMAIL = "factory-driver@godspeed-archon.invalid";
+export const DRIVER_EMAIL = "factory-driver@factory.invalid";
 export const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 export const MODELS_CACHE_HOURS = 6;
 export const SLOTS = 8; // run folders are reused: the AI CLIs record every folder they trust
 
 const bins = v => { if (Array.isArray(v)) return v; const s = String(v || "").trim(); if (s.startsWith("[")) return JSON.parse(s); return [s]; };
 export const aiDefaults = (e = process.env) => ({
-  REPO: e.FD_REPO || "MichaelZelbel/godspeed-mission-control",
-  STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed-factory-driver",
-  FORGE_USER: e.FORGE_USER || "godspeed-forge",
-  SOURCE_CHECKOUT: e.FD_SOURCE_CHECKOUT || "/home/godspeed-forge/godspeed-mission-control",
-  WORK_ROOT: e.FD_WORK_ROOT || "/home/godspeed-forge/factory-driver",
-  GUARD: e.FD_GUARD || path.join(HERE, "..", "release-driver", "release-driver-guard.mjs"),
-  TOKEN_SCRIPT: e.FD_TOKEN_SCRIPT || "/usr/local/lib/godspeed-forge/gh-app-token.mjs",
-  KEYS_FILE: e.FD_KEYS_FILE || "/etc/godspeed-forge/keys.env",
-  ARCHON_CONFIG: e.FD_ARCHON_CONFIG || "/home/godspeed-forge/.archon/config.yaml",
+  REPO: e.FD_REPO || "owner/repository",
+  STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed/forge/driver",
+  FORGE_USER: e.FORGE_USER || "factory",
+  SOURCE_CHECKOUT: e.FD_SOURCE_CHECKOUT || "/home/factory/repository",
+  WORK_ROOT: e.FD_WORK_ROOT || "/home/factory/factory-driver",
+  GUARD: e.FD_GUARD || path.join(HERE, "release-driver", "release-driver-guard.mjs"),
+  TOKEN_SCRIPT: e.FD_TOKEN_SCRIPT || "/usr/local/bin/gh-app-token.mjs",
+  KEYS_FILE: e.FD_KEYS_FILE || "/etc/godspeed-forge/keys-file",
+  ARCHON_CONFIG: e.FD_ARCHON_CONFIG || "/home/factory/.archon/config.yaml",
   CODEX_BIN: bins(e.FD_CODEX_BIN || "/usr/local/bin/codex"),
-  CLAUDE_BIN: bins(e.FD_CLAUDE_BIN || "/home/godspeed-forge/.local/bin/claude"),
+  CLAUDE_BIN: bins(e.FD_CLAUDE_BIN || "/home/factory/.local/bin/claude"),
   NODE: e.FD_NODE || process.execPath,
   SYSTEMD_RUN: e.FD_SYSTEMD_RUN || "systemd-run",
   SYSTEMCTL: e.FD_SYSTEMCTL || "systemctl",
@@ -75,15 +75,18 @@ export const aiDefaults = (e = process.env) => ({
   OPENROUTER_ALLOW: e.FD_OPENROUTER_ALLOW ? e.FD_OPENROUTER_ALLOW.split(",").map(s => s.trim()).filter(Boolean) : [...FREE_MODEL_ALLOWLIST],
   EXHAUSTED_MINUTES: Number(e.FD_EXHAUSTED_MINUTES || 30), // a subscription that reported its limit is tried again after this
   MODEL_BUSY_MINUTES: Number(e.FD_MODEL_BUSY_MINUTES || 15), // one free model that answered 429
-  HELPER_MEMORY_MAX: e.FD_HELPER_MEMORY_MAX || "8G", // Michael's live Godspeed comes first
+  HELPER_MEMORY_MAX: e.FD_HELPER_MEMORY_MAX || "8G", // the owner's own services come first
   FORCE_EXHAUSTED: e.FD_FORCE_EXHAUSTED || "", // the drill: "codex" makes every codex helper report its limit
   // The factory account lives in its own network namespace (2026-11-18): every helper unit joins it,
   // and every plain command as that user runs through `ip netns exec` (forgeArgv). "" turns it off.
-  FORGE_NETNS: e.FD_FORGE_NETNS !== undefined ? e.FD_FORGE_NETNS : "godspeed-forge",
-  SANDBOX_RESOLVE: e.FD_SANDBOX_RESOLVE || "/usr/local/lib/godspeed-forge/factory-sandbox/resolve",
+  FORGE_NETNS: e.FD_FORGE_NETNS !== undefined ? e.FD_FORGE_NETNS : "",
+  SANDBOX_RESOLVE: e.FD_SANDBOX_RESOLVE || "",
 });
 // The unit properties that put a helper into the factory's namespace and keep host sockets from it.
-export const sandboxProps = env => (env.FORGE_NETNS ? [`NetworkNamespacePath=/run/netns/${env.FORGE_NETNS}`, `BindReadOnlyPaths=${env.SANDBOX_RESOLVE}:/run/systemd/resolve`,
+// The names a brief says in the owner's own words (the settings), so no brief carries a name of its own.
+export const serverVars = (e = process.env) => ({ OWNER_LOGIN: e.FD_OWNER_LOGIN || "the owner", BUILDER_LOGIN: `${e.FD_BUILDER_APP || "builder"}[bot]`, RELEASE_LOGIN: `${e.FD_RELEASE_APP || "release"}[bot]`,
+  NEVER_TOUCH: [...String(e.FD_NEVER_TOUCH || "").split(",").map(x => x.trim()).filter(Boolean), ...(e.FD_NEVER_TOUCH_PATTERN ? [`anything matching ${e.FD_NEVER_TOUCH_PATTERN}`] : [])].join(", ") || "the services and folders the settings name as never touched (none are named)" });
+export const sandboxProps = env => (env.FORGE_NETNS ? [`NetworkNamespacePath=/run/netns/${env.FORGE_NETNS}`, ...(env.SANDBOX_RESOLVE ? [`BindReadOnlyPaths=${env.SANDBOX_RESOLVE}:/run/systemd/resolve`] : []),
   "InaccessiblePaths=-/run/tailscale", "InaccessiblePaths=-/run/docker.sock"] : []);
 
 // ---------------------------------------------------------------- limits (pure)
@@ -374,7 +377,7 @@ export async function launchHelper(env, { unit, kind, provider, model, briefFile
   // Claude Code lives in the factory user's own bin folder
   envList = envList.map(v => (v.startsWith("PATH=") ? `PATH=/home/${env.FORGE_USER}/.local/bin:${v.slice(5)}` : v));
   const vars = { RUN_ID: unit, NOW: `${iso(now).slice(0, 16).replace("T", " ")} UTC`, DATE: iso(now).slice(0, 10), MINUTES: String(Math.round(seconds / 60)), MODEL: `${provider} ${model}`,
-    MARKER: marker, RUN_DIR: work, REPO: env.REPO, OWNER_ISSUE: String(ownerIssue || "?"), PROTECTED: (protectedPaths || []).join(", "), ...(typeof context === "object" && context ? context : {}) };
+    MARKER: marker, RUN_DIR: work, REPO: env.REPO, ...serverVars(), OWNER_ISSUE: String(ownerIssue || "?"), PROTECTED: (protectedPaths || []).join(", "), ...(typeof context === "object" && context ? context : {}) };
   let prompt = renderBrief(fs.readFileSync(briefFile, "utf8"), vars);
   if (typeof context === "string" && context.trim()) prompt += `\n\n## Context\n\n${context.trim()}\n`;
   fs.writeFileSync(path.join(dir, "prompt.md"), prompt, { mode: 0o600 }); own(path.join(dir, "prompt.md"));

@@ -1,3 +1,4 @@
+import { TEST_ENV } from "./env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { nextStep, FREE_MODEL_ALLOWLIST } from "../ladder.mjs";
