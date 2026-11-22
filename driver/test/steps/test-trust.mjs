@@ -46,13 +46,16 @@ assert.ok(e2.STATE_DIR.endsWith("/acme--side") && e2.STATE_DIR.startsWith(path.j
 testCase("a pass neutralises a stranger's decision comment and leaves the owner's and the Apps' alone");
 {
   const c = clock(), calls = [];
-  const r = await run({ settings, projects: [main], main, env: {}, ...c, maxMinutes: 1, deps: { trustGh: github("acme/app", calls) } });
+  const during = [];
+  const gh = github("acme/app", calls);
+  const r = await run({ settings, projects: [main], main, env: {}, ...c, maxMinutes: 1, deps: { trustGh: (args, input) => { during.push(["boss", "acme-release[bot]", "stranger"].map(x => isTrusted(x)).join()); return gh(args, input); } } });
+  assert.ok(during.every(x => x === "true,true,false"), "while the pass runs, who may decide comes from the settings");
+  assert.equal(isTrusted("boss"), false, "and the list is as it was afterwards");
   assert.equal(r.ok, true, r.summary);
   const patches = calls.filter(x => x.args[0] === "-X");
   assert.equal(patches.length, 1, "one comment neutralised");
   assert.match(patches[0].args[2], /issues\/comments\/1$/);
   assert.match(patches[0].input, /may not decide/);
-  assert.ok(isTrusted("boss") && isTrusted("acme-release[bot]") && !isTrusted("stranger"), "the trusted list was set from the settings");
   assert.ok(fs.existsSync(path.join(tmp, "trust", "trust.json")), "its own cursor file");
   assert.match(fs.readFileSync(path.join(tmp, "trust", "decisions.jsonl"), "utf8"), /untrusted comment neutralised/);
 }

@@ -20,13 +20,13 @@ export const SETTINGS = [
   { key: "owner.github_login", required: true, meaning: "the GitHub account whose decisions count; every other account's decision-style comment is neutralised" },
   { key: "server.factory_user", required: true, meaning: "the account whose GitHub login (the builder App) the pass reads and writes with" },
   { key: "keys.token_script", required: true, meaning: "the script that mints the App's token" },
-  { key: "keys.env_file", required: false, default: "<settings dir>/keys.env", meaning: "the file holding the App's keys" },
+  { key: "keys.env_file", required: false, default: "the file keys.env in the settings folder", meaning: "the file holding the App's keys" },
   { key: "steps.trust.state_dir", required: false, default: "<server.state_dir>/steps/trust", meaning: "where the pass keeps its cursor (trust.json) and its log; the first project keeps it here, every other project has a folder of its own below it" },
 ];
 
 const get = (o, dotted) => dotted.split(".").reduce((a, k) => (a == null ? undefined : a[k]), o);
 const slug = repo => String(repo).toLowerCase().replace("/", "--");
-// "godspeed-dev-builder" or "godspeed-dev-builder[bot]" or {login|slug|name} -> the login REST gives
+// "some-builder" or "some-builder[bot]" or {login|slug|name} -> the login REST gives
 const appLogin = a => {
   const raw = typeof a === "string" ? a : a && (a.login || a.slug || a.name);
   if (!raw) return null;
@@ -64,6 +64,7 @@ export async function run(ctx) {
   const nowMs = ctx.nowMs || realNow, sleep = ctx.sleep || realSleep, log = ctx.log || (() => {});
   const every = (ctx.everyMinutes || STEP.everyMinutes) * 60000, max = (ctx.maxMinutes || STEP.maxMinutes) * 60000;
   const started = nowMs();
+  const before = [...TRUSTED]; // release-driver-owner-steps.mjs keeps who may decide in this exported list
   let passes = 0, handled = 0;
   const failures = [];
   for (;;) {
@@ -83,6 +84,7 @@ export async function run(ctx) {
     if (nowMs() - started + next > max) break;
     await sleep(next);
   }
+  TRUSTED.splice(0, TRUSTED.length, ...before);
   const summary = `${passes} trust pass${passes === 1 ? "" : "es"} over ${projects.length} project${projects.length === 1 ? "" : "s"}, ${handled} handled${failures.length ? `; failed: ${failures.join("; ")}` : ""}`;
   return failures.length ? { ok: false, summary, error: failures.join("; ") } : { ok: true, summary };
 }

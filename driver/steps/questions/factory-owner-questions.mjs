@@ -237,7 +237,7 @@ export function queueNotice(file, { id, text, about, facts, written, at = new Da
 // Telegram, so after a question has been told, his next messages (Hermes' own message store, the
 // telegram sessions) are matched to the open questions by the same model call, and a clear answer
 // is posted once as that comment, quoting his words verbatim. Unsure means nothing is posted.
-// The one GitHub write of this helper, as godspeed-forge's builder-App login.
+// The one GitHub write of this helper, as the factory user's builder-App login.
 const ANSWER_WINDOW = DAY; // an answer counts for a question told at most a day before it
 const MATCH_SYSTEM = `You decide whether one Telegram message from a person is an answer to one of the open questions listed. The questions come from a software factory; the person replies in a chat that also covers other topics (journal, health, chat), so most messages are not answers.
 Return JSON only: {"answers": [{"question": <number from the list>, "meaning": "<one plain English sentence: what he decided, including which choice>"}]}.
@@ -591,8 +591,8 @@ function runLocked(env, now, log) {
   const elsewhereFile = path.join(path.dirname(env.STATE), "answered-elsewhere.json");
   const elsewhereData = fs.existsSync(elsewhereFile) ? JSON.parse(fs.readFileSync(elsewhereFile, "utf8")) : [];
   // headings Mission Control's queue worker handed to the owner (questions of what, or not safely its own)
-  const toMichaelFile = path.join(path.dirname(env.STATE), "to-michael.json");
-  const toMichaelData = fs.existsSync(toMichaelFile) ? JSON.parse(fs.readFileSync(toMichaelFile, "utf8")) : {};
+  const toOwnerFile = path.join(path.dirname(env.STATE), env.TO_OWNER_FILE || "to-owner.json");
+  const toOwnerData = fs.existsSync(toOwnerFile) ? JSON.parse(fs.readFileSync(toOwnerFile, "utf8")) : {};
   const ctxs = projects.map(project => {
     const file = stateFileOf(env, project);
     const state = loadState(file);
@@ -608,7 +608,7 @@ function runLocked(env, now, log) {
   for (const c of ctxs) {
     const { project, state } = c;
     const elsewhere = new Set((Array.isArray(elsewhereData) ? elsewhereData : elsewhereData[project.repo] || []).map(keyOf));
-    const forOwner = new Set((Array.isArray(toMichaelData) ? toMichaelData : toMichaelData[project.repo] || []).map(keyOf));
+    const forOwner = new Set((Array.isArray(toOwnerData) ? toOwnerData : toOwnerData[project.repo] || []).map(keyOf));
     try { c.issues = readIssues(env, project.repo); } catch (e) {
       c.ok = false;
       state.failing_since = state.failing_since || new Date(now).toISOString();
