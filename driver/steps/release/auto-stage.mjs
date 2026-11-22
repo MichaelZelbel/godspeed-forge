@@ -91,7 +91,7 @@ import { fileURLToPath } from "node:url";
 import * as R from "./release-api.mjs";
 import * as G from "./staging.mjs";
 import { cfg as RELEASE, need, configText, configureFromEnv } from "./config.mjs";
-import { makeHalt, plainHaltWords } from "./halts.mjs";
+import { makeHalt, plainHaltWords, OWNER_YES_KEYS } from "./halts.mjs";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const HERE = path.dirname(THIS_FILE);
@@ -1047,7 +1047,7 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
   }
   if (sc.result === "none" && !rs.dispatchedAt && sc.ignored && !rs.dispatchApproved) {
     // Somebody ran scenarios on this tag that do not count (a wrong stage in the title): a second paid run on top is theirs to decide.
-    haltWith("scenarios-ignored", `Godspeed ${version} is frozen, but the tests that already ran on it do not count (${sc.ignored}). Another run was not started, because the AI key for the tests is small.`, "scenarios on the tag do not count; not started again (money)");
+    haltWith("scenarios-ignored", `Godspeed ${version} is frozen, but the tests that already ran on it do not count (${sc.ignored}). Another test run costs money from the test key, so none was started: only the owner gives that yes.`, "scenarios on the tag do not count; not started again (money)");
     return { outcome: "halted", why: "scenarios ignored" };
   }
 
@@ -1069,7 +1069,7 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
           log(`The scenarios were started ${Math.round(age / MINUTE)} minutes ago and GitHub does not show the run yet; waiting.`);
           return { outcome: "waiting", why: "run not visible yet" };
         }
-        haltWith("scenarios-lost", `Godspeed ${version} is frozen, but the tests that were started do not show on GitHub, and they were not started a second time because the AI key for them is small.`, "the scenarios were started but GitHub shows no run on the tag; not started a second time (money)");
+        haltWith("scenarios-lost", `Godspeed ${version} is frozen, but the tests that were started do not show on GitHub, and they were not started a second time: another test run costs money from the test key, and only the owner gives that yes.`, "the scenarios were started but GitHub shows no run on the tag; not started a second time (money)");
         return { outcome: "halted", why: "dispatch lost" };
       }
       rs.dispatchedAt = new Date(now()).toISOString(); // before the dispatch: a crash in between never starts a second run
@@ -1390,8 +1390,12 @@ export async function look({ env = process.env, dry = false, only = null, log = 
 
 // Clears a halt after its cause was fixed, and makes the step carry on from where the halt stood.
 // -> a plain sentence of what was done.
-export async function clearHalt({ env = process.env, key, release = null, log = (s) => console.log(s) }) {
+export async function clearHalt({ env = process.env, key, release = null, ownerSaid = "", ownerRef = "", log = (s) => console.log(s) }) {
   const cfg = loadConfig(env);
+  // Clearing these two lets the step start another PAID scenario run, which only the owner may allow.
+  if (OWNER_YES_KEYS.has(key) && (!String(ownerSaid || "").trim() || !String(ownerRef || "").trim())) {
+    R.refuse(`The halt "${key}" lets another paid test run start, and only the owner's yes allows that: give his words (--owner-said) and where he said them (--owner-ref). Nothing was changed.`);
+  }
   if (!cfg.stateDir) R.refuse("The setting steps.stage.state_dir is empty, so there is no state to clear a halt in.");
   const stateFile = path.join(cfg.stateDir, "state.json");
   const state = loadState(stateFile);
@@ -1424,8 +1428,12 @@ export async function clearHalt({ env = process.env, key, release = null, log = 
       } else if (key === "freeze-unfinished") {
         delete rs.freezeStartedAt;
         rs.frozen = rs.frozen || new Date().toISOString();
-      } else if (key === "scenarios-lost") delete rs.dispatchedAt;
-      else if (key === "scenarios-ignored") rs.dispatchApproved = true;
+      } else if (key === "scenarios-lost" || key === "scenarios-ignored") {
+        if (key === "scenarios-lost") delete rs.dispatchedAt;
+        else rs.dispatchApproved = true;
+        // the owner's yes is kept beside the approval it allowed
+        rs.dispatchApproval = { key, said: String(ownerSaid).trim(), ref: String(ownerRef).trim(), at: new Date().toISOString() };
+      }
       else if (key === "not-staged") rs.serverTries = 0;
       said.push(`${id}: the halt "${key}" was cleared`);
     }
@@ -1443,14 +1451,14 @@ export async function main(argv, env = process.env) {
   const values = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--release" || a === "--explain" || a === "--clear-halt") values[a.slice(2)] = argv[++i];
+    if (["--release", "--explain", "--clear-halt", "--owner-said", "--owner-ref"].includes(a)) values[a.slice(2)] = argv[++i];
     else if (a.startsWith("--")) flags.add(a.slice(2));
     else {
       console.error(USAGE);
       return 2;
     }
   }
-  const known = new Set(["dry-run", "release", "explain", "clear-halt"]);
+  const known = new Set(["dry-run", "release", "explain", "clear-halt", "owner-said", "owner-ref"]);
   for (const f of [...flags, ...Object.keys(values)]) {
     if (!known.has(f)) {
       console.error(`auto-stage does not know the option --${f}.\n${USAGE}`);
@@ -1465,7 +1473,7 @@ export async function main(argv, env = process.env) {
   }
   try {
     if (values["clear-halt"]) {
-      await clearHalt({ env, key: values["clear-halt"], release: values.release || null, log });
+      await clearHalt({ env, key: values["clear-halt"], release: values.release || null, ownerSaid: values["owner-said"] || "", ownerRef: values["owner-ref"] || "", log });
       return 0;
     }
     const dry = flags.has("dry-run") || !!values.explain;

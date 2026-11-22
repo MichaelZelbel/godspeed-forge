@@ -9,8 +9,14 @@ export function clearCommandFor(ctx, step, key) {
   return `node ${dir}/driver.mjs --step ${step} --clear-halt ${key}${sd}`;
 }
 
+// Halts that only the owner's yes can clear, because clearing them lets the step spend money (a paid test run).
+// Their clear command needs his recorded words and where he said them; without both it refuses.
+export const OWNER_YES_KEYS = new Set(["scenarios-lost", "scenarios-ignored"]);
+export const OWNER_YES_FLAGS = ' --owner-said "<his words>" --owner-ref "<where he said it>"';
+
 export function makeHalt(ctx, step, key, words) {
-  return { key, words: String(words).replace(/\s+/g, " ").trim(), clear: clearCommandFor(ctx, step, key) };
+  const clear = clearCommandFor(ctx, step, key) + (OWNER_YES_KEYS.has(key) ? OWNER_YES_FLAGS : "");
+  return { key, words: String(words).replace(/\s+/g, " ").trim(), clear };
 }
 
 // An old message's text (from a state file written before the fold) without its hand-off sentence.

@@ -128,6 +128,9 @@ test("a halt carries its key, its plain words and the exact command that clears 
   assert.equal(h.words, "the freeze stopped: x");
   assert.equal(h.clear, "node /opt/driver/driver.mjs --step stage --clear-halt freeze-failed --settings-dir /etc/forge");
   assert.equal(makeHalt({ ...c, settingsDir: undefined }, "plan", "run-failed", "x").clear, "node /opt/driver/driver.mjs --step plan --clear-halt run-failed");
+  const paid = makeHalt(c, "stage", "scenarios-lost", "another test run costs money from the test key");
+  assert.match(paid.clear, /--clear-halt scenarios-lost --settings-dir \/etc\/forge --owner-said "<his words>" --owner-ref "<where he said it>"$/);
+  assert.doesNotMatch(h.clear, /owner-said/, "every other halt keeps its plain clear");
   assert.equal(clearCommandFor({ clearHaltCommand: (s, k) => `forge ${s} ${k}` }, "plan", "run-failed"), "forge plan run-failed", "the runner's own command wins when it gives one");
   assert.equal(plainHaltWords("Godspeed 2.0.0-beta.9 is frozen. Nothing is public and I will not try again by myself. Mission Control has to look at it."), "Godspeed 2.0.0-beta.9 is frozen. Nothing is public.");
 });

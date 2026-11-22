@@ -538,6 +538,8 @@ test("a crash between starting the scenarios and seeing them never starts a seco
   assert.equal(w.notices.length, 0);
   assert.equal(halted.halt.key, "scenarios-lost");
   assert.match(halted.halt.words, /do not show on GitHub/);
+  assert.match(halted.halt.words, /costs money from the test key, and only the owner gives that yes/);
+  assert.match(halted.halt.clear, /--owner-said .* --owner-ref /);
   assert.equal(fs.existsSync(cfg.stopFile), false);
 });
 
@@ -760,11 +762,24 @@ test("clearing a halt makes the step carry on from where the halt stood", async 
   assert.equal(after.started, undefined, "the freeze is tried again");
   const lost = { version: 1, releases: { r2: { dispatchedAt: "2026-11-14T10:00:00Z", halted: { key: "scenarios-lost", words: "w", why: "w", at: "t" } }, r3: { halted: { key: "scenarios-ignored", words: "w", why: "w", at: "t" } } } };
   A.saveState(path.join(dir, "state.json"), lost);
-  await A.clearHalt({ env, key: "scenarios-lost", log: () => {} });
-  await A.clearHalt({ env, key: "scenarios-ignored", log: () => {} });
+  // another PAID run needs the owner's recorded yes: without both words and place nothing changes
+  for (const key of ["scenarios-lost", "scenarios-ignored"]) {
+    for (const given of [{}, { ownerSaid: "yes, run it" }, { ownerRef: "telegram:1" }, { ownerSaid: "  ", ownerRef: "telegram:1" }]) {
+      await assert.rejects(() => A.clearHalt({ env, key, log: () => {}, ...given }), /only the owner's yes allows that.*Nothing was changed/);
+    }
+  }
+  const untouched = A.loadState(path.join(dir, "state.json")).releases;
+  assert.ok(untouched.r2.halted && untouched.r2.dispatchedAt && untouched.r3.halted && !untouched.r3.dispatchApproved, "nothing changed");
+  await A.clearHalt({ env, key: "scenarios-lost", ownerSaid: "yes, run them again", ownerRef: "telegram:msg-77", log: () => {} });
+  await A.clearHalt({ env, key: "scenarios-ignored", ownerSaid: "yes, run them", ownerRef: "telegram:msg-78", log: () => {} });
   const l = A.loadState(path.join(dir, "state.json")).releases;
   assert.equal(l.r2.dispatchedAt, undefined, "an accepted new run");
   assert.equal(l.r3.dispatchApproved, true);
+  assert.equal(l.r2.dispatchApproval.said, "yes, run them again");
+  assert.equal(l.r3.dispatchApproval.ref, "telegram:msg-78", "his yes is kept beside the approval");
+  // every other halt keeps its plain clear
+  A.saveState(path.join(dir, "state.json"), { version: 1, releases: { r4: { halted: { key: "not-staged", words: "w", why: "w", at: "t" } } } });
+  await A.clearHalt({ env, key: "not-staged", log: () => {} });
 });
 
 test("scenarios on the tag that do not count are a halt and never answered with a second paid run", async () => {
@@ -775,6 +790,8 @@ test("scenarios on the tag that do not count are a halt and never answered with 
   assert.equal(w.notices.length, 0);
   assert.equal(r.halt.key, "scenarios-ignored");
   assert.match(r.halt.words, /do not count/);
+  assert.match(r.halt.words, /costs money from the test key/);
+  assert.match(r.halt.clear, /--owner-said .* --owner-ref /);
   assert.equal(fs.existsSync(w.stop), false);
 });
 

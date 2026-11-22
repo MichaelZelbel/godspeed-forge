@@ -57,11 +57,13 @@ export async function run(ctx) {
 }
 
 // What the driver runs after it has fixed the cause of a halt: `driver.mjs --step stage --clear-halt <key>`.
-export async function clearHalt(ctx, key) {
+// scenarios-lost and scenarios-ignored also need opts.ownerSaid and opts.ownerRef (--owner-said, --owner-ref):
+// clearing them lets another paid test run start, which only the owner gives.
+export async function clearHalt(ctx, key, opts = {}) {
   const p = prepared(ctx);
   if (p.fail) return p.fail;
   try {
-    const summary = await S.clearHalt({ env: p.env, key, release: null, log: ctx.log || (() => {}) });
+    const summary = await S.clearHalt({ env: p.env, key, release: null, ownerSaid: opts.ownerSaid || ctx.ownerSaid || "", ownerRef: opts.ownerRef || ctx.ownerRef || "", log: ctx.log || (() => {}) });
     return { ok: true, summary };
   } catch (e) {
     return { ok: false, summary: "stage: the halt could not be cleared", error: e && e.message ? e.message : String(e) };
