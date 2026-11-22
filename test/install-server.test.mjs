@@ -1,7 +1,7 @@
 // The install line's program (lib/install/server.mjs), the server's tools (server-tools.mjs), the units that answer the
 // chat (inbox-units.mjs), the forge skill, and the step runner's bridge. apt, the official installers, systemctl and
 // Godspeed are stand-ins: nothing is installed on this machine and nothing reaches the network.
-// test cases: 15
+// test cases: 16
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -68,11 +68,17 @@ testCase('a tool that cannot be installed stops the install in one plain sentenc
   assert.deepEqual(r, { ok: false, stop: "GitHub's command line tool could not be installed: E: Unable to locate package gh. Put that right, then run this line again." });
 }
 
-testCase('a server without apt is told which tools to install, and the install goes on');
+testCase('a server without apt that is missing tools stops the install in one sentence naming exactly what is missing');
 {
   const s = server(new Set(['basics', 'git', 'python']), { apt: false }), lines = [];
-  assert.deepEqual(await installServerTools({ run: s.run, say: l => lines.push(l) }), { ok: true });
-  assert.deepEqual(lines, ["This server has no apt, so the Forge could not install GitHub's command line tool, Node.js 22, Bun, uv, Claude Code, Codex. Install them, then run this line again."]);
+  assert.deepEqual(await installServerTools({ run: s.run, say: l => lines.push(l) }), { ok: false, stop: "This server is missing GitHub's command line tool, Node.js 22, Bun, uv, Claude Code and Codex, which the Forge can install only on a server with apt, so nothing was installed: install them first, then run this line again." });
+  assert.deepEqual(lines, []);
+  assert.deepEqual(s.scripts, [], 'nothing was tried');
+  const one = server(new Set(TOOLS.map(t => t.key).filter(k => k !== 'uv')), { apt: false });
+  assert.equal((await installServerTools({ run: one.run })).stop, 'This server is missing uv, which the Forge can install only on a server with apt, so nothing was installed: install it first, then run this line again.');
+  const basicsOnly = server(new Set(TOOLS.map(t => t.key).filter(k => k !== 'basics')), { apt: false }), said = [];
+  assert.deepEqual(await installServerTools({ run: basicsOnly.run, say: l => said.push(l) }), { ok: true }, 'the basics matter only for installing the others');
+  assert.deepEqual(said, [TOOLS_READY]);
 }
 
 testCase('the inbox units start godspeed-forge inbox as root when a request lands, and every minute');
@@ -166,6 +172,16 @@ testCase('a server that already runs the factory keeps its tools, and a failed t
   assert.equal(failed.code, 1);
   assert.deepEqual(failed.warnings, ['Codex could not be installed: npm ERR! 404. Put that right, then run this line again.']);
   assert.ok(!fs.existsSync(failed.paths.addon));
+}
+
+testCase('on a server without apt that lacks tools the whole install stops before the Forge is copied, with no next step');
+{
+  const r = await rootInstall({ found: dockerFound(), tools: o => installServerTools({ ...o, run: server(new Set(['basics', 'git', 'python', 'node', 'gh', 'bun', 'uv']), { apt: false }).run }) });
+  assert.equal(r.code, 1);
+  assert.deepEqual(r.warnings, ['This server is missing Claude Code and Codex, which the Forge can install only on a server with apt, so nothing was installed: install them first, then run this line again.']);
+  assert.deepEqual(r.lines, ['Found Godspeed 2.0.0-beta.29, which runs in Docker on this server.']);
+  assert.ok(!fs.existsSync(r.paths.addon) && !fs.existsSync(path.join(r.workspace, 'skills', 'forge')));
+  assert.deepEqual(fs.readdirSync(r.units), []);
 }
 
 testCase('without Godspeed, or with one too old, the install stops in its plain sentence and installs nothing');

@@ -1,7 +1,7 @@
 // The bridge to Godspeed (lib/godspeed.mjs): finding Godspeed natively and in Docker, the version check, writing into
 // the workspace whole and owned by its owner, skills, and messages to the owner once per id. Docker, the health answer,
 // Telegram and the commands are stand-ins; nothing reaches the network.
-// test cases: 22
+// test cases: 25
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -228,12 +228,18 @@ function nativeAssistant(workspace, envText) {
   fs.writeFileSync(path.join(workspace, '.godspeed', 'assistant.json'), JSON.stringify({ verified: true, home }));
   fs.writeFileSync(path.join(home, '.env'), envText);
 }
+// A stand-in Telegram: each answer is a reply object, an Error the request fails with, { raw } for an answer that is not
+// JSON, or { cutOff } for an answer whose body breaks off while it is read.
 const telegram = (answers, calls) => async (url, options) => {
   calls.push({ url, body: JSON.parse(options.body) });
   const next = answers.shift();
   if (next instanceof Error) throw next;
-  return { status: 200, json: async () => next };
+  if (next && next.cutOff) return { status: 200, text: async () => { throw next.cutOff; } };
+  if (next && 'raw' in next) return { status: 502, text: async () => next.raw };
+  return { status: 200, text: async () => JSON.stringify(next) };
 };
+const failure = (code, message = 'fetch failed') => Object.assign(new TypeError(message), { cause: Object.assign(new Error(code), { code }) });
+const record = (stateDir, id) => JSON.parse(fs.readFileSync(path.join(stateDir, 'godspeed', 'sent.json'), 'utf8'))[id];
 
 testCase('a message to the owner goes through their assistant\'s Telegram bot once per id');
 {
@@ -266,7 +272,7 @@ testCase('when Telegram refuses, the message becomes a Godspeed notice in Godspe
 {
   const workspace = fresh(), calls = [];
   nativeAssistant(workspace, 'TELEGRAM_BOT_TOKEN=1:a\nTELEGRAM_CHAT_ID=7\n');
-  const { gs, chowns } = rootBridge(workspace, { fetch: telegram([{ ok: false, description: 'Forbidden' }], calls) });
+  const { gs, chowns } = rootBridge(workspace, { fetch: telegram([{ ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' }], calls) });
   assert.deepEqual(await gs.sendToOwner('A question waits for you.', { id: 'q-F7' }), { sent: true, how: 'notice' });
   const notices = JSON.parse(fs.readFileSync(path.join(workspace, '.godspeed', 'notices.json'), 'utf8')).notices;
   assert.deepEqual(notices, [{ id: 'forge-q-F7', text: 'A question waits for you.', at: '2026-11-22T12:00:00.000Z', about: 'A message from the Forge', facts: ['A question waits for you.'], written: true }]);
@@ -290,7 +296,7 @@ testCase('with no bot the notice is added to the queue Godspeed already has, whi
   assert.equal(notices.at(-1).id, 'forge-plan-1');
 }
 
-testCase('a notice queue that cannot be read is left alone, and the message is tried again later');
+testCase('a notice queue that cannot be read is left alone, and the notice is queued once on a later call, without asking Telegram');
 {
   const workspace = fresh(), stateDir = fresh();
   fs.mkdirSync(path.join(workspace, '.godspeed'));
@@ -298,7 +304,62 @@ testCase('a notice queue that cannot be read is left alone, and the message is t
   const { gs } = rootBridge(workspace, { stateDir, fetch: noFetch });
   await assert.rejects(gs.sendToOwner('Started.', { id: 'plan-2' }), /cannot be read/);
   assert.equal(fs.readFileSync(gs.noticesFile(), 'utf8'), '{"notices": 3}');
-  assert.ok(!fs.existsSync(path.join(stateDir, 'godspeed', 'sent.json')) || !JSON.parse(fs.readFileSync(path.join(stateDir, 'godspeed', 'sent.json'), 'utf8'))['plan-2']);
+  assert.deepEqual([record(stateDir, 'plan-2').how, record(stateDir, 'plan-2').state], ['notice', 'queueing']);
+  fs.writeFileSync(gs.noticesFile(), '{"notices": []}');
+  nativeAssistant(workspace, 'TELEGRAM_BOT_TOKEN=1:a\nTELEGRAM_CHAT_ID=7\n');
+  const later = rootBridge(workspace, { stateDir, fetch: async () => { throw new Error('Telegram is not asked for a message that is a notice already'); } });
+  assert.deepEqual(await later.gs.sendToOwner('Started.', { id: 'plan-2' }), { sent: true, how: 'notice' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(gs.noticesFile(), 'utf8')).notices.map(n => n.id), ['forge-plan-2']);
+  assert.equal(record(stateDir, 'plan-2').state, 'sent');
+  assert.deepEqual(await later.gs.sendToOwner('Started.', { id: 'plan-2' }), { sent: false, how: 'notice', already: true });
+}
+
+testCase('every outcome after the request may have left counts as sent: a cut-off answer, a reset, an answer that is not JSON, a server error');
+for (const [what, answer] of [
+  ['cut off', { cutOff: new TypeError('terminated') }],
+  ['reset after sending', failure('ECONNRESET')],
+  ['socket closed', failure('UND_ERR_SOCKET', 'other side closed')],
+  ['not JSON', { raw: '<html><body>502 Bad Gateway</body></html>' }],
+  ['a server error', { ok: false, error_code: 502, description: 'Bad Gateway' }],
+]) {
+  const workspace = fresh(), stateDir = fresh(), calls = [];
+  nativeAssistant(workspace, 'TELEGRAM_BOT_TOKEN=1:a\nTELEGRAM_CHAT_ID=7\n');
+  const { gs } = rootBridge(workspace, { stateDir, fetch: telegram([answer, { ok: true }], calls) });
+  assert.deepEqual(await gs.sendToOwner('Hello.', { id: 'u1' }), { sent: true, how: 'telegram' }, what);
+  assert.ok(!fs.existsSync(gs.noticesFile()), `${what}: no notice on top of what may have reached the owner`);
+  assert.deepEqual([record(stateDir, 'u1').how, record(stateDir, 'u1').state], ['telegram', 'unsure'], what);
+  assert.deepEqual(await gs.sendToOwner('Hello.', { id: 'u1' }), { sent: false, how: 'telegram', already: true }, what);
+  assert.equal(calls.length, 1, `${what}: never asked again`);
+}
+
+testCase('only a request that never left becomes a notice: the name not found, the connection refused');
+for (const code of ['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT']) {
+  const workspace = fresh(), stateDir = fresh(), calls = [];
+  nativeAssistant(workspace, 'TELEGRAM_BOT_TOKEN=1:a\nTELEGRAM_CHAT_ID=7\n');
+  const { gs } = rootBridge(workspace, { stateDir, fetch: telegram([failure(code)], calls) });
+  assert.deepEqual(await gs.sendToOwner('Hello.', { id: 'n1' }), { sent: true, how: 'notice' }, code);
+  assert.deepEqual(JSON.parse(fs.readFileSync(gs.noticesFile(), 'utf8')).notices.map(n => n.id), ['forge-n1'], code);
+}
+
+testCase('the id is recorded as being sent before the request leaves, so a stop between sending and recording never sends it again');
+{
+  const workspace = fresh(), stateDir = fresh(), calls = [];
+  nativeAssistant(workspace, 'TELEGRAM_BOT_TOKEN=1:a\nTELEGRAM_CHAT_ID=7\n');
+  const seenBefore = [];
+  const delivering = async url => {
+    seenBefore.push(record(stateDir, 'c1'));
+    calls.push(url);
+    return { status: 200, text: async () => JSON.stringify({ ok: true }) };
+  };
+  let saves = 0;
+  const stopping = { renameSync: (from, to) => { if (to.endsWith('sent.json') && ++saves === 2) throw new Error('the server stopped'); return fs.renameSync(from, to); } };
+  const { gs } = rootBridge(workspace, { stateDir, fetch: delivering, fs: stopping });
+  await assert.rejects(gs.sendToOwner('Version 2.0.0 is public.', { id: 'c1' }), /the server stopped/);
+  assert.deepEqual([seenBefore[0].how, seenBefore[0].state], ['telegram', 'sending'], 'written before the request left');
+  const again = rootBridge(workspace, { stateDir, fetch: delivering });
+  assert.deepEqual(await again.gs.sendToOwner('Version 2.0.0 is public.', { id: 'c1' }), { sent: false, how: 'telegram', already: true });
+  assert.equal(calls.length, 1, 'Telegram was asked once');
+  assert.ok(!fs.existsSync(gs.noticesFile()), 'and no notice repeats it');
 }
 
 testCase('no answer from Telegram in time counts as sent, so the owner never gets it twice');
