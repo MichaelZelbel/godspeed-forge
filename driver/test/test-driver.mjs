@@ -453,7 +453,64 @@ test("rung 3 with every transport down stays unannounced and is retried; once a 
   assert.equal(sent(), n1, "told once; not sent again every round");
 });
 
-test("the acting runs are at most 8 a day; with the budget spent a MACHINERY entry goes to Michael truthfully (not attempted), a BACKLOG entry never does", async () => {
+test("a zero-receipt owner notice retries its original transports without an acting run", async () => {
+  const fx = fixture();
+  fx.deps.stageLook = async () => null; fx.deps.expireLocks = () => []; fx.deps.fallbacks = async () => [];
+  let now = NOW; fx.deps.now = () => now;
+  fx.deps.pauses = () => [{ id: "hold", what: "the factory driver is on hold", since: NOW - 30 * 3600000, expiresAt: NaN, line: "maintenance", ownerRef: "Telegram message 7" }];
+  const deliveries = [];
+  fx.deps.deliver = {
+    telegram: async () => { deliveries.push("telegram"); return deliveries.length > 4 ? { ok: true, receipt: "42" } : { ok: false, why: "telegram down" }; },
+    issue: async () => { deliveries.push("github"); return deliveries.length > 4 ? { ok: true, receipt: "https://github.com/o/w/issues/1" } : { ok: false, why: "github down" }; },
+  };
+  const acts = []; fx.deps.launchAct = (e, a, o) => acts.push(o);
+  await round(fx.env, fx.deps);
+  fx.deps.pauses = () => [];
+  now += 31 * 60000;
+  await round(fx.env, fx.deps);
+  let events = fs.readFileSync(path.join(fx.env.STATE_DIR, "journal.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  let notices = events.filter(e => e.t === "notice");
+  assert.equal(acts.length, 0, "a failed internal delivery retry never consumes an AI acting-run budget");
+  assert.equal(notices.length, 2, "the failed retry is appended for audit, never overwrites history");
+  assert.equal(notices[1].id, notices[0].id, "a failed retry remains one internal delivery state under the original identity");
+  assert.deepEqual(notices[1].receipts, {}, "the failed retry records its missing receipt");
+  assert.ok(!notices.some(n => /delivery:/.test(n.id)), "delivery failure never makes an owner delivery notice");
+  now += 31 * 60000;
+  await round(fx.env, fx.deps);
+  events = fs.readFileSync(path.join(fx.env.STATE_DIR, "journal.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  notices = events.filter(e => e.t === "notice");
+  assert.equal(acts.length, 0, "receipt recovery remains outside the AI acting-run budget");
+  assert.equal(notices.length, 3, "the next bounded retry remains append-only");
+  assert.equal(notices[2].id, notices[0].id, "the successful retry keeps the existing notice identity");
+  assert.deepEqual(notices[2].receipts, { telegram: "42", github: "https://github.com/o/w/issues/1" }, "a direct receipt clears the zero-receipt condition");
+});
+
+test("a legacy zero-receipt notice uses its original timestamp, keeps its ID, and stops after a receipt", async () => {
+  const fx = fixture();
+  fx.deps.stageLook = async () => null; fx.deps.pauses = () => []; fx.deps.expireLocks = () => []; fx.deps.fallbacks = async () => [];
+  let now = NOW; fx.deps.now = () => now;
+  const { appendEvents } = await import("../journal.mjs");
+  fs.mkdirSync(fx.env.STATE_DIR, { recursive: true });
+  const journal = path.join(fx.env.STATE_DIR, "journal.jsonl");
+  appendEvents(journal, [{ t: "notice", id: "n:legacy:zero", at: new Date(NOW - 30 * 60000).toISOString(), title: "legacy", text: "delivery failed", receipts: {} }]);
+  const calls = [];
+  fx.deps.deliver = {
+    telegram: async () => { calls.push("telegram"); return { ok: true, receipt: "42" }; },
+    issue: async () => { calls.push("github"); return { ok: true, receipt: "https://github.com/o/w/issues/1" }; },
+  };
+  await round(fx.env, fx.deps);
+  let notices = fs.readFileSync(journal, "utf8").trim().split("\n").map(JSON.parse).filter(e => e.t === "notice" && e.id === "n:legacy:zero");
+  assert.equal(notices.length, 2, "the original at timestamp made the legacy record due without a deliveryAttemptAt field");
+  assert.equal(notices[1].id, notices[0].id, "the direct retry retains the legacy notice identity");
+  assert.deepEqual(calls, ["telegram", "github"]);
+  now += 31 * 60000;
+  await round(fx.env, fx.deps);
+  notices = fs.readFileSync(journal, "utf8").trim().split("\n").map(JSON.parse).filter(e => e.t === "notice" && e.id === "n:legacy:zero");
+  assert.equal(notices.length, 2, "a receipt stops further direct delivery retries");
+  assert.deepEqual(calls, ["telegram", "github"]);
+});
+
+test("the acting runs are at most 8 in a rolling day: a full budget waits quietly until capacity returns", async () => {
   const fx = fixture();
   fx.deps.stageLook = async () => null; fx.deps.pauses = () => []; fx.deps.expireLocks = () => []; fx.deps.fallbacks = async () => [];
   const acts = [];
@@ -465,12 +522,14 @@ test("the acting runs are at most 8 a day; with the budget spent a MACHINERY ent
   await round(fx.env, fx.deps);
   assert.equal(acts.length, 0, "no run: the day's budget is spent");
   const st = statusOfRound(fx.env);
-  assert.ok(st.rung3.some(r => r.id === "ob:" || r.id === "clock"), "the machinery's own entry went to rung 3");
+  assert.ok(!st.rung3.some(r => r.id === "ob:" || r.id === "clock"), "the machinery's own entry stayed in the acting chain");
   assert.ok(!st.rung3.some(r => r.id.startsWith("queue:")), "the backlog item never did");
-  const notices = fs.readFileSync(fx.env.NOTICES_FILE, "utf8");
-  assert.ok(notices.includes("not attempted it yet"), "Michael was told, truthfully: not attempted");
-  assert.ok(!/open a chat|say \\"/i.test(notices), "never homework");
-  assert.ok(!notices.includes("a question"), "nothing about the backlog item");
+  const clock = st.rows.find(r => r.id === "clock");
+  assert.equal(clock.deadline, new Date(NOW + 17 * 3600000).toISOString(), "the driver passes its running-record timestamps through to the inventory");
+  assert.ok(!fs.existsSync(fx.env.NOTICES_FILE), "a full budget does not call the owner");
+  fx.deps.now = () => NOW + 17 * 3600000;
+  await round(fx.env, fx.deps);
+  assert.equal(acts.length, 1, "the next round launches normally when the earliest run leaves the window");
 });
 
 test("a backlog of needs-owner pull requests and queue items never reaches Michael, whatever the budget says, and waits quietly for the next window", async () => {
@@ -501,20 +560,23 @@ test("a corrupt state file is moved aside and rebuilt; one release that cannot b
 test("notices an older version sent about backlog (and bundles of it) are retired: never resent, never counted as undelivered", async () => {
   const fx = fixture();
   fx.deps.stageLook = async () => null; fx.deps.pauses = () => []; fx.deps.expireLocks = () => []; fx.deps.fallbacks = async () => [];
+  fx.deps.now = () => Date.parse("2026-11-22T02:00:00.000Z");
   const { appendEvents } = await import("../journal.mjs");
   fs.mkdirSync(fx.env.STATE_DIR, { recursive: true });
   const at = "2026-11-22T00:45:00.000Z";
+  const falseBudgetText = "6 things are stuck: none of them has been tried yet; 6 were not attempted yet because today's budget of automatic repair runs is spent.";
   appendEvents(path.join(fx.env.STATE_DIR, "journal.jsonl"), [
     { t: "notice", id: "n:pr:o/r#95:1", at, title: "old", text: "x has not moved for 9 hours. Mission Control has not attempted it yet: today's budget of automatic repair runs is spent. It", receipts: { telegram: "1" } },
-    { t: "notice", id: "n:bundle:abc:5", at, title: "old", text: "6 things are stuck: none of them has been tried yet; 6 were not attempted yet because today's budget of automatic repair runs is spent.", receipts: {} },
+    { t: "notice", id: "n:bundle:abc:5", at, title: "old", text: falseBudgetText, receipts: {} },
+    { t: "notice", id: "n:bundle:after-cutoff:6", at: "2026-11-22T01:15:00.000Z", title: "old", text: falseBudgetText, receipts: {} },
     { t: "notice", id: "n:ob:keep:1", at, title: "real", text: "something real that was told", receipts: { telegram: "2" } },
   ]);
-  let sent = 0;
-  fx.deps.deliver = { telegram: async () => { sent++; return { ok: true, receipt: "9" }; }, issue: () => ({ ok: true, receipt: "https://github.com/o/w/issues/9" }) };
+  fx.deps.deliver = { telegram: async () => ({ ok: true, receipt: "9" }), issue: () => ({ ok: true, receipt: "https://github.com/o/w/issues/9" }) };
   await round(fx.env, fx.deps);
-  const lines = fs.readFileSync(path.join(fx.env.STATE_DIR, "journal.jsonl"), "utf8").split(String.fromCharCode(10)).filter(Boolean);
-  assert.ok(lines.filter(l => /"t":"seen"/.test(l) && /false alarm/.test(l)).length === 2, "both false alarms retired, the real notice kept");
-  assert.equal(sent, 0, "nothing was sent about them");
+  const events = fs.readFileSync(path.join(fx.env.STATE_DIR, "journal.jsonl"), "utf8").split(String.fromCharCode(10)).filter(Boolean).map(JSON.parse);
+  assert.equal(events.filter(e => e.t === "seen" && e.id === "n:bundle:after-cutoff:6" && /false alarm/.test(e.why || "")).length, 1, "the post-cutoff false alarm is append-only retired");
+  assert.equal(events.filter(e => e.t === "notice" && e.id === "n:bundle:after-cutoff:6").length, 1, "the post-cutoff zero-receipt false alarm is never direct-retried");
+  assert.equal(events.filter(e => e.t === "seen" && /false alarm/.test(e.why || "")).length, 3, "both older false alarms and the post-cutoff false alarm are retired, the real notice kept");
   assert.ok(!statusOfRound(fx.env).rows.some(r => r.id.startsWith("delivery:")), "and no delivery entry");
 });
 
@@ -538,7 +600,7 @@ test("THE GATE in the driver: a message needs 3 readings 10 minutes apart and a 
   fx.deps.pauses = () => [{ id: "hold", what: "the factory driver is on hold", since: NOW - 30 * 3600000, expiresAt: NaN, line: "x", ownerRef: "Telegram message 7" }]; // a reminder
   fx.deps.clockCheck = () => ({ ok: false, ghNow: NOW - 20 * 60000, skewMs: 20 * 60000 }); // a machinery entry that wants a message
   fs.mkdirSync(fx.env.STATE_DIR, { recursive: true });
-  fs.writeFileSync(path.join(fx.env.STATE_DIR, "state.json"), JSON.stringify({ actRuns: Array.from({ length: 8 }, (_, i) => ({ at: NOW - i * 3600000, entry: `x${i}`, provider: "codex" })) }));
+  fs.writeFileSync(path.join(fx.env.STATE_DIR, "state.json"), JSON.stringify({ actRuns: Array.from({ length: 8 }, (_, i) => ({ at: NOW - i * 3600000, entry: `x${i}`, provider: "codex" })), chain: { clock: { rung: 2, rungSince: NOW - 2 * 3600000, milestone: NOW + 24 * 3600000, launched: true, told: false, tries: [{ rung: 1, result: "unresolved" }, { rung: 2, result: "unresolved" }] } } }));
   fx.deps.gateCfg = { reads: 3, gapMs: 10 * 60000, toleranceMs: 60000 };
   let sure = true; fx.deps.recheck = async ids => (sure ? new Set(ids) : new Set());
   const notices = () => (fs.existsSync(fx.env.NOTICES_FILE) ? JSON.parse(fs.readFileSync(fx.env.NOTICES_FILE, "utf8")).notices : []);

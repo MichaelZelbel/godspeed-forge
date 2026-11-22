@@ -262,7 +262,7 @@ export const KNOWN_OBSTACLES = new Set(["parked", "check-failed", "no-progress",
 
 // ---------------------------------------------------------------- the chain
 // chain[id] = { rung, rungSince (ms), milestone (ms), launched (bool: the acting run of this rung started), told (bool), toldAt, tries: [{rung, at, result, summary}] }
-// opts: { forceRung1: Set of entry ids (a helper said "external" or a cause nobody knows), runsToday, runsPerDay, slotFree }
+// opts: { forceRung1: Set of entry ids (a helper said "external" or a cause nobody knows), actRuns, runsToday, runsPerDay, slotFree }
 // -> { chain (new), rows: [{entry, rung, deadline, action}], actions: {launch: row|null, tell: [row]} , violations: [row] }
 // how old an entry is for the order: its own time and the time the driver first saw it, whichever is earlier
 const ageKey = r => Math.min(Number.isFinite(r.entry.milestoneAt) ? r.entry.milestoneAt : Infinity, Number.isFinite(r.c.firstSeenAt) ? r.c.firstSeenAt : Infinity, Number.isFinite(r.c.milestone) ? r.c.milestone : Infinity);
@@ -270,7 +270,12 @@ export function advance(entries, chain0, now, opts = {}) {
   const chain = {};
   const rows = [];
   const force = opts.forceRung1 || new Set();
-  const budget = Math.max(0, (opts.runsPerDay ?? CHAIN.perDay) - (opts.runsToday ?? 0)); // acting runs left today
+  const currentRuns = Array.isArray(opts.actRuns)
+    ? opts.actRuns.filter(r => Number.isFinite(r && r.at) && r.at <= now && now - r.at < 24 * H)
+    : [];
+  const runsToday = Array.isArray(opts.actRuns) ? currentRuns.length : (opts.runsToday ?? 0);
+  const budget = Math.max(0, (opts.runsPerDay ?? CHAIN.perDay) - runsToday); // acting runs left in the rolling window
+  const budgetRetryAt = currentRuns.length ? Math.min(...currentRuns.map(r => r.at + 24 * H)) : now + 1;
   for (const e of entries) {
    try {
     const old = chain0[e.id];
@@ -300,12 +305,12 @@ export function advance(entries, chain0, now, opts = {}) {
     // next budget window. It never goes to Michael, however long it waits or whatever the budget says; after both actors tried, the cycle
     // starts again after a day. Only an approved release and the machinery's own entries may reach him.
     if (e.backlog) {
-      if (c.rung === 3) { if (tried(1) && tried(2)) c.cooldownUntil = now + 24 * H; c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; c.noBudget = false; c.tries = []; moved = true; }
+      if (c.rung === 3) { if (tried(1) && tried(2)) c.cooldownUntil = now + 24 * H; c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; c.tries = []; moved = true; }
       if (c.rung === 2 && tried(2)) { c.rung = 1; c.rungSince = now; c.launched = false; c.tries = []; c.cooldownUntil = now + 24 * H; moved = true; }
     }
     if (!e.remindOnly) {
       if (c.rung === 2 && !tried(1)) { c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; moved = true; }
-      if (c.rung === 3 && !c.told && !c.noBudget && !(tried(1) && tried(2))) { c.rung = tried(1) ? 2 : 1; c.rungSince = now; c.launched = false; moved = true; } // rung 3 needs both actors to have run (or the budget to be spent)
+      if (c.rung === 3 && !c.told && !(tried(1) && tried(2))) { c.rung = tried(1) ? 2 : 1; c.rungSince = now; c.launched = false; moved = true; } // rung 3 needs both actors to have run
     }
     // a run that vanished without an answer counts as lost 3 hours after it LAUNCHED (not after the entry entered the rung); it is then recorded as a try
     const ranOrLost = rung => {
@@ -318,8 +323,8 @@ export function advance(entries, chain0, now, opts = {}) {
     } else if (c.rung === 0 && (e.owner === null || force.has(e.id) || now >= base + limit)) { c.rung = 1; c.rungSince = now; c.launched = false; moved = true; }
     else if ((c.rung === 1 || c.rung === 2) && now >= c.rungSince + (c.rung === 1 ? CHAIN.actHours : CHAIN.actHours2) * H && ranOrLost(c.rung)) {
       c.rung += 1; c.rungSince = now; c.launched = false; c.told = false; moved = true;
-    } else if (c.rung === 3 && now >= c.rungSince + CHAIN.restartHours * H) { c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; c.noBudget = false; moved = true; }
-    if (e.backlog && c.rung === 3) { c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; c.noBudget = false; c.tries = []; c.cooldownUntil = now + 24 * H; moved = true; } // whichever path led here: backlog never reaches the owner
+    } else if (c.rung === 3 && now >= c.rungSince + CHAIN.restartHours * H) { c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; moved = true; }
+    if (e.backlog && c.rung === 3) { c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; c.tries = []; c.cooldownUntil = now + 24 * H; moved = true; } // whichever path led here: backlog never reaches the owner
     const deadline = c.rung === 0 ? base + limit : (c.rung === 1 || c.rung === 2) && !c.launched ? Math.max(now + 1, c.rungSince + CHAIN.actHours * H) : c.rungSince + (c.rung === 1 ? CHAIN.actHours : c.rung === 2 ? CHAIN.actHours2 : CHAIN.restartHours) * H;
     rows.push({ entry: e, rung: c.rung, deadline, moved, c });
     chain[e.id] = c;
@@ -328,12 +333,13 @@ export function advance(entries, chain0, now, opts = {}) {
     chain[e && e.id] = c; rows.push({ entry: { ...e, owner: null, evidence: [...((e && e.evidence) || []), `the chain failed on this entry: ${String(err.message).slice(0, 160)}`] }, rung: 1, deadline: now + CHAIN.actHours * H, moved: true, c });
    }
   }
-  // actions: tell on rung 3 (once), launch one acting run at a time, oldest entry first. With the day's budget
-  // spent, an entry that wants a run goes to Michael instead: it never waits.
+  // actions: tell on rung 3 (once), launch one acting run at a time, oldest entry first. A full rolling
+  // budget leaves an entry on its acting rung until the earliest current run leaves the window.
   const actions = { launch: null, tell: [] };
-  const backlogAllowed = (opts.runsToday ?? 0) < CHAIN.perDay - CHAIN.reservedForRelease; // 4 of the 8 daily runs are reserved for releases and machinery
-  const wanting = rows.filter(r => !r.moving && (r.rung === 1 || r.rung === 2) && !r.c.launched && !r.entry.told && !r.entry.remindOnly && !(r.entry.backlog && (!backlogAllowed || now < (r.c.cooldownUntil || 0)))).sort((a, b) => (a.entry.backlog ? 1 : 0) - (b.entry.backlog ? 1 : 0) || ageKey(a) - ageKey(b)); // releases and machinery first, then the backlog oldest first
-  if (wanting.length && budget <= 0) for (const r of wanting.filter(x => !x.entry.backlog)) { r.c.rung = 3; r.c.rungSince = now; r.c.told = false; r.rung = 3; r.deadline = now + CHAIN.restartHours * H; r.moved = true; r.noBudget = true; r.c.noBudget = true; }
+  const backlogAllowed = runsToday < CHAIN.perDay - CHAIN.reservedForRelease; // 4 of the 8 daily runs are reserved for releases and machinery
+  const awaitingCapacity = rows.filter(r => !r.moving && (r.rung === 1 || r.rung === 2) && !r.c.launched && !r.entry.told && !r.entry.remindOnly && !(r.entry.backlog && now < (r.c.cooldownUntil || 0)));
+  const wanting = awaitingCapacity.filter(r => !(r.entry.backlog && !backlogAllowed)).sort((a, b) => (a.entry.backlog ? 1 : 0) - (b.entry.backlog ? 1 : 0) || ageKey(a) - ageKey(b)); // releases and machinery first, then the backlog oldest first
+  if (budget <= 0) for (const r of awaitingCapacity) { r.c.budgetRetryAt = budgetRetryAt; r.deadline = budgetRetryAt; }
   else if (wanting.length && opts.slotFree !== false) { actions.launch = wanting[0]; }
   for (const r of rows) if (r.rung === 3 && !r.c.told && !r.entry.told && !r.moving) actions.tell.push(r);
   // the invariant, checked here and not trusted: every entry has an owner and a future deadline, or moved this round
@@ -352,5 +358,5 @@ export const violationEntry = r => ({ id: `invariant:${r.entry.id}`, kind: "obst
 
 export const describeRow = (r, now) => {
   const d = r.deadline === Infinity ? "with Michael" : `deadline ${new Date(r.deadline).toISOString().slice(0, 16).replace("T", " ")}Z${r.deadline <= now ? " (passed)" : ""}`;
-  return `${r.entry.kind} ${r.entry.title}: owner ${r.rung === 0 ? (r.entry.owner || "none") : RUNG_NAMES[r.rung]}, rung ${r.rung}, ${d}${r.moving ? ", MOVING: visibly working, not escalated" : ""}${r.action ? `, THIS ROUND: ${r.action}` : ""}${r.noBudget ? " (acting runs used up for today)" : ""}`;
+  return `${r.entry.kind} ${r.entry.title}: owner ${r.rung === 0 ? (r.entry.owner || "none") : RUNG_NAMES[r.rung]}, rung ${r.rung}, ${d}${r.moving ? ", MOVING: visibly working, not escalated" : ""}${r.action ? `, THIS ROUND: ${r.action}` : ""}`;
 };

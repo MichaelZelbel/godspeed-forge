@@ -25,7 +25,7 @@ import { updateLedger, findTicket } from "./progress.mjs";
 import { findObstacles, MACHINE_KINDS } from "./obstacles.mjs";
 import { nextStep } from "./ladder.mjs";
 import { appendEvents, readJournal, view as journalView, roundEvents, prEvents, prSeenMap, coverage, headMirrorOk, monotonicNow, GODSPEED_RELEASE, readMono, containment, containmentCommits } from "./journal.mjs";
-import { requiredRunId, seenFromTelegram, readActivity, resendDue, seenCheck, sendNotice, publishHeartbeat, mirroredHead, watcherHealth, supersessionLook, nextReleaseFacts, rung0 } from "./duties.mjs";
+import { requiredRunId, seenFromTelegram, readActivity, resendDue, deliveryRetryDue, seenCheck, sendNotice, publishHeartbeat, mirroredHead, watcherHealth, supersessionLook, nextReleaseFacts, rung0 } from "./duties.mjs";
 import { clockCheck, wentBackwards, verifyInstalled, deliver, readEnvFile } from "./facts.mjs";
 import { gateStep, gateClear, GATE } from "./gate.mjs";
 import { movingUntilFor, heldUntil, creditEvents, creditKeyById, ACTIVITY, buildInventory, advance, violationEntry, describeRow, parseStage, stageStalled, factoryWorking, CHAIN, H as HR } from "./inventory.mjs";
@@ -48,6 +48,10 @@ const AI_STEPS = ["diagnose", "product", "tests", "decide", "michael", "feasibil
 export const MAX_HELPERS = 4;
 export const HISTORY_KEEP = 20;
 export const FRESH_AFTER_MINUTES = 30; // a machine obstacle that comes back after this long starts again at housekeeping
+const RETIRED_FALSE_BUDGET_NOTICE_TEXTS = new Set([
+  "x has not moved for 9 hours. Mission Control has not attempted it yet: today's budget of automatic repair runs is spent. It",
+  "6 things are stuck: none of them has been tried yet; 6 were not attempted yet because today's budget of automatic repair runs is spent.",
+]);
 
 export const driverDefaults = (e = process.env, argv = process.argv) => ({
   ...worldDefaults(e), ...aiDefaults(e), ...actDefaults(e), ...hkDefaults(e), ...causeDefaults(e), ACT: { ...onDutyDefaults(e), ACT_DIR: e.FD_ACT_DIR || `${e.FD_STATE_DIR || "/var/lib/godspeed/forge/driver"}/acts` },
@@ -360,10 +364,12 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       if (!vi.ok && state.installedFails.n >= 3) installedBad.push({ release: lastInstalled.id, why: `recorded as installed but ${vi.why} (${state.installedFails.n} rounds in a row)` });
     }
     coverageBad.push(...installedBad);
-    // The false-alarm class an older version sent (about backlog, "not attempted yet, today's budget is spent") is retired before anything counts it:
+    // The exact false-alarm texts an older version sent are retired before anything counts them:
     // never resent, never counted as undelivered.
-    if (!dry) { const retire = Object.entries(jv.notices).filter(([nid, n]) => !n.seen && n.at < Date.parse("2026-11-22T01:00:00Z") && /today's budget of automatic repair runs is spent/.test(String(n.text || ""))); if (retire.length) { try { appendEvents(journalFile, retire.map(([nid]) => ({ t: "seen", id: nid, at: nowIso, why: "retired: a false alarm about backlog" }))); for (const [nid] of retire) jv.notices[nid].seen = true; } catch {} } }
-    const undelivered = Object.entries(jv.notices).filter(([, n]) => !n.seen && !Object.keys(n.receipts || {}).length && now - n.at > 30 * MIN).map(([id, n]) => ({ id, since: n.at }));
+    if (!dry) { const retire = Object.entries(jv.notices).filter(([nid, n]) => !n.seen && RETIRED_FALSE_BUDGET_NOTICE_TEXTS.has(String(n.text || ""))); if (retire.length) { try { appendEvents(journalFile, retire.map(([nid]) => ({ t: "seen", id: nid, at: nowIso, why: "retired: a false alarm about backlog" }))); for (const [nid] of retire) jv.notices[nid].seen = true; } catch {} } }
+    // Receipt recovery is direct driver housekeeping below. It is intentionally not inventory work:
+    // an absent receipt must never spend an AI acting-run budget or escalate into a delivery notice.
+    const undelivered = [];
     // the outside watcher records its own runs (9.8); a silent one is a stall, and the workflow is re-enabled
     if (!dry) { try { const wh = (deps.watcherHealth || watcherHealth)(env, now, undefined, state); if (!wh.ok) { coverageBad.push({ release: "watcher", why: `${wh.why}${wh.reenabled ? "; the driver re-enabled the workflow" : ""}` }); } } catch { /* GitHub unreachable is EXTERNAL */ } }
     // an older release a newer install passed leaves only after the containment check (8.3, 9.3)
@@ -388,7 +394,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     catch (e) { record({ kind: "inventory failed", why: String(e.message).slice(0, 300) }); out.inventoryFailed = String(e.message).slice(0, 300); }
     const force = new Set(steps.filter(s => s.do === "act").map(s => `ob:${s.ob.id}`)); // a helper said "external", or a cause nobody knows: rung 1 now
     const runsToday = state.actRuns.filter(r => now - r.at < 24 * HR).length;
-    const advOpts = { forceRung1: force, runsToday, slotFree: Object.keys(state.acts).length === 0 };
+    const advOpts = { forceRung1: force, actRuns: state.actRuns, runsToday, slotFree: Object.keys(state.acts).length === 0 };
     let adv = advance(entries, state.chain, now, advOpts);
     for (const r of adv.rows) if (r.entry.obstacleKind === "unclassified" || String(r.entry.id).startsWith("unclassified:")) record({ kind: "unclassified entry", entry: r.entry.id, evidence: (r.entry.evidence || []).slice(0, 2) });
     if (adv.violations.length) { // the rule broke itself: that is an entry too, straight to rung 1
@@ -432,12 +438,12 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
         try { const sl2 = (deps.supersession || supersessionLook)(jv2, w2, undefined, env.SOURCE_CHECKOUT, true); for (const x of sl2.bad) cov2.push(x); } catch { return new Set(); }
         const lastInst2 = Object.values(jv2.releases).filter(r => r.installed && GODSPEED_RELEASE.test(r.id)).sort((x, y) => y.installed.at - x.installed.at)[0];
         if (lastInst2) { const vi2 = (deps.verifyInstalled || verifyInstalled)({ version: lastInst2.installed.version }, { productCommit: lastInst2.installed.commit }); if (!vi2.ok && (state.installedFails && state.installedFails.n >= 3)) cov2.push({ release: lastInst2.id, why: `recorded as installed but ${vi2.why}` }); }
-        const undelivered2 = Object.entries(jv2.notices).filter(([, n]) => !n.seen && !Object.keys(n.receipts || {}).length && now - n.at > 30 * MIN).map(([id, n]) => ({ id, since: n.at }));
+        const undelivered2 = []; // zero-receipt recovery is direct housekeeping, never a gated owner notice
         let pauses2 = []; try { pauses2 = (deps.pauses || readPauses)(env, now, w2); } catch { return new Set(); }
         let next2 = null; try { next2 = await (deps.nextRelease || nextReleaseFacts)(env, w2, jv2, now); } catch { return new Set(); }
         const e2 = buildInventory(w2, l2, ob2, { ...(invCtx || { now }), now, journalView: jv2, journalOk: true, stage: stage2, stageSince: stageStalled(stage2) ? state.stageWatch : null, activity: activity2, credits, coverageBad: cov2, undelivered: undelivered2, pauses: pauses2, nextRelease: next2, clock: { ok: gc2.ok, skewMs: gc2.skewMs, backwards: false } });
         const chain2 = JSON.parse(JSON.stringify(state.chain || {}));
-        const adv2 = advance(e2, chain2, now, { runsToday: state.actRuns.filter(r => now - r.at < 24 * HR).length, slotFree: false });
+        const adv2 = advance(e2, chain2, now, { actRuns: state.actRuns, slotFree: false });
         return new Set(ids.filter(id => adv2.rows.some(r => r.entry.id === id && r.rung === 3 && !r.moving && !r.entry.told)));
       });
       let sure = new Set();
@@ -445,8 +451,8 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       tells = readyRows.filter(r => sure.has(r.entry.id));
       for (const r of readyRows) if (!sure.has(r.entry.id)) { delete state.gate[r.entry.id]; record({ kind: "message held", entry: r.entry.id, why: "the fresh re-read did not confirm it, or a source was unreadable: three new readings are needed" }); }
     }
-    const triedN = tells.filter(r => (r.c.tries || []).some(t => t.rung === 1 || t.rung === 2)).length, untriedN = tells.length - triedN;
-    const groups = tells.length > 2 ? [{ rows: tells, text: plain(`${tells.length} things in the factory are stuck: ${triedN ? `Mission Control tried to fix ${triedN} of them by itself and they are still stuck` : "none of them has been tried yet"}${untriedN ? `${triedN ? ", and " : "; "}${untriedN} ${triedN ? "were" : "were"} not attempted yet because today's budget of automatic repair runs is spent` : ""}. For example: ${tells.slice(0, 3).map(r => String(r.entry.title).replace(/\s+/g, " ").slice(0, 90)).join("; ")}${tells.length > 3 ? `, and ${tells.length - 3} more` : ""}. Mission Control keeps trying; nothing is needed from you unless a later message says so.`), nid: `n:bundle:${crypto.createHash("sha1").update(tells.map(r => r.entry.id).sort().join("|")).digest("hex").slice(0, 12)}:${Math.floor(now / (6 * HR))}` }]
+    const triedN = tells.filter(r => (r.c.tries || []).some(t => t.rung === 1 || t.rung === 2)).length;
+    const groups = tells.length > 2 ? [{ rows: tells, text: plain(`${tells.length} things in the factory are stuck: Mission Control tried to fix ${triedN} of them by itself and they are still stuck. For example: ${tells.slice(0, 3).map(r => String(r.entry.title).replace(/\s+/g, " ").slice(0, 90)).join("; ")}${tells.length > 3 ? `, and ${tells.length - 3} more` : ""}. Mission Control keeps trying; nothing is needed from you unless a later message says so.`), nid: `n:bundle:${crypto.createHash("sha1").update(tells.map(r => r.entry.id).sort().join("|")).digest("hex").slice(0, 12)}:${Math.floor(now / (6 * HR))}` }]
       : tells.map(r => ({ rows: [r], text: entryTellText(r, now), nid: `n:${r.entry.id}:${r.c.rungSince}` }));
     groups.push(...singles.map(r => ({ rows: [r], text: entryTellText(r, now), nid: `n:${r.entry.id}:${r.c.rungSince}` })));
     for (const g of groups) {
@@ -502,7 +508,19 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     let tapped = [];
     if (!dry) { try { tapped = await seenFromTelegram(env, state, jv.notices, deps); } catch { tapped = []; } } // his tap on the Seen button counts as much as closing the issue
     if (!dry) for (const [nid, n] of Object.entries(jv.notices)) {
-      if (n.seen || !Object.keys(n.receipts || {}).length) continue;
+      if (n.seen) continue;
+      // No receipt means delivery itself failed. Retry the exact notice directly on its original
+      // transports; this appends evidence under the same ID and never enters the acting-run chain.
+      if (!Object.keys(n.receipts || {}).length) {
+        if (deliveryRetryDue(n, now)) {
+          try {
+            const retry = await sendNotice(env, nid, n.title || "The software factory", n.text || "", now, deps.deliver, n.entries || null);
+            appendEvents(journalFile, [retry]);
+            record({ kind: Object.keys(retry.receipts).length ? "delivery receipt recovered" : "delivery retry failed", notice: nid, receipts: retry.receipts, failed: retry.failed });
+          } catch (e) { record({ kind: "delivery retry failed", notice: nid, why: String(e.message).slice(0, 160) }); }
+        }
+        continue;
+      }
       if (tapped.includes(nid)) { appendEvents(journalFile, [{ t: "seen", id: nid, at: nowIso }]); continue; }
       try {
         const sc = (deps.seenCheck || seenCheck)(n);
@@ -736,8 +754,8 @@ export function entryTellText(r, now) {
   const tried = (r.c.tries || []).filter(t => t.rung === 1 || t.rung === 2);
   const what = String(r.entry.title).replace(/\s+/g, " ").slice(0, 160);
   if (r.entry.reminder) return plain(r.entry.reminder);
-  const did = tried.length ? `Mission Control tried ${tried.length === 1 ? "once" : `${tried.length} times`} to fix it by itself and it is still stuck${r.c.noBudget && !tried.some(t => t.rung === 2) ? "; a second attempt has not been made yet because today's budget of automatic repair runs is spent" : ""}`
-    : r.c.noBudget ? "Mission Control has not attempted it yet: today's budget of automatic repair runs is spent" : "Mission Control has not been able to attempt it yet";
+  const did = tried.length ? `Mission Control tried ${tried.length === 1 ? "once" : `${tried.length} times`} to fix it by itself and it is still stuck`
+    : "Mission Control is still working on it";
   // never homework: no "open a chat", no "say X"; a step is named only when it needs his credentials or his decision (none is known here)
   return plain(`${what} has not moved for ${hours} hours. ${did}. It keeps trying; nothing is needed from you unless a later message says so.`);
 }

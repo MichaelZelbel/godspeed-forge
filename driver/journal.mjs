@@ -106,7 +106,9 @@ export function view(events) {
     else if (e.t === "left" && releases[e.release]) releases[e.release].left = { at, why: e.why, by: e.by, check: e.check };
     else if (e.t === "notice") {
       const n = notices[e.id] || { at, receipts: {}, sentAt: [], seen: false };
-      n.receipts = { ...n.receipts, ...(e.receipts || {}) }; if (Object.keys(e.receipts || {}).length) n.sentAt.push(at);
+      n.receipts = { ...n.receipts, ...(e.receipts || {}) };
+      n.deliveryAttemptAt = Math.max(Number.isFinite(n.deliveryAttemptAt) ? n.deliveryAttemptAt : 0, at);
+      if (Object.keys(e.receipts || {}).length) n.sentAt.push(at);
       n.title = e.title || n.title; n.text = e.text || n.text; if (e.entries) n.entries = e.entries; notices[e.id] = n;
     } else if (e.t === "seen" && notices[e.id]) notices[e.id].seen = true;
     else if (e.t === "credit" && e.key) credits[e.key] = (credits[e.key] || 0) + (Number(e.ms) || 0);
