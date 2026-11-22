@@ -138,30 +138,70 @@ export async function installDriver({ source = HERE, settingsDir = defaultSettin
     if (legacy.length) say.push(`The ${legacy.length} units the driver replaces are still on: add --switch to hand over to the driver (they are turned off only after the driver has done one good round, and never deleted).`);
   } else {
     // 5. the switch, which never leaves the server without a driver: the old timers are stopped (not disabled), one round runs now,
-    // and only when it was good are the old units disabled and the timers turned on; otherwise everything is put back.
+    // and only when it was good are the old units disabled and the timers turned on; otherwise everything is put back. Every
+    // command's answer is checked, and what was and was not put back is said exactly.
     const stoppable = legacyUnits.filter(u => u.endsWith(".timer"));
-    const wasActive = stoppable.filter(u => String(D.run("systemctl", ["is-active", u]).stdout || "").trim() === "active");
-    for (const u of wasActive) D.run("systemctl", ["stop", u]);
+    const isActive = u => String(D.run("systemctl", ["is-active", u]).stdout || "").trim() === "active";
+    const wasActive = stoppable.filter(isActive);
+    const stoppedNow = () => wasActive.filter(u => !isActive(u)); // the ones that really are stopped
+    const disabled = [];
+    // puts the previous units back and the old timers that were running; -> the sentence saying exactly what is and is not back
+    const restoreOld = () => {
+      const back = [], notBack = [];
+      try { putBack(); back.push("the previous unit files are back"); } catch (e) { notBack.push(`the previous unit files could not be put back (${String(e.message).slice(0, 120)})`); }
+      const rl = D.run("systemctl", ["daemon-reload"]);
+      if (rl.status === 0) back.push("systemd has read them again"); else notBack.push(`systemd did not reload its units (${firstError(rl)})`);
+      const reenabled = [], notReenabled = [];
+      for (const u of disabled) { const x = D.run("systemctl", ["enable", u]); (x.status === 0 ? reenabled : notReenabled).push(u); }
+      if (reenabled.length) back.push(`the old units turned off are on again (${reenabled.join(", ")})`);
+      if (notReenabled.length) notBack.push(`these old units could not be turned on again: ${notReenabled.join(", ")}`);
+      const started = [], notStarted = [];
+      for (const u of stopped) { const x = D.run("systemctl", ["start", u]); (x.status === 0 ? started : notStarted).push(u); }
+      if (started.length) back.push(`the old timers run again (${started.join(", ")})`);
+      if (notStarted.length) notBack.push(`these old timers could not be started again: ${notStarted.join(", ")}`);
+      if (!stopped.length && !notStarted.length) back.push("no old timer had been running");
+      return `${back.length ? `What is back: ${back.join("; ")}. ` : ""}${notBack.length ? `What is NOT back: ${notBack.join("; ")}. Fix that by hand before anything else.` : "Everything that was changed is back."}`.trim();
+    };
+    let stopped = [];
+    // 5a. stop the old timers, and look that each one really stopped
+    const stopFailed = [];
+    for (const u of wasActive) { const x = D.run("systemctl", ["stop", u]); if (x.status !== 0) stopFailed.push(`${u} (${firstError(x)})`); }
+    const stillActive = wasActive.filter(isActive);
+    for (const u of stillActive) if (!stopFailed.some(f => f.startsWith(u))) stopFailed.push(`${u} (it is still running)`);
+    stopped = wasActive.filter(u => !stillActive.includes(u));
+    if (stopFailed.length) throw new InstallStop(`The switch did not happen: the old timer could not be stopped, so the first round was not started: ${stopFailed.join(", ")}. ${restoreOld()}`);
+    // 5b. one round, now; the time is taken before it starts
     const statusFile = path.join(g("server.state_dir"), "status.json");
-    const t0 = Date.now() - 2000;
+    const t0 = Date.now();
     let failure = "";
     const r = D.run("systemctl", ["start", "factory-driver.service"], { timeout: 11 * 60000 });
-    if (r.status !== 0) failure = `the first round failed: ${roundError(D, r)}`;
-    else { let at = NaN; try { at = fs.statSync(statusFile).mtimeMs; } catch { /* no status file */ } if (!(at >= t0)) failure = "the first round ended without writing a fresh status.json"; }
+    if (r.status !== 0) failure = `the first round ${r.error && r.error.code === "ETIMEDOUT" ? "did not finish within its limit" : "failed"}: ${roundError(D, r)}`;
+    else {
+      const shown = Object.fromEntries(String(D.run("systemctl", ["show", "-p", "Result,ExecMainStatus", "factory-driver.service"]).stdout || "").split("\n").map(l => l.trim().split("=")).filter(p => p.length === 2));
+      if (shown.Result !== "success" || (shown.ExecMainStatus !== undefined && shown.ExecMainStatus !== "0")) failure = `the first round's unit did not end well (Result=${shown.Result || "unknown"}, ExecMainStatus=${shown.ExecMainStatus ?? "unknown"}): ${roundError(D, r)}`;
+      else {
+        let at = NaN; try { at = Date.parse(JSON.parse(fs.readFileSync(statusFile, "utf8")).at); } catch { /* no readable status file */ }
+        if (!(at > t0)) failure = "the first round ended without writing a fresh status.json";
+      }
+    }
     if (failure) {
-      putBack();
-      D.run("systemctl", ["daemon-reload"]);
-      for (const u of wasActive) D.run("systemctl", ["start", u]);
-      throw new InstallStop(`The switch did not happen: ${failure}. The previous units are back and ${wasActive.length ? `the old timers run again (${wasActive.join(", ")})` : "no old timer had been running"}.`);
+      const stop = D.run("systemctl", ["stop", "factory-driver.service"]); // a round that hangs or failed must not go on beside the old one
+      throw new InstallStop(`The switch did not happen: ${failure}${stop.status === 0 ? "" : ` (and the round's unit could not be stopped: ${firstError(stop)})`}. ${restoreOld()}`);
     }
     say.push("The driver did one good round on its own.");
-    const off = [];
-    for (const u of legacyUnits) { const x = D.run("systemctl", ["disable", "--now", u]); if (x.status === 0) off.push(u); }
+    // 5c. hand over: each old unit is turned off and each timer turned on, and each answer is looked at
+    const notOff = [];
+    for (const u of legacyUnits) {
+      const x = D.run("systemctl", ["disable", "--now", u]);
+      if (x.status === 0) disabled.push(u);
+      else if (!/not-found|does not exist|no such file|not loaded|could not be found/i.test(`${x.stderr || ""}${x.stdout || ""}`)) notOff.push(`${u} (${firstError(x)})`);
+    }
     for (const t of ["factory-driver.timer", "factory-deadman.timer"]) {
       const x = D.run("systemctl", ["enable", "--now", t]);
-      if (x.status !== 0) throw new InstallStop(`${t} could not be turned on: ${firstError(x)}`);
+      if (x.status !== 0) throw new InstallStop(`The switch did not complete: ${t} could not be turned on (${firstError(x)}), so the old program is given back. ${restoreOld()}`);
     }
-    say.push(legacy.length ? `Switched off ${off.length} of the ${legacyUnits.length} old units (${off.join(", ") || "none were on"}); none was deleted. The driver's timer and the dead-man's timer are on.` : "No units are listed as replaced, so none was switched off. The driver's timer and the dead-man's timer are on.");
+    if (notOff.length) throw new InstallStop(`The driver runs and its timers are on, but these old units could not be turned off: ${notOff.join(", ")}. The old timers that were running stay stopped; turn those units off by hand so the old program does not start again at boot.`);
+    say.push(legacy.length ? `Switched off ${disabled.length} of the ${legacyUnits.length} old units (${disabled.join(", ") || "none were on"}); none was deleted. The driver's timer and the dead-man's timer are on.` : "No units are listed as replaced, so none was switched off. The driver's timer and the dead-man's timer are on.");
   }
   const rec = keeper("installed");
   say.push(rec.status === 0 ? "The keeper recorded this set." : `The keeper could not record the set (${firstError(rec)}).`);
