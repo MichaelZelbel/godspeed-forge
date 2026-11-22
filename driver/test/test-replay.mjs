@@ -3,7 +3,7 @@ import { TEST_ENV } from "./env.mjs";
 // The replay's own machinery, and the stalls the driver was built against. The held-back stalls are only
 // ever run by `node replay/replay.mjs`; no test runs the driver on them (the last test only checks that their
 // scheduler lines are in the fixture), so nothing here can pull code towards them.
-import test from "node:test";
+import test from "./harness.mjs";
 import assert from "node:assert/strict";
 import { stateAt, fakeDepsAt, replayAll, loadGithub, loadDecisions } from "./replay/replay.mjs";
 import { STALLS } from "./replay/build.mjs";

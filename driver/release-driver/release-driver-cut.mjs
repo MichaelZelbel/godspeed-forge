@@ -190,7 +190,7 @@ export function factoryDown(f, now) {
   return reasons;
 }
 export const PROVIDER_FAILURE = /"providerFailure"\s*:\s*\{\s*"class"\s*:\s*"((?:quota|auth|login|unauthori|credit|usage)[a-z_]*)"/i;
-// The facts, read on the AX41 as root.
+// The facts, read on the server as root.
 export function factoryFacts(env, { now, world, mint }) {
   const fdir = path.join(env.SOURCE_CHECKOUT, ".factory");
   let lastLaunch = 0; try { lastLaunch = Number(JSON.parse(fs.readFileSync(path.join(fdir, "gate.json"), "utf8")).last_launch || 0) * 1000; } catch {}
@@ -215,7 +215,7 @@ export function factoryFacts(env, { now, world, mint }) {
 }
 
 // ---------------------------------------------------------------- the amendment (pure)
-// existing: the release's scope-amendment.json as it is on godspeed-dev's main (or null).
+// existing: the release's scope-amendment.json as it is on the records repository's main (or null).
 // cuts: [{file, item, issue, url, title, dead}]. -> the new amendment object
 export function amendment({ existing, plan, rule, cuts, now, repo }) {
   const prev = existing && existing.decidedBy === "release-driver" ? existing : null;
@@ -256,9 +256,9 @@ export function cutSentence({ plan, cuts, names }) {
   return `${v} goes on your server without ${parts.join(", and without ")}; ${cuts.length === 1 ? "it moves" : "they move"} to the next release.`;
 }
 
-// ---------------------------------------------------------------- the records in godspeed-dev
-// The same writer auto-stage uses (godspeed-dev scripts/release/staging.mjs Records): one commit on
-// godspeed-dev's main, pushed with that checkout's own git credential.
+// ---------------------------------------------------------------- the records in the records repository
+// The same writer auto-stage uses (the records repository scripts/release/staging.mjs Records): one commit on
+// the records repository's main, pushed with that checkout's own git credential.
 export async function devRecords(env) {
   const mod = await import(pathToFileURL(path.join(env.DEV_CHECKOUT, "scripts", "release", "staging.mjs")).href);
   return new mod.Records({ ...process.env, RELEASE_RECORDS_ROOT: env.DEV_CHECKOUT });

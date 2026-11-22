@@ -716,7 +716,7 @@ export async function shippingFallbacks(env, stage, state, now, run = (cmd, args
 
 
 // When each approved release was approved: the first commit of its plan that holds "Status: approved" (the
-// godspeed-dev checkout the driver already reads). {} when git cannot say.
+// the records repository checkout the driver already reads). {} when git cannot say.
 export async function approvalTimes(env, world, run = (cmd, args, cwd) => spawnSync(cmd, args, { cwd, encoding: "utf8", timeout: 15000 })) {
   const out = {};
   for (const r of world.releases || []) {
@@ -752,7 +752,7 @@ export function noticeTitle(rows) {
   }
   return `${rows.length} things in the software factory are stuck`;
 }
-// The file the outside checks read (heartbeat/status.py on the AX41, then mc-vps): fresh, and every rung 3 entry with the time it was told.
+// The file the outside checks read (the outside check's script): fresh, and every rung 3 entry with the time it was told.
 export function statusOf(out, nowIso, now, state = {}) {
   const rows = out.inventory || [];
   return { at: nowIso, version: 1, releases: out.releasesStatus || [], inventoryFailed: out.inventoryFailed || null, entries: rows.length, violations: out.violations || 0, actRunsToday: out.actRunsToday || 0,
@@ -808,7 +808,7 @@ export async function cli(argv = process.argv.slice(2), io = {}) {
   let found, loaded;
   try {
     found = await discoverSteps();
-    loaded = loadSettings(dir, { stepSettings: found.steps.map(s => s.SETTINGS) });
+    loaded = loadSettings(dir, { steps: found.steps });
   } catch (e) { err(e.message); return 1; }
   Object.assign(process.env, loaded.env);
   const base = { settings: loaded.settings, main: loaded.main, projects: loaded.projects, env: loaded.env, settingsDir: dir, dry, argv, clearHalt: argv.includes("--clear-halt"), log };

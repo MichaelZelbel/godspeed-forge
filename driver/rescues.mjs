@@ -5,7 +5,7 @@
 // driver is getting better; each rescue is also a drill case waiting to be written.
 //
 // WHAT (the controller's ruling of 2026-11-18 evening: development is not a rescue). A rescue is:
-//   release    a session's change to a release's state: a commit on godspeed-dev releases/** whose
+//   release    a session's change to a release's state: a commit on the records repository releases/** whose
 //              message carries a `Co-Authored-By: Claude` trailer (the driver's and auto-stage's own
 //              commits carry none)
 //   decision   an `Owner decision` or `Owner question` comment on the factory's repositories posted by

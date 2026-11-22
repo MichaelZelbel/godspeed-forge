@@ -134,7 +134,7 @@ export function parseDecisions(journal) {
   return out;
 }
 // Archon's `workflow runs --json`: {runs: [{id, status, started_at, last_activity_at, ...}], total, counts}
-// (read live on the AX41, 2026-11-18). Active is what the factory itself counts as active
+// (read live on the server, 2026-11-18). Active is what the factory itself counts as active
 // (consumer.py ACTIVE: pending, running, paused).
 export function parseRuns(text) {
   let rows = null;
@@ -232,7 +232,7 @@ function readServer(env, deps, activeIds, unreadable) {
 // The hidden checks' tools, judged exactly as the test machine judges them (its toolCoverage, imported
 // from its installed module, never copied): -> {scenarios, missing: [{id, why}]}, or null and unreadable.
 // The module's path is written into the script, never passed as an argument: as process.argv[1] it makes
-// the test machine believe it was started itself, and it runs a whole look (seen on the AX41, 2026-11-18).
+// the test machine believe it was started itself, and it runs a whole look (seen on the server, 2026-11-18).
 const coverage = mod => `const m = await import(${JSON.stringify(mod)}); console.log(JSON.stringify(m.toolCoverage(m.defaults([], process.env))))`;
 function readTools(env, deps, unreadable) {
   let c = null;

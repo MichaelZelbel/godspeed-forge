@@ -3,7 +3,9 @@ import { TEST_ENV } from "./env.mjs";
 // A full round over today's real state (2026-11-18): 25 open items carry needs-owner, the release's
 // pull requests #708, #713 and #715 were parked because a hidden-check tool is missing, and the
 // scheduler says "workable nothing" three times running.
-import { test } from "node:test";
+import { test } from "./harness.mjs";
+import { enforceReadOnly, refused } from "../readonly.mjs";
+import crypto from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -289,6 +291,42 @@ test("the dry run reads everything, launches nothing and writes nothing, and say
   assert.match(text, /item 1 #704 open, parked \(needs-owner\)/);
   assert.match(text, /factory-idle godspeed-mission-control since .*: diagnose on codex\/gpt-5\.6-terra \(would launch factory-helper-/);
   assert.equal(out.steps.length, 4);
+});
+
+const snapshot = dir => { const out = {}; const walk = d => { for (const n of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, n.name); if (n.isDirectory()) walk(f); else out[path.relative(dir, f)] = crypto.createHash("sha1").update(fs.readFileSync(f)).digest("hex"); } }; walk(dir); return out; };
+test("a dry run is safe beside a driver that still runs on the same state folder: it starts no step and no unit and changes no file (state, journal, last.json, status.json, heartbeat), and the lock refuses a write if one were tried", async () => {
+  const f = fixture();
+  // the other driver's state, already there
+  const stateDir = f.env.STATE_DIR; fs.mkdirSync(path.join(stateDir, "steps", "alpha"), { recursive: true });
+  for (const [n, t] of [["state.json", "{\"firstSeen\":{}}"], ["journal.jsonl", ""], ["status.json", "{\"at\":\"2026-11-18T15:00:00Z\"}"], ["heartbeat", "2026-11-18T15:00:00Z"], ["steps/alpha/last.json", "{\"ok\":true,\"endedAt\":\"2026-11-18T15:00:00Z\"}"]]) fs.writeFileSync(path.join(stateDir, n), t);
+  const before = snapshot(stateDir);
+  const runs = [];
+  const fakeStep = { name: "alpha", STEP: { name: "alpha", everyMinutes: 10, maxMinutes: 30, inRound: false }, SETTINGS: [], run: async () => { runs.push("ran"); return { ok: true }; } };
+  const inline = { name: "inl", STEP: { name: "inl", everyMinutes: 10, maxMinutes: 30, inRound: true }, SETTINGS: [], run: async () => { runs.push("ran inline"); return { ok: true }; } };
+  const stepsCtx = { steps: [fakeStep, inline], settings: { server: { state_dir: stateDir }, steps: {} }, main: {}, projects: [], env: {}, settingsDir: "/etc/example", dry: true };
+  const restore = enforceReadOnly(), attempts = refused.length;
+  let out;
+  try { out = await round({ ...f.env, DRY: true }, { ...f.deps, stepsCtx, stepDeps: { systemdRun: () => { runs.push("systemd-run"); return { status: 0 }; }, isActive: () => false, unitResult: () => "" } }); }
+  finally { restore(); }
+  assert.deepEqual(runs, [], "no step and no unit was started");
+  assert.equal(f.launched.length, 0);
+  assert.deepEqual(snapshot(stateDir), before, "not one file of the shared state folder changed");
+  assert.equal(refused.length, attempts, "the read-only lock never had to refuse anything");
+  assert.ok(out.stepStatus && out.stepStatus.alpha, "status.steps is still worked out (and not written)");
+  // the lock itself: a write outside the temporary folder, and a command that changes something, are refused
+  const restore2 = enforceReadOnly();
+  try {
+    assert.throws(() => fs.writeFileSync("/var/lib/definitely-not-here/x", "x"), /dry run: refused/);
+    assert.throws(() => fs.mkdirSync("/etc/definitely-not-here"), /dry run: refused/);
+    const cp = await import("node:child_process");
+    assert.throws(() => cp.spawnSync("systemd-run", ["--unit=x", "true"]), /dry run: refused/);
+    assert.throws(() => cp.spawnSync("systemctl", ["start", "x.service"]), /dry run: refused/);
+    assert.throws(() => cp.spawnSync("gh", ["api", "-X", "PATCH", "repos/o/r/issues/1"]), /dry run: refused/);
+    assert.throws(() => cp.spawnSync("gh", ["workflow", "run", "x.yml"]), /dry run: refused/);
+    assert.throws(() => cp.spawnSync("git", ["-C", "/x", "push"]), /dry run: refused/);
+    fs.writeFileSync(path.join(f.root, "inside-tmp.txt"), "scratch is allowed");
+  } finally { restore2(); }
+  fs.writeFileSync(path.join(f.root, "after.txt"), "writes work again once the lock is lifted");
 });
 
 test("no AI at all: recorded, and after six hours Michael gets one plain sentence; nothing launches", async () => {

@@ -25,8 +25,8 @@ const short = t => String(t || "").replace(/\s+/g, " ").trim();
 // worker's, the helper's and the loop's own comments are all posted by the builder App).
 export const ownerLogin = (e = process.env) => e.FD_OWNER_LOGIN || "";
 export const trustedLogins = (e = process.env) => String(e.FD_TRUSTED_LOGINS || "").split(",").map(s => s.trim()).filter(Boolean);
-// A login as REST gives it ("godspeed-dev-builder[bot]"), or an author as GraphQL gives it ({login:
-// "godspeed-dev-builder", __typename: "Bot"}): the bare name counts as the App only when GitHub says it
+// A login as REST gives it ("the-builder[bot]"), or an author as GraphQL gives it ({login:
+// "the-builder", __typename: "Bot"}): the bare name counts as the App only when GitHub says it
 // is a bot, since a person could register that name.
 export const loginOf = a => (a && typeof a === "object" ? (a.__typename === "Bot" && !String(a.login || "").endsWith("[bot]") ? `${a.login}[bot]` : String(a.login || "")) : String(a || ""));
 export const isTrusted = (who, trusted = trustedLogins()) => trusted.includes(loginOf(who));

@@ -1,6 +1,6 @@
 import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-gate.mjs
-import { test } from "node:test";
+import { test } from "./harness.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";

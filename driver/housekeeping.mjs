@@ -14,7 +14,7 @@
 //                    scenarios run is removed (the release step forgot it; it stops every lap silently),
 //                    after the file and the process were read again (2026-11-18 ruling)
 // Michael's live Godspeed always comes first and is never touched: not its notebook, not Hermes, not
-// /root/godspeed or /root/.hermes, not ports 47831 to 47833.
+// the owner's own folders and ports.
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";

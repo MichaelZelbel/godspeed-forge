@@ -1,6 +1,6 @@
 import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-housekeeping.mjs   (offline: every command goes to a stand-in)
-import { test } from "node:test";
+import { test } from "./harness.mjs";
 import assert from "node:assert/strict";
 import { housekeep, ALLOWED_RESTART } from "../housekeeping.mjs";
 

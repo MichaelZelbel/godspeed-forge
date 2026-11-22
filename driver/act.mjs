@@ -94,7 +94,7 @@ function topLevel(text) {
 }
 const indentAt = (text, at) => { const line = text.lastIndexOf("\n", at - 1) + 1; return text.slice(line, at).match(/^[ \t]*/)[0]; };
 const lastSolid = (text, before) => { let p = before - 1; while (p >= 0 && /\s/.test(text[p])) p--; return p; };
-// Every ticket a scope-amendment.json defers, in either of its shapes (godspeed-dev scope-amendment.mjs).
+// Every ticket a scope-amendment.json defers, in either of its shapes (the records repository scope-amendment.mjs).
 export const deferredIn = file => [...(file && Array.isArray(file.deferredTickets) ? file.deferredTickets : []),
   ...(file && Array.isArray(file.amendments) ? file.amendments.flatMap(a => (a && Array.isArray(a.deferredTickets) ? a.deferredTickets : [])) : [])];
 // The scope-amendment.json text with one more entry in its `amendments` array. Everything that was in

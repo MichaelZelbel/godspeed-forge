@@ -103,7 +103,7 @@ export const defaults = (argv = process.argv, e = process.env) => ({
 });
 
 // ---------------------------------------------------------------- versions and plans (pure)
-// -1, 0 or 1 the way semantic versions order (godspeed-dev scripts/release/staging.mjs).
+// -1, 0 or 1 the way semantic versions order (the records repository scripts/release/staging.mjs).
 export function compareVersions(a, b) {
   const split = v => { const s = String(v); const cut = s.indexOf("-"); return { main: (cut < 0 ? s : s.slice(0, cut)).split(".").map(Number), pre: cut < 0 ? [] : s.slice(cut + 1).split(".") }; };
   const x = split(a), y = split(b);
@@ -256,7 +256,7 @@ export function stuckSet(world, { now, idleHours = 3, productChoices = {}, reaut
     if (last && now - last > idleHours * HOUR) stuck.push({ ...base, id: `idle:${it.number}@${iso(last)}`, kind: "idle", since: iso(last), why: `no comment, commit or run for ${Math.floor((now - last) / HOUR)} hours` });
   }
   for (const s of world.staging || []) stuck.push(s); // after the freeze: what auto-stage could not finish (D-419)
-  // A red main is not stuck work here: keep-main-green (godspeed-dev, scripts/release/keep-main-green.mjs) is its one owner. It reruns, reverts or files a priority issue, and that issue is worked like any other.
+  // A red main is not stuck work here: keep-main-green (the records repository, scripts/release/keep-main-green.mjs) is its one owner. It reruns, reverts or files a priority issue, and that issue is worked like any other.
   const waitingOn = new Set(waiting.map(w => w.item));
   for (const d of world.deadEnds || []) if (![...waitingOn].some(n => new RegExp(`#${n}(?!\\d)`).test(d.heading))) stuck.push({ id: `dead-end:${sha(exactKey(d.heading)).slice(0, 10)}${sha(`${d.question || ""}\n${d.why || ""}`).slice(0, 6)}`, kind: "dead-end", item: 0, question: d.question || "", questionNumber: d.number ?? null, title: d.heading, heading: d.heading, url: d.link || "", why: d.why || "left for Mission Control", source: d.source, prs: [] });
   return { stuck, waiting, working };

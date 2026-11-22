@@ -353,7 +353,7 @@ export async function launchHelper(env, { unit, kind, provider, model, briefFile
   const ids = deps.forgeIds ? deps.forgeIds() : forgeIds(env);
   const own = f => (deps.chown || ((p, u, g) => fs.chownSync(p, u, g)))(f, ids.uid, ids.gid);
   // the folders above stay open to walk through (a recursive mkdir would give them the helper's 0700,
-  // and the factory user could not reach its own folder: found live on the AX41, 2026-11-18)
+  // and the factory user could not reach its own folder: found live on the server, 2026-11-18)
   fs.mkdirSync(path.posix.dirname(dir), { recursive: true, mode: 0o755 });
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { mode: 0o700 });
   own(dir); // the helper writes its events, its answer and its report here

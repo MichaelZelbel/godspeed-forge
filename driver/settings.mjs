@@ -99,7 +99,7 @@ const dig = (obj, key) => key.split(".").reduce((o, k) => (o && typeof o === "ob
 const has = v => v !== undefined && v !== null && v !== "";
 
 // stepSettings: the SETTINGS arrays of the step modules (design: { key: "steps.<name>.x", required, default, meaning, env? })
-export function loadSettings(dir = DEFAULT_DIR, { stepSettings = [], extraEnv = {} } = {}) {
+export function loadSettings(dir = DEFAULT_DIR, { stepSettings = [], steps = [], extraEnv = {} } = {}) {
   const settings = readJson(path.join(dir, "driver.json"), "The driver settings file");
   const projects = [];
   const pdir = path.join(dir, "projects");
@@ -126,7 +126,10 @@ export function loadSettings(dir = DEFAULT_DIR, { stepSettings = [], extraEnv = 
   const seen = new Map(specs.map(s => [s.key, s]));
   // A step's own keys are checked, never defaulted here: a step's `default` is words for the example file, and the step
   // works out its own default from the settings (so a "none" or "<server.state_dir>/..." there is never taken for a value).
-  for (const s of stepSettings.flat()) {
+  // the keys of a step the settings turn off (steps.<name>.enabled: false) are not asked for
+  const off = new Set(steps.filter(m => dig(settings, `steps.${m.name}.enabled`) === false).map(m => m.name));
+  const wanted = [...stepSettings, ...steps.filter(m => !off.has(m.name)).map(m => m.SETTINGS || [])];
+  for (const s of wanted.flat()) {
     if (!s || !s.key || s.key.includes("[]")) continue;
     if (seen.has(s.key)) { if (s.required) seen.get(s.key).required = true; continue; }
     const d = { key: s.key, required: !!s.required, env: s.env || [], meaning: s.meaning, fmt: s.fmt };

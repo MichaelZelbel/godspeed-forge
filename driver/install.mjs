@@ -75,7 +75,7 @@ export async function installDriver({ source = HERE, settingsDir = defaultSettin
   // 1. the settings
   const found = await discoverSteps(path.join(source, "steps"));
   let loaded;
-  try { loaded = loadSettings(settingsDir, { stepSettings: found.steps.map(s => s.SETTINGS) }); } catch (e) { throw new InstallStop(`${e.message} Nothing was changed.`); }
+  try { loaded = loadSettings(settingsDir, { steps: found.steps }); } catch (e) { throw new InstallStop(`${e.message} Nothing was changed.`); }
   const g = loaded.get;
   const driverDir = path.resolve(g("server.driver_dir")), keeperDir = path.resolve(g("server.keeper_dir")), src = path.resolve(source);
   for (const [dir, what] of [[driverDir, "server.driver_dir"], [keeperDir, "server.keeper_dir"]]) {
