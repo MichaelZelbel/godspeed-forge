@@ -1,4 +1,4 @@
-// `godspeed-forge driver ...`: the factory driver's commands. The driver itself lives in ../driver; this file only
+// `godspeed-forge driver ...`: the factory driver's commands (bin/godspeed-forge.mjs hands them over). This file only
 // reads the command line and says plain sentences.
 //   driver install [--settings-dir <dir>] [--switch] [--watcher]
 //   driver round [--dry-run] [--settings-dir <dir>]      (a dry run reads only: it starts nothing and writes nothing)
@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const driverFile = name => pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'driver', name)).href;
+const driverFile = name => pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), name)).href;
 const option = (args, name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
 export const DRIVER_USAGE = 'Run godspeed-forge driver install, round, status, step <name> or pause.';
 

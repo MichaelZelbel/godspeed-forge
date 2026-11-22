@@ -7,7 +7,7 @@ import { defaultPaths } from '../lib/config.mjs';
 import { run } from '../lib/process.mjs';
 import { answersFrom } from '../lib/setup.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
-import { runDriverCommand, driverAfterSetup } from '../lib/driver-cli.mjs';
+import { runDriverCommand, driverAfterSetup } from '../driver/cli.mjs';
 
 const [command, repository] = process.argv.slice(2);
 if (command === '--version') {

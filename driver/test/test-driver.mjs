@@ -77,7 +77,7 @@ function fixture({ questions = null } = {}) {
   const records = { writes: [], read: () => null, write(files, msg) { this.writes.push({ files, msg }); return "c0ffee"; } };
   const results = {};
   const deps = {
-    now: () => NOW, log: () => {}, gh, sh, worldDeps, records, ownerIssue: 600,
+    now: () => NOW, log: () => {}, gh, sh, worldDeps, records, ownerIssue: 600, mono: () => ({ uptime: NaN, boot: "" }), // the machine's own uptime says nothing about the test's pretend clock
     rescues: async () => {}, // the hand-rescue count reads root's GitHub and the journal: never in a test
     providers: async () => [{ name: "codex", model: "gpt-5.6-terra", strong: "gpt-5.6-sol" }, { name: "claude", model: "claude-sonnet-5-5", strong: "claude-opus-5-5" }],
     check: () => ({ out: { approve: true, reason: "keeps the bar" }, trouble: "" }),

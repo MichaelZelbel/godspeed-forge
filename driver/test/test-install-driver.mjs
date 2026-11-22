@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import { installDriver, installWatcher, driverFiles, renderUnits, InstallStop } from "../install.mjs";
 import { loadSettings, renderEnvFile } from "../settings.mjs";
 import { discoverSteps } from "../steps.mjs";
-import { runDriverCommand, driverAfterSetup } from "../../lib/driver-cli.mjs";
+import { runDriverCommand, driverAfterSetup } from "../cli.mjs";
 
 const source = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
 const example = JSON.parse(fs.readFileSync(path.join(source, "settings.example.json"), "utf8"));
