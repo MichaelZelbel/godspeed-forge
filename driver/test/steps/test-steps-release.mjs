@@ -60,9 +60,11 @@ test("each step names itself, its timing and the settings it reads", () => {
       if (!s.required) assert.ok("default" in s, `${s.key} is optional, so it says its default`);
     }
   }
-  assert.ok(stage.SETTINGS.some((s) => s.key === "releases.kit_bootstrap_repo" && s.required));
-  assert.ok(plan.SETTINGS.some((s) => s.key === "steps.plan.standing_decision" && s.required));
-  assert.ok(kmg.SETTINGS.some((s) => s.key === "main.apps.release" && s.required));
+  // no key is required for the collector (it reads every step, enabled or not); a step refuses by key name itself
+  for (const mod of [stage, plan, kmg]) assert.ok(mod.SETTINGS.every((s) => s.required === false));
+  assert.ok(stage.SETTINGS.some((s) => s.key === "releases.kit_bootstrap_repo"));
+  assert.ok(plan.SETTINGS.some((s) => s.key === "steps.plan.standing_decision"));
+  assert.ok(kmg.SETTINGS.some((s) => s.key === "main.apps.release"));
   for (const [mod, name] of [[stage, "stage"], [plan, "plan"], [kmg, "keep-main-green"]]) {
     const own = mod.SETTINGS.find((s) => s.key === `steps.${name}.state_dir`);
     assert.equal(own.required, false, "a step's state folder has the core's default under the driver's state folder");

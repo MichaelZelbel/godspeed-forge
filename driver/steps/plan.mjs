@@ -13,7 +13,7 @@ const NEEDS = ["repository", "checkout", "recordsCheckout", "ownerLogin", "build
 export const SETTINGS = [
   ...settingsFor([...NEEDS, "factoryUser", "factoryHome", "archonConfig", "godspeedDir", "ownerName", "gitEmail", "noticesFile"], [...NEEDS, "factoryUser"]),
   { key: "steps.plan.state_dir", required: false, default: "", meaning: "where the step keeps what it did and said (state.json); default <server.state_dir>/steps/plan; point it at an existing folder to keep the record of what was said" },
-  { key: "steps.plan.standing_decision", required: true, meaning: "the owner's recorded words that let a release that only fixes bugs start without his yes; written into every plan the step starts" },
+  { key: "steps.plan.standing_decision", required: false, default: "", meaning: "the owner's recorded words that let a release that only fixes bugs start without his yes; written into every plan the step starts" },
   { key: "steps.plan.driver_state", required: false, default: "", meaning: "the retired release driver's state.json, read for its prereqs when it exists; may be absent" },
   { key: "steps.plan.max_runs_per_day", required: false, default: 3, meaning: "at most this many planning runs a day" },
   { key: "steps.plan.max_items", required: false, default: 8, meaning: "at most this many items in an automatic release" },

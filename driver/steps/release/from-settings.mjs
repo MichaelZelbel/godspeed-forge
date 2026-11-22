@@ -57,12 +57,14 @@ export function read(ctx, nameOrKey) {
   return dig(ctx.settings, key);
 }
 
-// The entries of a step's SETTINGS for some of these keys. Required unless it has a default or a fallback.
+// The entries of a step's SETTINGS for some of these keys. None is marked required for the settings collector:
+// the collector reads every step module, enabled or not, and would refuse a server that has not set up releases at
+// all. A step that lacks a value refuses to run instead, naming the key (prepare() -> refuseMissing), which the
+// runner shows as that step's health entry.
 export const settingsFor = (names, requiredNames = names) =>
   names.map((n) => {
     const k = KEYS[n];
-    const optional = "dflt" in k || !!k.alt || !requiredNames.includes(n);
-    return { key: k.key, required: !optional, default: "dflt" in k ? k.dflt : undefined, meaning: k.meaning };
+    return { key: k.key, required: false, default: "dflt" in k ? k.dflt : undefined, meaning: k.meaning };
   });
 
 // A step's own state folder: its setting, else under the driver's state folder like the core's own steps.
