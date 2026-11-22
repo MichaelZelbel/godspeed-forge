@@ -8,6 +8,8 @@ Install it on a Godspeed server with:
 curl -fsSL https://github.com/MichaelZelbel/godspeed-forge/raw/main/install.sh | bash
 ```
 
+The line installs the newest Forge release, never the newest code on main; `FORGE_VERSION=v0.1.0` before `bash` picks a specific release.
+
 The Forge gives anyone who has Godspeed and a GitHub project a whole development process:
 
 - you plan a release in one sentence ("plan release my-app"),

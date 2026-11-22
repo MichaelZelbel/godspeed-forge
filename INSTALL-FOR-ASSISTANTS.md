@@ -6,6 +6,8 @@ Run the public installer on the Godspeed server:
 curl -fsSL https://github.com/MichaelZelbel/godspeed-forge/raw/main/install.sh | bash
 ```
 
+The line installs the newest Forge release, never the newest code on main; `FORGE_VERSION=v0.1.0` before `bash` picks a specific release.
+
 The installer requires Godspeed 2.0.0-beta.24 or newer. It installs the add-on and its setup skill;
 it does not start a factory schedule.
 

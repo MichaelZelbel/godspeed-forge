@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline/promises';
+import { readFileSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
 import { runSetupCommand } from '../lib/cli.mjs';
 import { defaultPaths } from '../lib/config.mjs';
@@ -8,6 +9,11 @@ import { answersFrom } from '../lib/setup.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 
 const [command, repository] = process.argv.slice(2);
+if (command === '--version') {
+  const version = readFileSync(new URL('../VERSION', import.meta.url), 'utf8').trim();
+  console.log(`godspeed-forge ${version}`);
+  process.exit(0);
+}
 if (command !== 'setup' || !repository) {
   console.error('Run godspeed-forge setup owner/repository.');
   process.exit(1);
