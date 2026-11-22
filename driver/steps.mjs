@@ -2,7 +2,8 @@
 //   STEP     { name, everyMinutes, maxMinutes, inRound }
 //   SETTINGS [{ key, required, default, meaning }]   (checked by settings.mjs, which refuses a missing required key by name)
 //   run(ctx) -> { ok, summary, halt?: { key, words, clear }, error? }
-//     ctx = { settings, main, projects, env, settingsDir, now, log, dry, argv, clearHalt, stateDir }
+//     ctx = { settings, main, projects, env, settingsDir, now, log, dry, argv, clearHalt, stateDir, godspeed }
+//     ctx.godspeed() -> a promise of the bridge to Godspeed (lib/godspeed.mjs: workspace files, skills, sendToOwner)
 //
 // Every round (driver.mjs calls stepRound) the runner, for each enabled step:
 //   - collects what its last child wrote, <server.state_dir>/steps/<name>/last.json (a child that was killed at its time
@@ -16,8 +17,10 @@
 //   halt:<name>:<key>    the step stopped itself and says why ("Mission Control has to look at it"); it starts at rung 1,
 //                        with the halt's words and its `clear` command in the acting run's brief. The step sends nobody
 //                        anything about a halt: the owner hears only through the ladder's rung 3, through the gate.
-// This file imports nothing that can send a message, and removes nothing a person put there.
+// This file sends nothing itself (a step that must tell the owner does it through ctx.godspeed()), and removes nothing a
+// person put there.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -71,11 +74,31 @@ const realDeps = {
 // The command that ends a halt, in the words a halt's brief gives: `node <driver_dir>/driver.mjs --step <step> --clear-halt <key> --settings-dir <dir>`.
 export const clearHaltCommand = (settings, settingsDir, step, key) => `node ${dig(settings, "server.driver_dir") || "<driver dir>"}/driver.mjs --step ${step} --clear-halt${key ? ` ${key}` : ""} --settings-dir ${settingsDir || "<settings dir>"}`;
 
+// The bridge to Godspeed (the add-on's lib/godspeed.mjs), made when a step first asks for it and then shared by every
+// step of this process. The driver is installed apart from the add-on, so the bridge is found where the add-on lives:
+// FORGE_ADDON_DIR, beside this folder (the add-on itself, a checkout), then the add-on's usual folders.
+let bridge = null;
+export const addonBridgeFiles = (env = process.env, home = os.homedir()) => [...new Set([
+  env.FORGE_ADDON_DIR && path.join(env.FORGE_ADDON_DIR, "lib", "godspeed.mjs"),
+  path.join(HERE, "..", "lib", "godspeed.mjs"),
+  path.join(path.sep, "usr", "local", "lib", "godspeed-forge", "lib", "godspeed.mjs"),
+  path.join(home, ".godspeed", "addons", "godspeed-forge", "lib", "godspeed.mjs"),
+].filter(Boolean))];
+export function godspeedBridge() {
+  bridge ||= (async () => {
+    const file = addonBridgeFiles().find(f => fs.existsSync(f));
+    if (!file) throw new Error("the Forge's bridge to Godspeed (lib/godspeed.mjs) is not installed on this server");
+    return (await import(pathToFileURL(file).href)).openGodspeed();
+  })().catch(e => { bridge = null; throw e; });
+  return bridge;
+}
+
 // What a step is given.
 export const stepContext = (base, mod, extra = {}) => ({
   settings: base.settings, main: base.main, projects: base.projects, env: base.env, settingsDir: base.settingsDir,
   now: base.now, log: base.log || (() => {}), dry: !!base.dry, argv: base.argv || [], clearHalt: !!base.clearHalt,
-  stateDir: stepConfig(base.settings, mod).stateDir, clearHaltCommand: (step, key) => clearHaltCommand(base.settings, base.settingsDir, step || mod.STEP.name, key), ...extra,
+  stateDir: stepConfig(base.settings, mod).stateDir, clearHaltCommand: (step, key) => clearHaltCommand(base.settings, base.settingsDir, step || mod.STEP.name, key),
+  godspeed: base.godspeed || godspeedBridge, ...extra,
 });
 
 // A step's answer, taken into the runner's memory of it.

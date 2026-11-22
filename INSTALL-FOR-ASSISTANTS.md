@@ -8,13 +8,16 @@ curl -fsSL https://github.com/MichaelZelbel/godspeed-forge/raw/main/install.sh |
 
 The line installs the newest Forge release, never the newest code on main; `FORGE_VERSION=v0.1.0` before `bash` picks a specific release.
 
-The installer requires Godspeed 2.0.0-beta.24 or newer. It installs the add-on and its setup skill;
-it does not start a factory schedule.
+Run it as root, on a server where Godspeed runs natively or in Docker. The installer requires
+Godspeed 2.0.0-beta.24 or newer, installs what the factory needs on the server (git, `gh`, Python 3.10
+or newer, Node 22, bun, uv, Claude Code and Codex), installs the add-on, gives Godspeed's chat the
+`forge` skill and starts the service that answers the chat's requests. It does not start a factory
+schedule.
 
 # Set up a repository
 
-When the owner says “set up the Forge for `owner/repository`”, use the installed `forge-setup`
-skill. For each App, the owner identifies whether the repository owner is their personal account or
+Setup runs in the server's terminal, as root: `godspeed-forge setup owner/repository`. When the owner
+asks for it in the chat, the `forge` skill tells them that line. For each App, the owner identifies whether the repository owner is their personal account or
 organization, completes the creation browser step in that location, follows the installation
 link, chooses the requested account, selects “Only select repositories”, selects only the requested
 repository, and confirm that installation to the command. They must also answer what the software

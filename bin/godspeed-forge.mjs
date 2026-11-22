@@ -16,6 +16,7 @@ if (command === '--version') {
   process.exit(0);
 }
 if (command === 'driver') process.exit(await runDriverCommand(process.argv.slice(3)));
+if (command === 'inbox') process.exit(await (await import('../lib/inbox.mjs')).runInboxCommand());
 if (command !== 'setup' || !repository) {
   console.error('Run godspeed-forge setup owner/repository.');
   process.exit(1);
