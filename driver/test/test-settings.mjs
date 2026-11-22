@@ -48,7 +48,11 @@ test("the example file, filled in, is valid, and gives the modules the values th
 test("a missing key is refused by name, and nothing else is said about it", () => {
   const miss = (edit, key) => { const m = message(() => load(folder(edit))); assert.match(m, /lack/); assert.ok(m.includes(key), `${key}: ${m}`); };
   miss(f => { delete f.d.owner.github_login; }, "owner.github_login");
-  miss(f => { delete f.d.keys.token_script; }, "keys.token_script");
+  // the App-token program is asked for only by the steps that use one (trust, keep-main-green, stage): a new owner's
+  // driver, with those steps off, needs none
+  assert.doesNotThrow(() => load(folder(f => { delete f.d.keys.token_script; })));
+  const withTrust = message(() => loadSettings(folder(f => { delete f.d.keys.token_script; }), { steps: [...steps, { name: "trust", SETTINGS: [{ key: "keys.token_script", required: true }] }] }));
+  assert.ok(withTrust.includes("keys.token_script"), withTrust);
   miss(f => { delete f.d.notices.watch_repo; }, "notices.watch_repo");
   miss(f => { delete f.d.ai.act_brain_dir; }, "ai.act_brain_dir");
   miss(f => { delete f.p.apps.builder; }, "main.apps.builder");
@@ -58,8 +62,8 @@ test("a missing key is refused by name, and nothing else is said about it", () =
   miss(f => { delete f.d.steps["test-machine"]; }, "steps.test-machine.holdout");
   miss(f => { delete f.d.steps.questions.hermes_home; }, "steps.questions.hermes_home");
   miss(f => { delete f.d.server.factory_user; delete f.d.server.factory_uid; }, "server.factory_user");
-  const two = message(() => load(folder(f => { delete f.d.owner.github_login; delete f.d.keys.token_script; })));
-  assert.ok(two.includes("owner.github_login") && two.includes("keys.token_script"), "every missing key is named at once");
+  const two = message(() => load(folder(f => { delete f.d.owner.github_login; delete f.d.notices.watch_repo; })));
+  assert.ok(two.includes("owner.github_login") && two.includes("notices.watch_repo"), "every missing key is named at once");
 });
 
 test("a project without a releases block needs none of the release keys; more than one project with one is refused in plain words", () => {

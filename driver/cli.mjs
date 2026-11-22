@@ -30,7 +30,7 @@ export async function runDriverCommand(args, io = {}) {
     if (sub === 'round' || sub === 'step') {
       const { cli } = await import(driverFile('driver.mjs'));
       const argv = sub === 'step' ? ['--step', rest[0] ?? '', ...rest.slice(1)] : rest;
-      return await cli(argv, { log: say, err: say });
+      return await cli(argv, { log: say, err: say, ...(io.round || {}) }); // io.round: a test's stand-ins for the round (deps, found)
     }
     if (sub === 'status') return await status(option(rest, '--settings-dir'), say);
     if (sub === 'pause') {
@@ -62,10 +62,51 @@ async function status(settingsDir, say) {
   return 0;
 }
 
+// The steps a new owner's settings turn off: the first owner's own helpers, each of which refuses or misbehaves with a
+// new owner's settings (test/driver-new-owner.test.mjs runs each against them). plan, stage and test-machine need a
+// release-records repository and hidden-check tools; questions needs the first owner's chat program; trust and
+// keep-main-green need an App-token program and keys file the Forge does not make, and keep-main-green reverts commits
+// on main by a check named "required" that a new owner's project does not have.
+export const NEW_OWNER_OFF = ['plan', 'stage', 'questions', 'test-machine', 'trust', 'keep-main-green'];
+// The general steps for any owner (part of the same release): on from the start.
+export const NEW_OWNER_ON = ['owner-releases', 'owner-questions'];
+
+// driver.json for a new owner, from what setup knows: no acting AI runs and no AI helpers of the driver (they spend
+// the owner's coding-agent allowance on the first owner's ways of repairing), only the steps that work with it, and,
+// when the bridge to Godspeed found it (godspeed: its workspace on this server and noticesFile()), Godspeed's own
+// workspace and notice file, which on a Godspeed in Docker are not under this server's home folders.
+export function newOwnerSettings(repository, { user = os.userInfo(), godspeed = null, env = process.env } = {}) {
+  const [owner] = repository.split('/');
+  const workspace = godspeed && typeof godspeed.workspace === 'string' && godspeed.workspace ? godspeed.workspace : null;
+  let notices = null;
+  try { notices = typeof godspeed?.noticesFile === 'function' ? godspeed.noticesFile() : null; } catch { notices = null; }
+  if (!notices && workspace) notices = path.join(workspace, '.godspeed', 'notices.json');
+  return {
+    owner: { github_login: owner },
+    steps: Object.fromEntries([...NEW_OWNER_OFF.map(name => [name, { enabled: false }]), ...NEW_OWNER_ON.map(name => [name, { enabled: true }])]),
+    budget: { act_runs_per_day: 0, reserved: 0 },
+    env: { FD_MAX_HELPERS: '0' },
+    server: { factory_user: user.username, factory_uid: user.uid, factory_gid: user.gid, factory_home: user.homedir },
+    notices: { watch_repo: repository, ...(notices ? { godspeed_notices_file: notices } : {}) },
+    ai: { act_brain_dir: workspace || env.GODSPEED_WORKSPACE || path.join(user.homedir, '.godspeed', 'workspace') }
+  };
+}
+
+// The bridge to the Godspeed on this server (lib/godspeed.mjs openGodspeed), or null when there is no bridge or it finds no
+// Godspeed it can use; the driver's settings then fall back to the home folder's workspace.
+async function godspeedBridge() {
+  try {
+    const { openGodspeed } = await import(new URL('../lib/godspeed.mjs', import.meta.url).href);
+    return typeof openGodspeed === 'function' ? await openGodspeed() : null;
+  } catch {
+    return null;
+  }
+}
+
 // What setup does when it has finished, as root on a Linux server with systemd: it writes this project's settings file (and the
-// server's, from what setup knows, when there is none) and installs the driver. Whatever stops it is said plainly and never fails
-// setup. Returns the lines it said.
-export async function driverAfterSetup(repository, { paths, config, output = () => {}, install, platform = process.platform, uid = process.getuid?.(), systemd = () => fs.existsSync('/run/systemd/system') } = {}) {
+// server's, for a new owner, when there is none) and installs the driver. Whatever stops it is said plainly and never fails
+// setup. Returns the lines it said. godspeed: the bridge to Godspeed; when it is not given, it is opened here.
+export async function driverAfterSetup(repository, { paths, config, output = () => {}, install, godspeed, platform = process.platform, uid = process.getuid?.(), systemd = () => fs.existsSync('/run/systemd/system') } = {}) {
   if (platform !== 'linux' || uid !== 0 || !systemd()) return [];
   try {
     const dir = path.dirname(paths.config);
@@ -80,14 +121,8 @@ export async function driverAfterSetup(repository, { paths, config, output = () 
     }
     const serverFile = path.join(dir, 'driver.json');
     if (!fs.existsSync(serverFile)) {
-      const user = os.userInfo();
-      fs.writeFileSync(serverFile, JSON.stringify({
-        owner: { github_login: owner },
-        steps: { questions: { enabled: false }, 'test-machine': { enabled: false } },
-        server: { factory_user: user.username, factory_uid: user.uid, factory_gid: user.gid, factory_home: user.homedir },
-        notices: { watch_repo: repository },
-        ai: { act_brain_dir: process.env.GODSPEED_WORKSPACE || path.join(user.homedir, '.godspeed', 'workspace') }
-      }, null, 2) + '\n');
+      const bridge = godspeed === undefined ? await godspeedBridge() : godspeed;
+      fs.writeFileSync(serverFile, JSON.stringify(newOwnerSettings(repository, { godspeed: bridge }), null, 2) + '\n');
     }
     const code = await runDriverCommand(['install', '--settings-dir', dir], { output, install });
     return code === 0 ? ['The factory driver is installed.'] : [];

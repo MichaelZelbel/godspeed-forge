@@ -22,6 +22,8 @@ export const defaultsFor = (e = process.env) => ({
   // of the factory user is read too (Querino joined on 2026-11-18, D-425).
   PROJECT: e.FD_PROJECT || "repository",
   FORGE_HOME: e.FD_FORGE_HOME || "/home/factory",
+  // each project's checkout as its settings name it ({ project: folder }); a project the settings do not name is <FORGE_HOME>/<project>
+  PROJECT_CHECKOUTS: (() => { try { const v = JSON.parse(e.FD_PROJECT_CHECKOUTS || "{}"); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch { return {}; } })(),
   // A fixed command for the runs (tests); unset, each project's own Archon CLI is asked, the way the
   // factory itself asks it (factory/consumer.py native_json: bun <source>/packages/cli/src/cli.ts).
   ARCHON_RUNS: e.FD_ARCHON_RUNS || "",
@@ -264,7 +266,7 @@ function readMain(env, deps, unreadable) {
 // ------------------------------------------------------------ the factory, every project
 const ACTIVE_RUN = /^(queued|in_progress|waiting|requested|pending)$/;
 function readFactory(env, deps, project, primary, world, unreadable) {
-  const checkout = path.posix.join(env.FORGE_HOME, project);
+  const checkout = (env.PROJECT_CHECKOUTS || {})[project] || path.posix.join(env.FORGE_HOME, project);
   const part = `factory/${project}`;
   const f = { project, primary, checkout, repo: primary ? env.REPO : null, lastDecisions: [], activeRuns: [], board: null, stop: null, timers: {} };
   // the trigger and the manager timer: the network guard may pause them (2026-11-18), and a timer that

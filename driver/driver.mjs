@@ -28,7 +28,7 @@ import { appendEvents, readJournal, view as journalView, roundEvents, prEvents, 
 import { requiredRunId, seenFromTelegram, readActivity, resendDue, deliveryRetryDue, seenCheck, sendNotice, publishHeartbeat, mirroredHead, watcherHealth, supersessionLook, nextReleaseFacts, rung0 } from "./duties.mjs";
 import { clockCheck, wentBackwards, verifyInstalled, deliver, readEnvFile } from "./facts.mjs";
 import { gateStep, gateClear, GATE } from "./gate.mjs";
-import { movingUntilFor, heldUntil, creditEvents, creditKeyById, ACTIVITY, buildInventory, advance, violationEntry, describeRow, parseStage, stageStalled, factoryWorking, CHAIN, H as HR } from "./inventory.mjs";
+import { movingUntilFor, heldUntil, creditEvents, creditKeyById, ACTIVITY, buildInventory, advance, violationEntry, describeRow, parseStage, stageStalled, factoryWorking, CHAIN, H as HR, ownerName } from "./inventory.mjs";
 import { actDefaults as onDutyDefaults, launchAct, actResult, markHandled, answeredFile } from "./onduty.mjs";
 import { aiDefaults, providers, factoryProvider, ladderCandidates, launchHelper, helperResult, refreshTokens, checkJson, helperDir, UNIT_RE } from "./ai.mjs";
 import { applyReport, applyDueDefaults, actDefaults, notify, plain } from "./act.mjs";
@@ -289,7 +289,7 @@ export async function round(env, deps = {}) {
       if (st.do === "tell-michael") {
         const text = tellText(ob, world, now);
         if (!dry) { const a = await applyReport(env, ob, { text, key: `tell:${ob.id}:${Date.parse(ob.since)}`, about: "The factory is stuck", ref: ob.id }, { kind: "tell-michael", state }); record({ kind: "told Michael", obstacle: ob.id, ...a }); }
-        else log(`  would tell Michael: ${text}`);
+        else log(`  would tell ${ownerName()}: ${text}`);
         state.toldAt[ob.id] = nowIso;
         st = nextStep(ob, state.history[ob.id] || [], ctx());
       }
@@ -623,7 +623,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       writeJson(ledgerFile, ledger);
       writeJson(stateFile, state);
       const anchor = out.clock && out.clock.skewMs > 5 * MIN && Number.isFinite(out.clock.ghNow) ? iso(out.clock.ghNow) : nowIso; // never a future time in a file a monitor trusts
-      const status = statusOf(out, anchor, now, state); status.guarantee = GUARANTEE; status.journalHead = (deps.readJournal || readJournal)(journalFile).head || out.journalHead; // the head after this round's lines
+      const status = statusOf(out, anchor, now, state); status.guarantee = GUARANTEE.replace("Michael", ownerName()); status.journalHead = (deps.readJournal || readJournal)(journalFile).head || out.journalHead; // the head after this round's lines
       status.clock = out.clock;
       status.rung3 = (status.rung3 || []).map(r => ({ ...r, receipts: (state.chain[r.id] || {}).receipts || {} }));
       writeJson(path.join(env.STATE_DIR, "status.json"), status);
@@ -852,7 +852,9 @@ export async function cli(argv = process.argv.slice(2), io = {}) {
   const env = driverDefaults(process.env, dry ? [...argv, "--dry-run"] : argv);
   // The hidden checks' tools are read in this process, by the test-machine step's own reading (toolCoverage(envFor(ctx))), not by a program started for it.
   const tm = found.steps.find(s => s.name === "test-machine" && s.module && typeof s.module.toolCoverage === "function" && typeof s.module.envFor === "function" && (loaded.settings.steps || {})["test-machine"]?.enabled !== false);
-  const worldDeps = tm ? { toolCoverage: () => tm.module.toolCoverage(tm.module.envFor({ ...base, now: Date.now() })) } : {};
+  // With the test-machine step off (a new owner has no hidden-check tools) there are no tools to look after.
+  const testMachineOff = (loaded.settings.steps || {})["test-machine"]?.enabled === false;
+  const worldDeps = tm ? { toolCoverage: () => tm.module.toolCoverage(tm.module.envFor({ ...base, now: Date.now() })) } : testMachineOff ? { toolCoverage: () => ({ ids: [], missing: [] }) } : {};
   const out = await round(env, { stepsCtx: { ...base, steps: found.steps }, worldDeps, ...(io.deps || {}) });
   if (out.busy) return 0;
   if (env.DRY) log(describe(out));
