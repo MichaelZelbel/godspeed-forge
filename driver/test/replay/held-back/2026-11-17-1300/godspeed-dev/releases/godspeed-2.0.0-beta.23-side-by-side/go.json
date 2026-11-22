@@ -1,0 +1,29 @@
+{
+  "release": "godspeed-2.0.0-beta.23-side-by-side",
+  "version": "2.0.0-beta.23",
+  "candidateCommit": "f3122821fbdcdaecb5e142bf9eb7d7850a1ce353",
+  "scenarioRun": 43330861435,
+  "shownFailures": [
+    "a talk says when its preparation did not pass, and opens from one that did",
+    "the Charm Challenge, start to finish",
+    "the verdict"
+  ],
+  "prompt": "Beta 23 is still running healthy on your server. But it isn't ready to go public yet: one of the checks I had marked as must-pass failed.\n\n- **The failure:** when you ask for a coaching talk and the AI's first reply leaves out the prepared opening, Godspeed refuses that reply and shows an error instead of starting the talk. It failed twice tonight at different points but passed on the same code this morning, so it depends on what the AI writes. The checks use a small test AI; your server uses a different one, so I can't say how often you'd hit it. I filed it as a bug: it should retry once and otherwise open the talk from its preparation.\n- **One correction:** I had wrongly marked the Charm Challenge check as must-pass. It also failed, but it already failed the same way before this release and is filed separately, so I took it off the list.\n- **Everything else passed:** among them the plain yes and the Yes/No buttons on Telegram, answering in your language, updating, and installs on Linux, Mac, Docker and Windows.\n\nYour server keeps Beta 23 either way. Everyone else stays on Beta 20 until you decide:\n\n1. Make Beta 23 public now, accepting the talk bug until the next release fixes it.\n2. Wait: fix the talk bug first, then make it public.\n\nWhich one do you want?\n\n[Added when recording the go, not part of the message he saw: \"Beta 23\" is the candidate 2.0.0-beta.23; the scenario job names of the failures it describes in plain words.]\n- a talk says when its preparation did not pass, and opens from one that did: \"The failure\" above (issue #489); waived in his reply.\n- the Charm Challenge, start to finish: fails the same way on main before this release, filed as #389\n- the verdict: red only because of the two above",
+  "askedAt": "2026-11-13T00:29:22Z",
+  "words": "Yes, make Beta 23 public, and at the same time let's plan Beta 24.",
+  "where": "chat (Claude Code)",
+  "replyRef": "claude-code-session-c9b9ee78-2026-11-13T12:31:13Z",
+  "saidAt": "2026-11-13T12:31:13Z",
+  "at": "2026-11-13T12:32:18Z",
+  "installedAt": "2026-11-12T23:42:00Z",
+  "waived": [
+    "a talk says when its preparation did not pass, and opens from one that did"
+  ],
+  "nonBlocking": [
+    {
+      "job": "the Charm Challenge, start to finish",
+      "cause": "fails the same way on main before this release, filed as #389"
+    }
+  ],
+  "standingWaiver": "Michael, 8 November 2026, 22:52 CET: a release is blocked only by the scenarios of its own new features; older scenarios that fail for other reasons are named in the result and do not block it."
+}

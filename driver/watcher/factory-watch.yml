@@ -1,0 +1,40 @@
+# The outside watcher (architecture 8.10, 9.8): a scheduled GitHub Actions workflow in godspeed-dev. It shares no code with anything
+# on the server (the net for the rare case where the driver AND the dead-man die together; GitHub's scheduler on this account runs hours late,
+# so its latency is up to about a day: the on-server pair catches any single fault within minutes) and reads godspeed-dev with its own workflow token (no personal token anywhere). Its alerts are opened with that
+# token, so the issues are authored by github-actions[bot] and name the owner: GitHub notifies him.
+name: factory-watch
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true: a test run (no waiting between the reads, nothing is sent); anything else: the real gate"
+        required: false
+        default: "false"
+permissions:
+  contents: read
+  issues: write
+  actions: read
+concurrency:
+  group: factory-watch
+  cancel-in-progress: false
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Watch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          WATCH_REPO: ${{ github.repository }}
+          PRODUCT_RECORDS_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then GATE_WAIT_MS=0 node scripts/factory-watch.mjs --dry-run; else node scripts/factory-watch.mjs; fi

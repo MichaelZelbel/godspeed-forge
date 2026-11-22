@@ -1,0 +1,90 @@
+{
+  "release": "godspeed-2.0.0-beta.25-says-what-is-true",
+  "repository": "MichaelZelbel/godspeed-mission-control",
+  "version": "2.0.0-beta.25",
+  "tag": "candidate/2.0.0-beta.25",
+  "stageCommit": "503ef4d4440ed616862dbbf9af6230ad1479bf56",
+  "productCommit": "75b61feaa9a116c4bb1d25ff7bf1eb0bd4004cb8",
+  "machine": "godspeed-archon",
+  "installLog": "/root/godspeed-staging/2.0.0-beta.25/install.log",
+  "healthBefore": {
+    "ok": true,
+    "format": 1,
+    "version": "2.0.0-beta.24",
+    "instance": "d3be7cc8af6f875f61613305",
+    "scheduler_heartbeat": "2026-11-16T07:02:20.454Z",
+    "chat": {
+      "answered": true,
+      "checked_at": "2026-11-16T06:06:49.511Z",
+      "failing_since": null,
+      "problems": [],
+      "delivery_failures": []
+    }
+  },
+  "commitBefore": "901a784c639fd462a55ae2b19fecd0b92ae518f3",
+  "installedAt": "2026-11-16T07:03:53Z",
+  "backup": "/root/godspeed/.godspeed/integrated-runtime/backups/20261116-070309-901a784c639fd462a55ae2b19fecd0b92ae518f3",
+  "healthAfter": {
+    "ok": true,
+    "format": 1,
+    "version": "2.0.0-beta.25",
+    "instance": "d3be7cc8af6f875f61613305",
+    "scheduler_heartbeat": "2026-11-16T07:03:31.492Z",
+    "chat": {
+      "answered": true,
+      "checked_at": "2026-11-16T06:06:49.511Z",
+      "failing_since": null,
+      "problems": [],
+      "delivery_failures": []
+    }
+  },
+  "addonAi": {
+    "at": "2026-11-16T07:03:53Z",
+    "state": "ok",
+    "command": "/root/.hermes/bin/godspeed-model",
+    "provider": "openai-codex",
+    "model": "gpt-5.6-luna",
+    "backup": true,
+    "tries": 1
+  },
+  "status": "installed",
+  "failures": [],
+  "scenarios": {
+    "result": "failed",
+    "conclusion": "failure",
+    "tag": "candidate/2.0.0-beta.25",
+    "tagCommit": "503ef4d4440ed616862dbbf9af6230ad1479bf56",
+    "run": 43820967201,
+    "url": "https://github.com/MichaelZelbel/godspeed-mission-control/actions/runs/43820967201",
+    "at": "2026-11-16T07:44:32Z",
+    "failedJobs": [
+      "two computers that move the same reminders at once",
+      "Docker and Linux import made-up Hevy workouts",
+      "the verdict"
+    ],
+    "seenAt": "2026-11-16T07:44:55Z"
+  },
+  "lastCheck": {
+    "at": "2026-11-16T07:44:55Z",
+    "serverClock": "2026-11-16T07:44:44Z",
+    "result": "ready",
+    "checked": [
+      "Your server runs 2.0.0-beta.25 (product commit 75b61fe), healthy, as instance d3be7cc8af6f875f61613305, the one it was installed as; its scheduler beat 0 minute(s) before the server's clock.",
+      "The add-ons reach the AI: /root/.hermes/bin/godspeed-model names openai-codex gpt-5.6-luna, and a one-word request through it answered through the backup AI, because the main one did not."
+    ],
+    "failures": [],
+    "scenarios": "failed",
+    "nonBlocking": [
+      "two computers that move the same reminders at once",
+      "Docker and Linux import made-up Hevy workouts"
+    ],
+    "addonAi": {
+      "state": "ok",
+      "command": "/root/.hermes/bin/godspeed-model",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna",
+      "backup": true,
+      "tries": 1
+    }
+  }
+}

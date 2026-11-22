@@ -1,0 +1,30 @@
+{
+  "release": "godspeed-2.0.0-beta.24-never-empty-handed",
+  "version": "2.0.0-beta.24",
+  "candidateCommit": "104dd6b34dc609e414774bf316af5a27c305e29a",
+  "scenarioRun": 43600813210,
+  "shownFailures": [
+    "two computers that move the same reminders at once",
+    "the Charm Challenge, start to finish",
+    "the verdict"
+  ],
+  "prompt": "Beta 24 (2.0.0-beta.24) has been running on your server since 14:39, healthy. Two tests failed, and with them the verdict, neither caused by this release: 1. two computers that move the same reminders at once: GitHub limited requests from the shared test machines, so the privacy check got no answer. 2. the Charm Challenge, start to finish: one chat answer came back empty, so the test couldn't compare it with the Trackers card; it also failed on 11 and 12 November. Every test proving this release's changes passed. Say go and I'll make Beta 24 public.",
+  "askedAt": "2026-11-14T14:15:21Z",
+  "words": "go",
+  "where": "chat",
+  "replyRef": "claude-code session c9b9ee78 message 54de02f7-0ec2-4ea2-ad1f-9be982d41eae",
+  "saidAt": "2026-11-14T16:40:45Z",
+  "at": "2026-11-14T16:41:46Z",
+  "installedAt": "2026-11-14T13:39:45Z",
+  "nonBlocking": [
+    {
+      "job": "two computers that move the same reminders at once",
+      "cause": "GitHub limited requests from the shared test machines, so the privacy check got no answer"
+    },
+    {
+      "job": "the Charm Challenge, start to finish",
+      "cause": "one chat answer came back empty, so the test couldn't compare it with the Trackers card; it also failed on 11 and 12 November"
+    }
+  ],
+  "standingWaiver": "Michael, 8 November 2026, 22:52 CET: a release is blocked only by the scenarios of its own new features; older scenarios that fail for other reasons are named in the result and do not block it."
+}
