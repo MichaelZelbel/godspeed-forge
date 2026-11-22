@@ -50,7 +50,7 @@ esac
 CURL
 chmod +x "$temporary/fake/curl"
 mkdir "$temporary/pack/godspeed-forge-x"
-cp -R bin lib skills README.md INSTALL-FOR-ASSISTANTS.md LICENSE VERSION "$temporary/pack/godspeed-forge-x/"
+cp -R bin lib skills driver README.md INSTALL-FOR-ASSISTANTS.md LICENSE VERSION "$temporary/pack/godspeed-forge-x/"
 tar -czf "$temporary/forge.tar.gz" -C "$temporary/pack" godspeed-forge-x
 export FAKE_ARCHIVE="$temporary/forge.tar.gz" FAKE_LOG="$temporary/curl.log"
 release_install() {

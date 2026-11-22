@@ -1,0 +1,29 @@
+{
+  "release": "godspeed-2.0.0-beta.25-says-what-is-true",
+  "version": "2.0.0-beta.25",
+  "candidateCommit": "503ef4d4440ed616862dbbf9af6230ad1479bf56",
+  "scenarioRun": 43820967201,
+  "shownFailures": [
+    "two computers that move the same reminders at once",
+    "Docker and Linux import made-up Hevy workouts",
+    "the verdict"
+  ],
+  "prompt": "2.0.0-beta.25 (says what is true) is on your server and healthy, but 2 tests did not pass. \"two computers that move the same reminders at once\": GODSPEED_SCENARIO_GITHUB_TOKEN is not set, so the live GitHub privacy check cannot be authenticated. The same test also failed on main on 14 November, so it is not new with this release. \"Docker and Linux import made-up Hevy workouts\": native kept the refused Hevy key in /home/runner/godspeed-v2/.godspeed/integrated-runtime/versions//scenarios/notebook-assistant-browser.mjs. The same test also failed on main on 8 and 9 November, so it is not new with this release. Every other test passed. Shall I make it public anyway? Say \"go\" and I note these causes with your go, or say \"stop\" and I look into them first.",
+  "askedAt": "2026-11-16T07:45:42Z",
+  "words": "\"go\" for beta 25, and \"yes\" for beta 26, with keep for the Hostinger button.",
+  "where": "chat",
+  "replyRef": "Claude Code chat with Mission Control, 2026-11-16; his reply to the beta 25 go question (the build server's message of 07:45 UTC and Mission Control's of 07:56 UTC, which named both failures as test-setup faults; the reminders scenario then passed on the candidate's own scenario copy once given its token, run 43826650492)",
+  "saidAt": "2026-11-16T10:25:00Z",
+  "at": "2026-11-16T10:35:31Z",
+  "installedAt": "2026-11-16T07:03:53Z",
+  "waived": [
+    "two computers that move the same reminders at once"
+  ],
+  "nonBlocking": [
+    {
+      "job": "Docker and Linux import made-up Hevy workouts",
+      "cause": "native kept the refused Hevy key in /home/runner/godspeed-v2/.godspeed/integrated-runtime/versions//scenarios/notebook-assistant-browser.mjs"
+    }
+  ],
+  "standingWaiver": "Michael, 8 November 2026, 22:52 CET: a release is blocked only by the scenarios of its own new features; older scenarios that fail for other reasons are named in the result and do not block it."
+}

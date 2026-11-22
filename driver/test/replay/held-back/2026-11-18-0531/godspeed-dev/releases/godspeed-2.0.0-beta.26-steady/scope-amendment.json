@@ -1,0 +1,149 @@
+{
+  "release": "godspeed-2.0.0-beta.26-steady",
+  "version": "2.0.0-beta.26",
+  "decidedBy": "release-driver",
+  "authority": "plan-rule",
+  "words": "Caps: three attempts or\ntwo send-backs per item, then `needs-owner`; an item that reaches a dead end leaves the release,\nthe rest ships.",
+  "approvalRef": "releases/godspeed-2.0.0-beta.26-steady/plan.md: Status: approved by Michael on 2026-11-16 (\"\"go\" for beta 25, and \"yes\" for beta 26, with keep for the Hostinger button.\").",
+  "approvedAt": "2026-11-16T00:00:00Z",
+  "decidedAt": "2026-11-17T10:06:11.746Z",
+  "deferredTickets": [
+    "01-restart-answers-at-once.md",
+    "02-chat-says-refused-key.md",
+    "03-never-ready-after-failure.md",
+    "07-coaching-talk-ready.md"
+  ],
+  "reason": "Under the approved plan's rule (an item that reaches a dead end leaves the release, the rest ships), Mission Control's release driver moved these tickets to the next release: 01-restart-answers-at-once.md (#679: Michael moved it to a later release himself); 02-chat-says-refused-key.md (#590: the release driver authorized it 2 times, the last at 2026-11-16 21:32 UTC, and nothing of it merged in the 12 hours since); 03-never-ready-after-failure.md (#667: the release driver authorized it 5 times, the last at 2026-11-17 08:32 UTC, and nothing of it merged in the 6 hours since); 07-coaching-talk-ready.md (#670: the release driver authorized it 2 times, the last at 2026-11-16 17:01 UTC, and nothing of it merged in the 17 hours since). Everything else ships as planned.",
+  "reasons": {
+    "01-restart-answers-at-once.md": {
+      "item": 1,
+      "issue": 679,
+      "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/679",
+      "title": "Right after a restart the server takes over 15 seconds to answer, so the sign-in screen says \"Let's reconnect\"",
+      "rule": "owner-moved",
+      "why": "Michael moved it to a later release himself",
+      "decidedAt": "2026-11-17T10:06:11.746Z",
+      "evidence": [
+        {
+          "at": "2026-11-16T16:50:47Z",
+          "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/679#issuecomment-6922953201",
+          "words": "Owner decision: **move this startup sign-in investigation to a later release and let the current release ship without changing sign-in behavior.** The intermittent startup delay is not part of this release. Keep the issue open for a later release with its existing evidence requirement."
+        }
+      ]
+    },
+    "02-chat-says-refused-key.md": {
+      "item": 2,
+      "issue": 590,
+      "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/590",
+      "title": "Holdouts H-19..H-26 and H-29 (the AI's state in the chats, pickers and card) fail on main",
+      "rule": "a",
+      "why": "the release driver authorized it 2 times, the last at 2026-11-16 21:32 UTC, and nothing of it merged in the 12 hours since",
+      "decidedAt": "2026-11-17T10:06:11.746Z",
+      "evidence": [
+        {
+          "at": "2026-11-16T15:31:43.372Z",
+          "kind": "decided",
+          "run": "202611161528-29dbb2",
+          "what": "Authorize one bounded correction lap on PR #660 for the recorded refused-key wording, mixed transition reply, missing Dashboard state, and clipped picker labels. All required browser-visible observations remain required and must be repeated in a working verifier.",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/590",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/660"
+          ]
+        },
+        {
+          "at": "2026-11-16T21:32:34.704Z",
+          "kind": "decided",
+          "run": "202611162128-43a261",
+          "what": "Authorize the second and final bounded correction: make all visible refused-key, outage, and no-AI wording consistent, then repeat the unchanged browser observations."
+        }
+      ]
+    },
+    "07-coaching-talk-ready.md": {
+      "item": 7,
+      "issue": 670,
+      "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/670",
+      "title": "Make the installed coaching preparation route produce a ready talk",
+      "rule": "a",
+      "why": "the release driver authorized it 2 times, the last at 2026-11-16 17:01 UTC, and nothing of it merged in the 17 hours since",
+      "decidedAt": "2026-11-17T10:06:11.746Z",
+      "evidence": [
+        {
+          "at": "2026-11-16T14:46:52.227Z",
+          "kind": "decided",
+          "run": "202611161443-5a72b3",
+          "what": "Authorize a fresh diagnostic run using the supported fixture and configured provider, retaining redacted run evidence before changing the fixture, runner, or recipe. This keeps the ready/draft gate and coaching holdouts intact."
+        },
+        {
+          "at": "2026-11-16T17:01:32.807Z",
+          "kind": "decided",
+          "run": "202611161658-18489e",
+          "what": "Authorize a bounded correction so an independently uncovered adopted goal can never be sealed ready or opened, while the supported clean preparation remains ready. This is the exact plan-defined quality boundary and keeps every holdout blocking."
+        }
+      ]
+    },
+    "03-never-ready-after-failure.md": {
+      "item": 3,
+      "issue": 667,
+      "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/667",
+      "title": "Overlapping AI availability reads can briefly show ready after the health check fails",
+      "rule": "a",
+      "why": "the release driver authorized it 5 times, the last at 2026-11-17 08:32 UTC, and nothing of it merged in the 6 hours since",
+      "decidedAt": "2026-11-17T14:43:16.411Z",
+      "evidence": [
+        {
+          "at": "2026-11-16T16:31:00.721Z",
+          "kind": "decided",
+          "run": "202611161628-a4e728",
+          "what": "Approved the exact deterministic overlapping-read regression required by the ticket and authorized the maintained browser-capable verifier to perform the still-required visible Dashboard and chat observations. This preserves the acceptance test and does not substitute CI for the blocked observation.",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/667",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671#issuecomment-6905574002"
+          ]
+        },
+        {
+          "at": "2026-11-16T19:16:44.097Z",
+          "kind": "decided",
+          "run": "202611161913-ccd0b5",
+          "what": "Authorize the final bounded correction for the two visible AI-state contradictions and explicitly approve the added Dashboard-status regression. The plan already requires truthful unreachable/refused states and no ready state after failure.",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/667",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671#issuecomment-6924126398"
+          ]
+        },
+        {
+          "at": "2026-11-16T23:32:17.818Z",
+          "kind": "repaired",
+          "run": "202611162328-62e567",
+          "what": "The Dashboard’s false working-connection wording was repaired in 8ef071fc. The repair needs explicit approval of the two added UI regressions and an unchanged exact-head browser recheck, not a third builder correction lap.",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/commit/8ef071fcd28cc3ca3ebc117ac08be1ac3f888247",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671"
+          ]
+        },
+        {
+          "at": "2026-11-17T00:48:37.459Z",
+          "kind": "repaired",
+          "run": "202611170043-b7c590",
+          "what": "Repaired the concrete mounted-composer refresh defect on PR #671 and added a regression for an already-open chat recovering availability. The focused UI command was attempted but this fresh checkout lacks vitest.",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/667",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/commit/9b06acad"
+          ]
+        },
+        {
+          "at": "2026-11-17T08:32:29.965Z",
+          "kind": "repaired",
+          "run": "202611170828-d26569",
+          "what": "Repaired the concrete stale-recovery defect: successful open-composer availability reads now refresh stale unavailable guidance immediately. The focused test command was attempted but Vitest is absent in this fresh clone.",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/commit/ae4c29388baeefce15cae03c39a676ea4c7d6594"
+          ]
+        }
+      ]
+    }
+  }
+}

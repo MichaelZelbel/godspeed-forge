@@ -1,0 +1,13 @@
+{
+  "release": "godspeed-2.0.0-beta.25-says-what-is-true",
+  "version": "2.0.0-beta.25",
+  "approvedBy": "Michael",
+  "words": "I see. Then please plan again after Beta 25 is frozen and on my server. Then let's see what the next steps are.",
+  "approvalRef": "Claude Code chat on Michael's computer, 2026-11-15 about 19:30 UTC: his answer to Mission Control's question \"Shall I ship beta.25 without the four stuck items and start this one?\" (items 1, 2, 4 and 6 were stuck then; 1, 4 and 6 have since merged). The approved plan's own rule, \"an item that reaches a dead end leaves the release, the rest ships\" (approved 2026-11-15, \"Yes, please start.\"), covers item 3, found unfinished after his answer.",
+  "approvedAt": "2026-11-15T19:30:00Z",
+  "deferredTickets": [
+    "02-chats-say-ai-state.md",
+    "03-honest-ai-state.md"
+  ],
+  "reason": "Items 2 and 3 are only partly delivered. Their code merged (#601, #655) and ships with this candidate, and hidden scenarios H-19 to H-22 and H-27 pass, but the plan's blocking scenarios H-23, H-24, H-26 and H-29 still fail on main f7a7166a with real product verdicts (manager pass on #590, 2026-11-15 22:51 UTC): a chat tab opened before an AI was connected keeps saying no AI, and the dashboard card says \"Ready to chat\" while the AI is refused or unreachable. #583 and #573 were closed into #590, which carries the remaining work (pull request #660, open) into the next release, planned after this one is staged. The release itself was held until main no longer carried #617 (blank Import page after a restart, #619): its revert #654 merged on 2026-11-16 at 02:43 UTC as 1ecee35e."
+}

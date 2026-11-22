@@ -47,6 +47,18 @@ const paths = process.env.FORGE_INSTALL_ROOT
 await installAddon({ source: process.env.SOURCE_DIRECTORY, workspace: process.env.WORKSPACE, paths });
 NODE
   echo "The Forge is installed."
+
+  # An upgrade keeps the factory driver current: as root where this server has the driver's settings, the install ends with
+  # `godspeed-forge driver install`.
+  settings_dir="${FORGE_SETTINGS_DIR:-/etc/godspeed-forge}"
+  if [ "$(id -u)" = "0" ] && [ "$(uname -s)" = "Linux" ] && [ -f "$settings_dir/driver.json" ]; then
+    if [ -n "${FORGE_INSTALL_ROOT:-}" ]; then
+      addon="$FORGE_INSTALL_ROOT/addon"
+    else
+      addon="$(SOURCE_DIRECTORY="$source_directory" node --input-type=module -e 'const { defaultPaths } = await import(`file://${process.env.SOURCE_DIRECTORY}/lib/config.mjs`); console.log(defaultPaths().addon);')"
+    fi
+    node "$addon/bin/godspeed-forge.mjs" driver install --settings-dir "$settings_dir"
+  fi
 }
 
 main "$@"

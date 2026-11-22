@@ -1,0 +1,10 @@
+[Unit]
+Description=Factory driver keeper: counts a clean round (3 clean rounds make the installed set last-good)
+# Started by factory-driver.service's OnSuccess= (drop-in factory-driver.service.d/keeper.conf).
+
+[Service]
+Type=oneshot
+Environment=HOME=/root LANG=C.UTF-8
+EnvironmentFile={{ENV_FILE}}
+ExecStart={{NODE}} {{KEEPER_DIR}}/keeper.mjs clean
+TimeoutStartSec=120
