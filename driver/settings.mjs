@@ -78,11 +78,12 @@ export const CORE = [
   { key: "releases.tools_dir", requiredWithReleases: true, env: ["FD_TOOLS_DIR", "RD_TOOLS_DIR"], meaning: "the hidden-check tools" },
   { key: "releases.holdouts_dir", requiredWithReleases: true, env: ["FD_HOLDOUTS_DIR"], meaning: "the hidden scenarios" },
   { key: "releases.engine_repo", def: () => "", env: ["FD_ENGINE_REPO", "FD_CAUSE_ENGINE_REPO"], meaning: "repository where engine causes are filed; empty means none" },
+  { key: "steps.questions.to_owner_file", def: () => "to-owner.json", env: ["FD_TO_OWNER_FILE"], meaning: "the file (in the questions folder) listing the questions handed to the owner" },
   { key: "steps.stage.state_dir", def: g => `${g("server.state_dir")}/steps/stage`, env: [], meaning: "the stage step's state folder" },
   { key: "steps.trust.state_dir", def: g => `${g("server.state_dir")}/steps/trust`, env: ["RD_STATE_DIR"], meaning: "the trust step's state folder" },
   { key: "steps.trust.worker_dir", def: g => `${g("server.state_dir")}/steps/trust/queue-worker`, env: ["RD_WORKER_DIR"], meaning: "the question queue worker's folder" },
   { key: "steps.test-machine.state_dir", def: g => `${g("server.state_dir")}/steps/test-machine`, env: [], meaning: "the test machine step's state folder" },
-  { key: "steps.test-machine.module", def: () => "", env: ["FD_TM_MODULE"], meaning: "the test machine's module (tool coverage); empty means unreadable" },
+  { key: "steps.test-machine.module", def: g => `${g("server.driver_dir")}/steps/test-machine.mjs`, env: ["FD_TM_MODULE"], meaning: "the test machine's module (tool coverage); empty means unreadable" },
 ];
 
 const readJson = (file, what) => {
@@ -112,15 +113,19 @@ export function loadSettings(dir = DEFAULT_DIR, { stepSettings = [], extraEnv = 
 
   // the file's own value for a key
   const raw = key => {
+    if (key.startsWith("projects[main].")) { const rest = key.slice(15); key = rest.startsWith("releases.") ? rest : `main.${rest}`; } // a step's way of naming the main project's keys
     if (key.startsWith("main.")) return main ? dig(main, key.slice(5)) : undefined;
     if (key.startsWith("releases.")) return main && main.releases ? dig(main.releases, key.slice(9)) : undefined;
     return dig(settings, key);
   };
   const specs = [...CORE];
   const seen = new Map(specs.map(s => [s.key, s]));
+  // A step's own keys are checked, never defaulted here: a step's `default` is words for the example file, and the step
+  // works out its own default from the settings (so a "none" or "<server.state_dir>/..." there is never taken for a value).
   for (const s of stepSettings.flat()) {
-    const d = { key: s.key, required: !!s.required, def: () => s.default, env: s.env || [], meaning: s.meaning, fmt: s.fmt };
+    if (!s || !s.key || s.key.includes("[]")) continue;
     if (seen.has(s.key)) { if (s.required) seen.get(s.key).required = true; continue; }
+    const d = { key: s.key, required: !!s.required, env: s.env || [], meaning: s.meaning, fmt: s.fmt };
     seen.set(s.key, d); specs.push(d);
   }
   const cache = new Map();
@@ -176,8 +181,20 @@ export function loadSettings(dir = DEFAULT_DIR, { stepSettings = [], extraEnv = 
   env.FD_SETTINGS_DIR = dir;
   const passthrough = settings.env && typeof settings.env === "object" ? settings.env : {};
   Object.assign(env, Object.fromEntries(Object.entries(passthrough).map(([k, v]) => [k, String(v)])), extraEnv);
+  // the settings as the steps read them: the file's own values with every default put in
+  const resolved = JSON.parse(JSON.stringify(settings));
+  for (const sp of specs) {
+    if (sp.key.startsWith("main.") || sp.key.startsWith("releases.") || sp.key.startsWith("projects[")) continue;
+    const v = get(sp.key);
+    if (v === undefined || v === null || (v === "" && !has(raw(sp.key)) && sp.key !== "server.netns")) continue;
+    const parts = sp.key.split(".");
+    let o = resolved;
+    for (const k of parts.slice(0, -1)) o = (o[k] && typeof o[k] === "object") ? o[k] : (o[k] = {});
+    o[parts.at(-1)] = v;
+  }
+  if (main && !has(main.project)) main.project = get("main.project");
   const value = key => get(key);
-  return { settings, main, projects, env, get: value, dir, specs };
+  return { settings: resolved, main, projects, env, get: value, dir, specs };
 }
 
 // The env as a file, for the units of the keeper and the dead-man (plain files, no driver code).

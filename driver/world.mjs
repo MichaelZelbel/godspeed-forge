@@ -31,6 +31,7 @@ export const defaultsFor = (e = process.env) => ({
   FORGE_UID: e.FD_FORGE_UID || e.FORGE_UID || "1000",
   STALE_MINUTES: Number(e.FD_STALE_MINUTES || 180),
   QUESTIONS_DIR: e.FD_QUESTIONS_DIR || "/var/lib/godspeed/forge/questions",
+  TO_OWNER_FILE: e.FD_TO_OWNER_FILE || "to-owner.json", // where the queue worker lists what it handed to the owner (steps.questions.to_owner_file)
   // The test machine's own module: its toolCoverage() says which hidden checks have no tool that can run
   // (2026-11-18: the driver never saw a missing tool; only Michael was told, by the test machine).
   TM_MODULE: e.FD_TM_MODULE || "",
@@ -234,10 +235,15 @@ function readServer(env, deps, activeIds, unreadable) {
 // the test machine believe it was started itself, and it runs a whole look (seen on the AX41, 2026-11-18).
 const coverage = mod => `const m = await import(${JSON.stringify(mod)}); console.log(JSON.stringify(m.toolCoverage(m.defaults([], process.env))))`;
 function readTools(env, deps, unreadable) {
-  if (!env.TM_MODULE || !/^[\w./-]+\.mjs$/.test(env.TM_MODULE)) return null;
-  const out = tryRun(deps, `node --input-type=module -e ${q(coverage(env.TM_MODULE))}`, false, unreadable, "tools");
-  if (out === null) return null;
-  let c = null; try { c = JSON.parse(String(out).trim().split(/\r?\n/).pop()); } catch {}
+  let c = null;
+  if (deps.toolCoverage) { // in-process: the driver hands the test-machine step's own reading (toolCoverage(envFor(ctx)))
+    try { c = deps.toolCoverage(env); } catch (e) { unreadable.push({ part: "tools", error: `the test machine's tool check failed: ${String(e.message).slice(0, 200)}` }); return null; }
+  } else {
+    if (!env.TM_MODULE || !/^[\w./-]+\.mjs$/.test(env.TM_MODULE)) return null;
+    const out = tryRun(deps, `node --input-type=module -e ${q(coverage(env.TM_MODULE))}`, false, unreadable, "tools");
+    if (out === null) return null;
+    try { c = JSON.parse(String(out).trim().split(/\r?\n/).pop()); } catch {}
+  }
   if (!c || !Array.isArray(c.ids) || !Array.isArray(c.missing)) { unreadable.push({ part: "tools", error: "the test machine's tool check gave no reading" }); return null; }
   if (c.failed) { unreadable.push({ part: "tools", error: `the test machine's tool check failed: ${c.why || "no reason"}` }); return null; }
   return { scenarios: c.ids.length, missing: c.missing.map(m => ({ id: String(m.id), why: String(m.why || `${m.id} has no tool`).slice(0, 300) })) };
@@ -359,7 +365,7 @@ export async function readWorld(env0 = {}, deps0 = {}) {
   world.queue = []; world.answeredElsewhere = {};
   try { world.queue = (JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, "mission-control-queue.json"))).items) || []; } catch (e) { if (e instanceof SyntaxError) unreadable.push({ part: "mission-control-queue", error: e.message }); }
   try { world.answeredElsewhere = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, "answered-elsewhere.json"))) || {}; } catch (e) { if (e instanceof SyntaxError) unreadable.push({ part: "answered-elsewhere", error: e.message }); }
-  try { world.toMichael = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, "to-michael.json"))) || {}; } catch (e) { world.toMichael = {}; if (e instanceof SyntaxError) unreadable.push({ part: "to-michael", error: e.message }); }
+  try { world.toMichael = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, env.TO_OWNER_FILE || process.env.FD_TO_OWNER_FILE || "to-owner.json"))) || {}; } catch (e) { world.toMichael = {}; if (e instanceof SyntaxError) unreadable.push({ part: "to-michael", error: e.message }); }
   // every open pull request labelled needs-owner in the repositories whose factory runs (parked ones have no factory)
   world.openPrs = [];
   for (const repo of [...new Set([env.REPO, ...world.factories.map(f => f.repo).filter(Boolean)])]) {

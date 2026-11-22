@@ -1068,7 +1068,7 @@ async function runLocked(env, deps, { now, log, stateFile, decisionsFile }) {
       if (!q) continue;
       const answered = listFor(readJson(path.join(env.QUESTIONS_DIR, "answered-elsewhere.json"), {}), env.REPO).map(keyOf).includes(q.key);
       if (answered) continue;
-      addHeading(path.join(env.QUESTIONS_DIR, "to-michael.json"), env.REPO, q.heading);
+      addHeading(path.join(env.QUESTIONS_DIR, env.TO_OWNER_FILE || process.env.FD_TO_OWNER_FILE || "to-owner.json"), env.REPO, q.heading);
       choice.forwarded = q.heading;
       record({ kind: "product choice forwarded", release: plan.id, item: Number(n), what: `owner-issue question ${q.number} "${q.heading}" handed to the questions helper's plain-words path` });
       save();

@@ -121,7 +121,7 @@ test("an acting run on a release cannot destroy its supervision: no new privileg
 
 test("an owner pause only with his own Telegram user id and the message it came from", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ps-")); const f = path.join(dir, "pauses.json");
-  assert.throws(() => setPause(f, { target: "hold", why: "x", telegramUser: "999", messageId: "1" }, ["555"]), /only Michael's own Telegram user id/);
+  assert.throws(() => setPause(f, { target: "hold", why: "x", telegramUser: "999", messageId: "1" }, ["555"]), /only the owner's own Telegram user id/);
   assert.throws(() => setPause(f, { target: "hold", why: "x", telegramUser: "555" }, ["555"]), /id of the message/);
   setPause(f, { target: "hold", why: "x", telegramUser: "555", messageId: "1" }, ["555"]);
   assert.equal(JSON.parse(fs.readFileSync(f, "utf8"))[0].messageId, "1");

@@ -14,6 +14,7 @@
 // obstacle's history, running helpers, what Michael was told), ledger.json, decisions.jsonl (every
 // action), heartbeat (the end of the last round), round.lock (pid; a dead pid's lock is taken over),
 // helpers/<unit>/ (ai.mjs).
+import "./readonly.mjs"; // first: a --dry-run changes nothing
 import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -32,6 +33,8 @@ import { actDefaults as onDutyDefaults, launchAct, actResult, markHandled, answe
 import { aiDefaults, providers, factoryProvider, ladderCandidates, launchHelper, helperResult, refreshTokens, checkJson, helperDir, UNIT_RE } from "./ai.mjs";
 import { applyReport, applyDueDefaults, actDefaults, notify, plain } from "./act.mjs";
 import { housekeep, hkDefaults } from "./housekeeping.mjs";
+import { stepRound, stepEntries, stepStatus, discoverSteps, runStep } from "./steps.mjs";
+import { loadSettings, DEFAULT_DIR } from "./settings.mjs";
 import { fileCauses, causeDefaults } from "./causes.mjs";
 import { countRescues } from "./rescues.mjs";
 import { forgeArgv } from "./release-driver/release-driver-owner-steps.mjs";
@@ -189,6 +192,18 @@ export async function round(env, deps = {}) {
     out.releasesStatus = (world.releases || []).map(r => ({ id: r.id, approvedAt: (ledger[`release:${r.id}`] || {}).firstSeenAt || null, lastMilestoneAt: (ledger[`release:${r.id}`] || {}).lastMilestoneAt || null }));
     state.superseded ||= {};
     for (const r of world.superseded || []) if (!state.superseded[r.id]) { state.superseded[r.id] = nowIso; record({ kind: "release superseded", release: r.id, version: r.version, by: r.by, why: `${r.version} is approved but older than ${r.by}, which is installed on the server; it is not driven` }); }
+    // ---- the steps (steps.mjs): collect what their children wrote, start the ones that are due, run the inline ones; their health becomes entries
+    let stepRes = { launched: [], collected: [], running: {}, errors: [] }, stepEnts = [];
+    if (deps.stepsCtx) {
+      try {
+        stepRes = await stepRound({ ...deps.stepsCtx, state, now, dry, log, node: env.NODE }, deps.stepDeps || {});
+        for (const x of stepRes.collected) record({ kind: "step finished", step: x.name, ok: x.ok, summary: x.summary });
+        for (const n of stepRes.launched) record({ kind: "step started", step: n });
+        for (const e of stepRes.errors) record({ kind: "step runner failed", why: e });
+        stepEnts = stepEntries(state, deps.stepsCtx.steps, deps.stepsCtx.settings, now);
+      } catch (e) { record({ kind: "steps failed", why: String(e.message).slice(0, 200) }); }
+    }
+    const withSteps = a => (a ? { ...a, stepRuns: stepRes.running } : a);
     const title = ob => { const f = ob.ticketKey ? findTicket(world, ob.ticketKey) : null; return f ? f.ticket.title : ""; };
 
     // ---- helpers that finished: the report goes into the obstacle's history and is acted on
@@ -366,10 +381,10 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     // the credit used so far: the journal's, plus any debt a failed write left in the state (it fails closed: never refilled)
     const debt = (state.creditDebt ||= {});
     const credits = { ...jv.credits }; for (const [k, ms] of Object.entries(debt)) credits[k] = (credits[k] || 0) + ms; for (const [k, ms] of Object.entries(roundCredit)) credits[k] = (credits[k] || 0) + ms;
-    let activity = null; try { activity = await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, world); } catch { activity = null; }
+    let activity = null; try { activity = withSteps(await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, world)); } catch { activity = null; }
     let entries = [];
     let invCtx = null;
-    try { entries = buildInventory(world, ledger, obstacles, invCtx = { now, stage, stageSince: stageStalled(stage) ? state.stageWatch : null, approvals: world.approvals || {}, pauses, activity, credits: credits, journalView: jv, journalOk: jread.ok, journalWhy: jread.why, coverageBad, clock, undelivered, nextRelease }); }
+    try { entries = buildInventory(world, ledger, obstacles, invCtx = { now, stepEntries: stepEnts, stage, stageSince: stageStalled(stage) ? state.stageWatch : null, approvals: world.approvals || {}, pauses, activity, credits: credits, journalView: jv, journalOk: jread.ok, journalWhy: jread.why, coverageBad, clock, undelivered, nextRelease }); }
     catch (e) { record({ kind: "inventory failed", why: String(e.message).slice(0, 300) }); out.inventoryFailed = String(e.message).slice(0, 300); }
     const force = new Set(steps.filter(s => s.do === "act").map(s => `ob:${s.ob.id}`)); // a helper said "external", or a cause nobody knows: rung 1 now
     const runsToday = state.actRuns.filter(r => now - r.at < 24 * HR).length;
@@ -387,7 +402,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       try { appendEvents(journalFile, [...ce, ...owed]); for (const k of Object.keys(debt)) delete debt[k]; }
       catch (e) { for (const x of ce) debt[x.key] = (debt[x.key] || 0) + x.ms; record({ kind: "credit not written", why: String(e.message).slice(0, 160) }); } // fails closed: the debt counts until it is written
     }
-    out.journalHead = jread.head; out.clock = clock; out.inventory = adv.rows; out.violations = adv.violations.length; out.actRunsToday = runsToday; out.pauses = pauses;
+    out.stepStatus = deps.stepsCtx ? stepStatus(state, deps.stepsCtx.steps, deps.stepsCtx.settings, stepRes.running) : {}; out.journalHead = jread.head; out.clock = clock; out.inventory = adv.rows; out.violations = adv.violations.length; out.actRunsToday = runsToday; out.pauses = pauses;
     // one sentence per entry; when many reach rung 3 together (an old backlog), ONE message names the count and the first three
     const allTells = adv.actions.tell, singles = allTells.filter(r => r.entry.remindOnly || r.entry.reminder);
     // THE GATE (gate.mjs): nothing reaches Michael on one reading. (a) the same condition on 3 reads at least 10 minutes apart; (b) a fresh re-read of
@@ -499,7 +514,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     }
     let L = adv.actions.launch;
     if (L && !dry && entries.length) { // work may have started since the round began (auto-stage's STOP, a run): look again right before launching
-      try { const again = await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, world); const m = heldUntil(L.entry, again && { ...again, waitingOnMain: !!(stage && /(main'?s?\b[^.]*\b(required check|Windows setup|image))|(image\b[^.]*not in the registry)/i.test(String(stage.reason || ""))), releaseId: (stage && stage.id) || undefined, onlyRelease: jv.open.length === 1 ? jv.open[0].id : null }, world, credits, now); if (Number.isFinite(m) && m > now) { record({ kind: "acting run held", entry: L.entry.id, why: "work started on it meanwhile" }); L = null; } } catch { /* unreadable: launch as decided */ }
+      try { const again = withSteps(await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, world)); const m = heldUntil(L.entry, again && { ...again, waitingOnMain: !!(stage && /(main'?s?\b[^.]*\b(required check|Windows setup|image))|(image\b[^.]*not in the registry)/i.test(String(stage.reason || ""))), releaseId: (stage && stage.id) || undefined, onlyRelease: jv.open.length === 1 ? jv.open[0].id : null }, world, credits, now); if (Number.isFinite(m) && m > now) { record({ kind: "acting run held", entry: L.entry.id, why: "work started on it meanwhile" }); L = null; } } catch { /* unreadable: launch as decided */ }
     }
     if (L && !dry) {
       const names = list.map(p => p.name), first = [...(L.c.tries || [])].reverse().find(t => t.rung === 1); // the latest rung 1 try
@@ -744,15 +759,19 @@ export function statusOf(out, nowIso, now, state = {}) {
     unannounced: rows.filter(r => r.rung === 3 && !r.entry.told && !r.c.told).map(r => r.entry.id),
     byRung: [0, 1, 2, 3].map(k => rows.filter(r => r.rung === k).length),
     rung3: rows.filter(r => r.rung === 3 && !r.entry.told).map(r => ({ id: r.entry.id, title: String(r.entry.title).slice(0, 160), since: new Date(r.c.rungSince).toISOString(), text: entryTellText(r, now), toldAt: r.c.toldAt || null })),
+    steps: out.stepStatus || {},
     rows: rows.filter(r => r.rung > 0).map(r => ({ id: r.entry.id, kind: r.entry.kind, title: String(r.entry.title).slice(0, 120), rung: r.rung, deadline: Number.isFinite(r.deadline) ? new Date(r.deadline).toISOString() : null })) };
 }
-// auto-stage's own look at the newest approved release (a dry run: it writes nothing), or null.
+// The stage step's own account of its look at the newest approved release (the words auto-stage printed for a dry run),
+// which the step writes into its state folder (steps.stage.state_dir) as look.txt after every run. Nothing here waits on another
+// program: a missing or day-old file is "not known" (null), which the inventory treats as no stage reading at all.
 export async function stageLookReal(env) {
-  const script = path.join(env.DEV_CHECKOUT, "scripts/release/auto-stage.mjs");
-  if (!fs.existsSync(script)) return null;
-  const keys = Object.fromEntries((() => { try { return fs.readFileSync(env.ACT.KEYS_FILE, "utf8").split("\n"); } catch { return []; } })().map(l => /^([A-Z0-9_]+)=(.*)$/.exec(l.trim())).filter(Boolean).map(m => [m[1], m[2].replace(/^["']|["']$/g, "")]));
-  const r = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", script, "--dry-run"], { cwd: env.DEV_CHECKOUT, encoding: "utf8", timeout: 150000, env: { PATH: SYSTEM_PATH, HOME: "/root", LANG: "C.UTF-8", ...keys } });
-  return `${r.stdout || ""}\n${r.stderr || ""}`;
+  const file = env.STAGE_LOOK_FILE || (env.AUTO_STAGE_STATE ? path.join(path.dirname(env.AUTO_STAGE_STATE), "look.txt") : "");
+  if (!file) return null;
+  try {
+    if (Date.now() - fs.statSync(file).mtimeMs > 24 * HOUR) return null;
+    return fs.readFileSync(file, "utf8");
+  } catch { return null; }
 }
 
 // ---------------------------------------------------------------- the dry run's account
@@ -777,11 +796,36 @@ export function describe(out) {
   return lines.join("\n");
 }
 
+// ---------------------------------------------------------------- the command
+//   node driver.mjs [--settings-dir <dir>] [--dry-run]        one round
+//   node driver.mjs --step <name> [--clear-halt] [--settings-dir <dir>] [--dry-run]    one step, writing its last.json
+// The settings (settings.mjs) are read first and put into the environment the modules read; a missing key is named and nothing runs.
+export async function cli(argv = process.argv.slice(2), io = {}) {
+  const log = io.log || (s => console.log(s)), err = io.err || (s => console.error(s));
+  const opt = k => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : undefined; };
+  const dir = opt("--settings-dir") || process.env.FD_SETTINGS_DIR || DEFAULT_DIR;
+  const dry = argv.includes("--dry-run");
+  let found, loaded;
+  try {
+    found = await discoverSteps();
+    loaded = loadSettings(dir, { stepSettings: found.steps.map(s => s.SETTINGS) });
+  } catch (e) { err(e.message); return 1; }
+  Object.assign(process.env, loaded.env);
+  const base = { settings: loaded.settings, main: loaded.main, projects: loaded.projects, env: loaded.env, settingsDir: dir, dry, argv, clearHalt: argv.includes("--clear-halt"), log };
+  if (opt("--step")) {
+    const mod = found.steps.find(s => s.name === opt("--step"));
+    if (!mod) { err(`there is no step ${opt("--step")} (${found.steps.map(s => s.name).join(", ") || "none installed"})`); return 2; }
+    const r = await runStep(mod, base);
+    log(JSON.stringify(r));
+    return 0; // the result is in last.json; a failed step is the runner's business, not a failed unit
+  }
+  const env = driverDefaults(process.env, dry ? [...argv, "--dry-run"] : argv);
+  const out = await round(env, { stepsCtx: { ...base, steps: found.steps }, ...(io.deps || {}) });
+  if (out.busy) return 0;
+  if (env.DRY) log(describe(out));
+  else log(`round: ${out.obstacles.length} obstacle(s), ${out.collected.length} helper(s) collected, ${out.launched.length} launched (${out.launched.map(l => `${l.kind} ${l.obstacleKind}`).join(", ") || "none"}), housekeeping ${out.housekeeping.done.length} done / ${out.housekeeping.failed.length} not, ${out.applied.length} applied`);
+  return 0;
+}
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  const env = driverDefaults();
-  round(env).then(out => {
-    if (out.busy) return;
-    if (env.DRY) console.log(describe(out));
-    else console.log(`round: ${out.obstacles.length} obstacle(s), ${out.collected.length} helper(s) collected, ${out.launched.length} launched (${out.launched.map(l => `${l.kind} ${l.obstacleKind}`).join(", ") || "none"}), housekeeping ${out.housekeeping.done.length} done / ${out.housekeeping.failed.length} not, ${out.applied.length} default(s) applied`);
-  }, e => { console.error(e.stack || e.message); process.exit(1); });
+  cli().then(code => { process.exitCode = code; }, e => { console.error(e.stack || e.message); process.exit(1); });
 }

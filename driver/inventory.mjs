@@ -92,6 +92,12 @@ export function movingUntilFor(e, activity, world) {
       if (activity.stop && Number.isFinite(Date.parse(activity.stop.at))) out.push(Date.parse(activity.stop.at) + ACTIVITY.stopHours * H);
     }
   }
+  // a step's child that is alive right now is visibly running: its own entry, and the release the stage step works on, are held until its time limit
+  for (const [name, r] of Object.entries(activity.stepRuns || {})) {
+    const until = Number.isFinite(r.startedAt) ? r.startedAt + (r.maxMin || 60) * 60000 : NaN;
+    if (e.step === name) out.push(until);
+    else if (isRelease && name === "stage" && (activity.releaseId ? activity.releaseId === e.release : activity.onlyRelease === e.release)) out.push(until);
+  }
   if (e.kind === "ticket" || e.ticketKey) {
     const item = e.issue ? (world.items || {})[e.issue] : null;
     const shas = new Set(((item && item.prs) || []).filter(p => p.state === "open" && p.headSha).map(p => p.headSha));
@@ -151,6 +157,8 @@ function buildEntries(world, ledger, obstacles, ctx) {
       }
     }
   };
+  // the steps' health: step:<name> (owner the driver) and halt:<name>:<key> (no owner: rung 1 at once), built by steps.mjs
+  for (const e of ctx.stepEntries || []) add(e);
   const obsByTicket = new Set((obstacles || []).filter(o => o && o.ticketKey).map(o => o.ticketKey));
   const jv = ctx.journalView || { open: [], releases: {} };
   const worldRel = new Map((world.releases || []).map(r => [r.id, r]));

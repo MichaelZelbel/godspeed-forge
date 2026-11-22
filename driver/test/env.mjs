@@ -51,5 +51,6 @@ export const TEST_ENV = {
   FD_VERSION_FILE: "/root/godspeed/.godspeed/integrated-runtime/version",
   FD_IMAGE_WORKFLOW_UNUSED: "",
   IMAGE_WORKFLOW: "v2-integrated.yml",
+  FD_TO_OWNER_FILE: "to-michael.json",
 };
 Object.assign(process.env, TEST_ENV);
