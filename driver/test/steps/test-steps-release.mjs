@@ -1,4 +1,4 @@
-// test cases: 10
+// test cases: 11
 // node driver/test/steps/test-steps-release.mjs
 // The three release steps (stage, plan, keep-main-green) as the driver calls them: what they ask of the
 // settings, what run() returns, and that a halt is returned and never sent. The helpers' own behaviour is
@@ -234,6 +234,33 @@ test("a real stage run writes look.txt that the driver's parseStage reads; a dry
   assert.match(after, /Not looked: GitHub said 401\./);
   assert.equal(parseStage(after).result, null, "a run that could not look leaves no result");
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a stage run in progress leaves its lines so far in look.txt, after every line", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "steps-look-live-"));
+  const c = ctxFor();
+  c.settings.steps.stage.state_dir = dir;
+  const file = path.join(dir, "look.txt");
+  const seen = [];
+  const look = async ({ log }) => {
+    log("Release r1 (1.0.0): approved.");
+    seen.push(fs.readFileSync(file, "utf8"));
+    log("Waiting: the scenarios are still running.");
+    seen.push(fs.readFileSync(file, "utf8"));
+    return { result: { outcome: "waiting" } };
+  };
+  const r = await stage.run({ ...c, dry: false, impl: { look } });
+  assert.equal(r.ok, true);
+  assert.equal(seen[0].trim().split(String.fromCharCode(10)).length, 1, "the first line is there while the run goes on");
+  assert.equal(seen[1].trim().split(String.fromCharCode(10)).length, 2);
+  assert.equal(parseStage(seen[1]).reason, "the scenarios are still running");
+  assert.equal(fs.readdirSync(dir).filter((n) => n.endsWith(".tmp")).length, 0, "no temporary file is left");
+  fs.rmSync(dir, { recursive: true, force: true });
+  const dry = fs.mkdtempSync(path.join(os.tmpdir(), "steps-look-dry-"));
+  c.settings.steps.stage.state_dir = dry;
+  await stage.run({ ...c, dry: true, impl: { look: async ({ log }) => { log("Release r1 (1.0.0): x."); return { result: { outcome: "waiting" } }; } } });
+  assert.deepEqual(fs.readdirSync(dry), [], "a dry run writes nothing, not even in progress");
+  fs.rmSync(dry, { recursive: true, force: true });
 });
 
 await runCases();

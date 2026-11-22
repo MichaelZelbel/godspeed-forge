@@ -66,6 +66,8 @@ export async function run(ctx) {
   const lines = [];
   const say = (line) => {
     lines.push(String(line));
+    // after every line: a run lasts up to 200 minutes, and the driver reads this file while it goes on
+    if (!dry) writeLook(p.env.AUTO_STAGE_STATE_DIR, lines);
     if (ctx.log) ctx.log(line);
   };
   try {
