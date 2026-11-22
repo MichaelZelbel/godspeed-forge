@@ -16,7 +16,8 @@ import { ticketKeyOf, releaseKeyOf, isWorking } from "./progress.mjs";
 
 export const H = 3600000;
 const ts = v => (v ? Date.parse(v) : NaN);
-export const CHAIN = { reservedForRelease: 4, actHours: 1, actHours2: 1, restartHours: 24, perDay: 8, sameItemHours: 6 };
+// perDay and reservedForRelease are the settings budget.act_runs_per_day and budget.reserved (8 and 4 unless set)
+export const CHAIN = { get reservedForRelease() { return Number(process.env.FD_ACT_RESERVED || 4); }, actHours: 1, actHours2: 1, restartHours: 24, get perDay() { return Number(process.env.FD_ACT_RUNS_PER_DAY || 8); }, sameItemHours: 6 };
 // rung 0 limits per kind of entry, in hours without a milestone
 export const LIMITS = { release: 2, stage: 2, ticket: null /* by size */, pr: 1, queue: 1, obstacle: 2 };
 export const SIZE_HOURS = { s: 4, m: 8, l: 16 };
