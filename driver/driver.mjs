@@ -33,7 +33,7 @@ import { actDefaults as onDutyDefaults, launchAct, actResult, markHandled, answe
 import { aiDefaults, providers, factoryProvider, ladderCandidates, launchHelper, helperResult, refreshTokens, checkJson, helperDir, UNIT_RE } from "./ai.mjs";
 import { applyReport, applyDueDefaults, actDefaults, notify, plain } from "./act.mjs";
 import { housekeep, hkDefaults } from "./housekeeping.mjs";
-import { stepRound, stepEntries, stepStatus, discoverSteps, runStep } from "./steps.mjs";
+import { stepRound, stepEntries, stepStatus, discoverSteps, runStep, stepContext, stepUnit, stepIsActive } from "./steps.mjs";
 import { loadSettings, defaultSettingsDir } from "./settings.mjs";
 import { fileCauses, causeDefaults } from "./causes.mjs";
 import { countRescues } from "./rescues.mjs";
@@ -807,7 +807,7 @@ export async function cli(argv = process.argv.slice(2), io = {}) {
   const dry = argv.includes("--dry-run");
   let found, loaded;
   try {
-    found = await discoverSteps();
+    found = io.found || await discoverSteps();
     loaded = loadSettings(dir, { steps: found.steps });
   } catch (e) { err(e.message); return 1; }
   Object.assign(process.env, loaded.env);
@@ -815,6 +815,17 @@ export async function cli(argv = process.argv.slice(2), io = {}) {
   if (opt("--step")) {
     const mod = found.steps.find(s => s.name === opt("--step"));
     if (!mod) { err(`there is no step ${opt("--step")} (${found.steps.map(s => s.name).join(", ") || "none installed"})`); return 2; }
+    // one run per step: the runner's own child (--scheduled) is the one that holds the unit; a person's run waits for it
+    if (!argv.includes("--scheduled") && !dry && (io.isActive || stepIsActive)(stepUnit(mod.name))) { err(`the ${mod.name} step is running right now (${stepUnit(mod.name)}); a second run is not started. Try again when it has ended.`); return 3; }
+    // --clear-halt <key> [--owner-said "<words>" --owner-ref "<ref>"]: the step's own clearHalt, never run()
+    const ci = argv.indexOf("--clear-halt"), key = ci >= 0 && argv[ci + 1] && !argv[ci + 1].startsWith("--") ? argv[ci + 1] : undefined;
+    if (ci >= 0 && typeof mod.module.clearHalt === "function") {
+      let r;
+      try { r = await mod.module.clearHalt(stepContext({ ...base, now: Date.now() }, mod), key, { ownerSaid: opt("--owner-said"), ownerRef: opt("--owner-ref") }); }
+      catch (e) { r = { ok: false, summary: "the halt was not cleared", error: String(e && e.message).slice(0, 300) }; }
+      log(JSON.stringify(r || { ok: false, summary: "the step answered nothing" }));
+      return r && r.ok ? 0 : 1; // not written to last.json: the step's next run says what still holds
+    }
     const r = await runStep(mod, base);
     log(JSON.stringify(r));
     return 0; // the result is in last.json; a failed step is the runner's business, not a failed unit

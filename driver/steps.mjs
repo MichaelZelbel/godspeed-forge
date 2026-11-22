@@ -60,6 +60,7 @@ export const lastFile = (settings, name) => path.join(stepFolder(settings, name)
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
 function writeJson(f, data) { fs.mkdirSync(path.dirname(f), { recursive: true }); const t = `${f}.${process.pid}.tmp`; fs.writeFileSync(t, JSON.stringify(data, null, 2) + "\n"); fs.renameSync(t, f); }
 
+export const stepIsActive = unit => spawnSync("systemctl", ["is-active", "--quiet", `${unit}.service`]).status === 0;
 const realDeps = {
   isActive: unit => spawnSync("systemctl", ["is-active", "--quiet", `${unit}.service`]).status === 0,
   unitResult: unit => String(spawnSync("systemctl", ["show", "-p", "Result", "--value", `${unit}.service`], { encoding: "utf8" }).stdout || "").trim(),
@@ -67,11 +68,14 @@ const realDeps = {
   readJson,
 };
 
+// The command that ends a halt, in the words a halt's brief gives: `node <driver_dir>/driver.mjs --step <step> --clear-halt <key> --settings-dir <dir>`.
+export const clearHaltCommand = (settings, settingsDir, step, key) => `node ${dig(settings, "server.driver_dir") || "<driver dir>"}/driver.mjs --step ${step} --clear-halt${key ? ` ${key}` : ""} --settings-dir ${settingsDir || "<settings dir>"}`;
+
 // What a step is given.
 export const stepContext = (base, mod, extra = {}) => ({
   settings: base.settings, main: base.main, projects: base.projects, env: base.env, settingsDir: base.settingsDir,
   now: base.now, log: base.log || (() => {}), dry: !!base.dry, argv: base.argv || [], clearHalt: !!base.clearHalt,
-  stateDir: stepConfig(base.settings, mod).stateDir, ...extra,
+  stateDir: stepConfig(base.settings, mod).stateDir, clearHaltCommand: (step, key) => clearHaltCommand(base.settings, base.settingsDir, step || mod.STEP.name, key), ...extra,
 });
 
 // A step's answer, taken into the runner's memory of it.
@@ -131,7 +135,7 @@ export async function stepRound(ctx, deps = {}) {
         "--setenv=HOME=/root", "--setenv=LANG=C.UTF-8",
         ...(dig(ctx.settings, "keys.env_file") ? ["-p", `EnvironmentFile=-${dig(ctx.settings, "keys.env_file")}`] : []), // the keys the old units read with EnvironmentFile=; the file is optional
         ...Object.entries(dig(ctx.settings, `steps.${name}.env`) || {}).map(([k, v]) => `--setenv=${k}=${v}`), // a step's own environment, from the settings
-        ctx.node || process.execPath, driverMjs, "--step", name, "--settings-dir", ctx.settingsDir || ""];
+        ctx.node || process.execPath, driverMjs, "--step", name, "--scheduled", "--settings-dir", ctx.settingsDir || ""];
       const r = D.systemdRun(argv);
       if (r.status === 0) { s.launchedAt = now; s.unit = unit; out.launched.push(name); out.running[name] = { startedAt: now, maxMin: cfg.max }; }
       else { apply(s, { ok: false, error: `could not start: ${String(r.stderr || "").trim().split("\n").pop() || `exit ${r.status}`}` }, now); s.launchedAt = now; s.settledLaunch = now; out.collected.push({ name, ok: false, summary: s.lastError }); }

@@ -34,7 +34,7 @@ const BANNED = [
   [/\bAX41\b|\bmc-vps\b/, "the first server's name"],
   [/godspeed-engine|godspeed-factory-watch|godspeed-mission-control/, "one of the first owner's repositories"],
 ];
-const ALLOWED = /github\.com\/MichaelZelbel\/godspeed-forge\b/g;
+const ALLOWED = /(?:github\.com|api\.github\.com\/repos)\/MichaelZelbel\/godspeed-forge\b/g;
 
 test("no shipped file names the first owner, his repositories, his server, his factory user or his key paths", () => {
   const files = shipped();

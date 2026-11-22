@@ -46,7 +46,7 @@ test("a step that is due is started as a transient unit of the driver, collected
   const out = await stepRound(mk(w), d);
   assert.deepEqual(out.launched, ["alpha"]);
   const argv = w.runs[0].join(" ");
-  for (const part of [`--unit=${stepUnit("alpha")}`, "--collect", "CollectMode=inactive-or-failed", "RuntimeMaxSec=1800", "/opt/driver/driver.mjs --step alpha --settings-dir /etc/example"]) assert.ok(argv.includes(part), part);
+  for (const part of [`--unit=${stepUnit("alpha")}`, "--collect", "CollectMode=inactive-or-failed", "RuntimeMaxSec=1800", "/opt/driver/driver.mjs --step alpha --scheduled --settings-dir /etc/example"]) assert.ok(argv.includes(part), part);
   assert.ok(!argv.includes("OnCalendar") && !/timer/i.test(argv), "no timer of its own");
   const w2 = world({ keys: { env_file: "/etc/x/keys-file" }, steps: { alpha: { env: { STAGING_ON_SERVER_ITSELF: "1" } } } });
   await stepRound(mk(w2), depsFor(w2));
@@ -236,4 +236,26 @@ test("the driver reads the hidden checks' tools in its own process through the t
   const bad = await readWorld(TEST_ENV, { gh: () => { throw new Error("no GitHub in a test"); }, sh: () => "", now: () => NOW, readReleases: () => [], readFile: () => { throw new Error("none"); }, readDir: () => [], toolCoverage: () => { throw new Error("the setting steps.test-machine.holdout is missing"); } });
   assert.equal(bad.tools, null);
   assert.ok(bad.unreadable.some(u => u.part === "tools" && /holdout is missing/.test(u.error)));
+});
+
+test("`driver.mjs --step <name> --clear-halt <key> --owner-said ... --owner-ref ...` calls the step's own clearHalt and never run(); a manual run refuses while the step's unit is active, the scheduled child does not", async () => {
+  const { cli } = await import("../driver.mjs");
+  const src = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "settings.example.json"), "utf8"));
+  const dir = tmp(); fs.mkdirSync(path.join(dir, "projects"));
+  const d = src["driver.json"]; d.server.state_dir = path.join(dir, "state");
+  fs.writeFileSync(path.join(dir, "driver.json"), JSON.stringify(d)); fs.writeFileSync(path.join(dir, "projects", "owner--repository.json"), JSON.stringify(src["projects/owner--repository.json"]));
+  const calls = [];
+  const mod = { ...fake("beta", { run: async ctx => { calls.push(["run", ctx.clearHalt]); return { ok: true, summary: "ran" }; } }), module: { clearHalt: async (ctx, key, o) => { calls.push(["clear", key, o.ownerSaid, o.ownerRef, ctx.settingsDir, ctx.clearHaltCommand("beta", "k")]); return { ok: true, summary: "cleared" }; } } };
+  const said = [], io = { found: { steps: [mod], errors: [] }, log: l => said.push(l), err: l => said.push(l), isActive: () => false };
+  assert.equal(await cli(["--step", "beta", "--clear-halt", "scenarios-lost", "--owner-said", "yes, run them", "--owner-ref", "msg 42", "--settings-dir", dir], io), 0);
+  assert.deepEqual(calls.at(-1).slice(0, 5), ["clear", "scenarios-lost", "yes, run them", "msg 42", dir]);
+  assert.match(calls.at(-1)[5], /driver\.mjs --step beta --clear-halt k --settings-dir /, "the command a halt's brief carries is built from the settings");
+  assert.equal(calls.filter(c => c[0] === "run").length, 0, "run() is not called for a clear");
+  assert.equal(fs.existsSync(lastFile({ server: { state_dir: d.server.state_dir } }, "beta")), false, "a clear is not a run: no last.json");
+  assert.equal(await cli(["--step", "beta", "--settings-dir", dir], io), 0);
+  assert.equal(calls.at(-1)[0], "run");
+  assert.equal(await cli(["--step", "beta", "--settings-dir", dir], { ...io, isActive: () => true }), 3);
+  assert.match(said.at(-1), /running right now/);
+  assert.equal(await cli(["--step", "beta", "--scheduled", "--settings-dir", dir], { ...io, isActive: () => true }), 0, "the runner's own child holds the unit and runs");
+  assert.equal(await cli(["--step", "nope", "--settings-dir", dir], io), 2);
 });
