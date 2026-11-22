@@ -2,13 +2,13 @@
 // stand-in gh and real git pushing to a repository on this machine: the factory's AI is configured, the seven
 // proposals are printed numbered and struck by number, the kept ones reach MISSION.md, the journeys and checks are
 // written, everything is committed and pushed, and a rerun picks up where a stop left it.
-// test cases: 17
+// test cases: 20
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  COMMIT_MESSAGE, FACTORY_MESSAGES, SCRATCH_FILE, STRIKE_ANSWER_MESSAGE, STRIKE_QUESTION, configureArchon, finishFactory,
+  COMMIT_MESSAGE, CONFIRM_ANSWER_MESSAGE, CONFIRM_QUESTION, FACTORY_MESSAGES, SCRATCH_FILE, STRIKE_ANSWER_MESSAGE, STRIKE_QUESTION, configureArchon, finishFactory,
   struckNumbers, withOutOfScope
 } from '../lib/factory-setup.mjs';
 import { InputClosed, ReportedSetupError, setupRepository } from '../lib/setup.mjs';
@@ -45,7 +45,7 @@ async function project({ workflows = false } = {}) {
   for (const [path, text] of Object.entries({
     'MISSION.md': TEMPLATE_MISSION, 'FACTORY.md': '# Factory\n', 'FACTORY_RULES.md': '# Rules\n', 'engineering.md': 'See the policy.\n',
     '.gitignore': '.factory/consumer.json\n.factory/backup/\n', '.ignore': '.factory/holdout/\n', '.claude/settings.json': '{"hooks": {}}\n',
-    'factory/consumer.py': '# stand-in\n', '.factory/consumer.json': '{"source": "/private/path"}\n', '.factory/holdout/HOLDOUT.md': '# Holdout scenarios\n',
+    'factory/consumer.py': '# stand-in\n', '.factory/consumer.json': '{"source": "/private/path"}\n', '.factory/holdout/HOLDOUT.md': '# Holdout scenarios\n', '.factory/hooks/holdout_fence.py': 'print("the fence")\n',
     'harness/END-TO-END.md': '# Runtime scenarios\n\nExample task-service data.\n\n## A person captures a task\n\n1. Add a task called `refill the kalimba humidifier`.\n',
     'harness/harness.config.json': JSON.stringify({ static: '', unit: '', unit_count_pattern: '', required_checks: '', protected_paths: 'MISSION.md,harness/**,.factory/**' }, null, 2)
   })) {
@@ -68,6 +68,17 @@ function world(p, { assistant = {}, gh = () => ({ stdout: '' }), agent = 'claude
       w.agentRuns += 1;
       if (assistant.fail) throw Object.assign(new Error('failed.'), { stderr: 'boom', stdout: '' });
       if (assistant.tamper) for (const path of ['MISSION.md', '.claude/settings.json']) await writeFile(join(options.cwd, path), 'tampered\n');
+      if (assistant.overreach) {
+        await writeFile(join(options.cwd, '.factory/hooks/holdout_fence.py'), 'print("the fence is open")\n');
+        await writeFile(join(options.cwd, '.factory/hooks/also.py'), 'print("new")\n');
+        await mkdir(join(options.cwd, 'harness/new-folder'), { recursive: true });
+        await writeFile(join(options.cwd, 'harness/new-folder/extra.md'), 'extra\n');
+        await writeFile(join(options.cwd, 'harness/extra.md'), 'extra\n');
+        await writeFile(join(options.cwd, 'MISSION.md'), 'rewritten by the assistant\n');
+        await rm(join(options.cwd, 'factory/consumer.py'));
+        await writeFile(join(options.cwd, 'notes.md'), 'outside the factory\n');
+        if (assistant.overreach === 'and fails') throw Object.assign(new Error('failed.'), { stderr: 'boom', stdout: '' });
+      }
       const entries = 'entries' in assistant ? assistant.entries : ENTRIES;
       if (entries) await writeFile(join(options.cwd, SCRATCH_FILE), JSON.stringify(entries));
       await writeFile(join(options.cwd, 'harness/END-TO-END.md'), assistant.journeys ?? JOURNEYS);
@@ -77,10 +88,16 @@ function world(p, { assistant = {}, gh = () => ({ stdout: '' }), agent = 'claude
     }
     throw new Error(`unexpected ${command}`);
   };
-  w.context = answers => ({
+  // answers: for the questions in order; confirms: for the question before anything is sent (yes unless given).
+  w.context = (answers, confirms = ['yes']) => ({
     repository: REPO, checkout: p.checkout, agent, agentName: agent === 'claude' ? 'Claude Code' : 'Codex', stateDirectory: p.state,
     commands: { run: w.run, names: { git: 'git', gh: 'gh' } }, config: {},
-    prompt: async question => { w.asked.push(question); const next = answers.shift(); if (next === undefined) throw new InputClosed(); return next; },
+    prompt: async question => {
+      w.asked.push(question);
+      const next = question === CONFIRM_QUESTION(REPO) ? confirms.shift() : answers.shift();
+      if (next === undefined) throw new InputClosed();
+      return next;
+    },
     output: line => w.said.push(line)
   });
   return w;
@@ -135,10 +152,17 @@ testCase('the seven proposals are printed numbered, the struck ones are dropped,
     'Claude Code is reading the project to propose what it must never become, the journeys its users take today and the checks it runs. This takes a few minutes.',
     'Claude Code proposes these seven things the project must never become:',
     ...ENTRIES.map((entry, index) => `${index + 1}. ${entry}`),
+    'Setup will add this to owner/app on GitHub:',
+    'The 5 things the project must never become that you kept.',
+    'These journeys of what the project does today:',
+    '1. A person adds a note',
+    '2. A person lists notes',
+    'The project\'s checks, and the files the build tools need to work.',
     'Setup added the project\'s mission, journeys and checks to owner/app on GitHub.'
   ]);
-  assert.deepEqual(w.asked, ['Type the numbers of any that are wrong, separated by spaces, or press Enter to keep all seven:']);
+  assert.deepEqual(w.asked, ['Type the numbers of any that are wrong, separated by spaces, or press Enter to keep all seven:', 'Type yes to add these to owner/app on GitHub, or no to stop here:']);
   assert.equal(STRIKE_QUESTION, w.asked[0]);
+  assert.equal(CONFIRM_QUESTION('owner/app'), w.asked[1]);
   const mission = await remoteFile(p, 'MISSION.md');
   assert(mission.includes('## Out of scope -- the factory must never build this\n\n<!--\n  THE SECTION THAT EARNS ITS KEEP.\n-->\n\n- A hosted service other people sign up for.\n- A plugin marketplace.\n- Team accounts with roles.\n- Paid plans.\n- An offline desktop version.\n\n## Hard invariants'), mission);
   assert(!mission.includes('A mobile app.') && !mission.includes('A built in chat.') && !mission.includes('<thing>'));
@@ -198,6 +222,42 @@ testCase('what the assistant must write and did not: each stop says so, and a re
     const again = world(p);
     await finishFactory(again.context(['']), { home: p.home });
     assert.equal(again.agentRuns, 1, 'the rerun asks the assistant again');
+  }
+}
+
+testCase('before anything is sent the owner sees what will be added and says yes; no stops with nothing sent, and a rerun asks again');
+{
+  const p = await project();
+  const before = (await git(['rev-parse', 'main'], p.remote)).stdout.trim();
+  const w = world(p);
+  assert.equal(await stopOf(finishFactory(w.context([''], ['maybe', 'no']), { home: p.home })), 'Setup stopped because you chose not to add these to owner/app yet, so nothing was sent to GitHub. Try setup again when you want to add them; it asks again.');
+  assert(w.said.includes(CONFIRM_ANSWER_MESSAGE) && CONFIRM_ANSWER_MESSAGE === 'Setup expects yes or no here, so it asks again.');
+  assert.equal((await git(['rev-parse', 'main'], p.remote)).stdout.trim(), before, 'nothing was pushed');
+  assert.equal((await git(['log', '-1', '--format=%s'], p.checkout)).stdout.trim(), 'seed', 'nothing was committed');
+  const again = world(p);
+  await finishFactory(again.context([], ['yes']), { home: p.home });
+  assert.equal(again.agentRuns, 0, 'the assistant is not asked again');
+  assert.deepEqual(again.asked, [CONFIRM_QUESTION('owner/app')], 'only the question it stopped at');
+  assert.equal(await remoteFile(p, 'harness/END-TO-END.md'), JOURNEYS);
+}
+
+for (const [how, outcome] of [['and fails', 'stops'], ['and finishes', 'goes on']]) {
+  testCase(`an assistant that changes the factory's own files ${how}: everything it must not touch is put back byte for byte and nothing new it made there is kept`);
+  const p = await project();
+  const w = world(p, { assistant: { overreach: how } });
+  const result = await stopOf(finishFactory(w.context(['']), { home: p.home }));
+  assert.equal(result, outcome === 'stops' ? 'Setup stopped because Claude Code did not finish reading the project. Try setup again.' : null);
+  assert.equal(await readFile(join(p.checkout, '.factory/hooks/holdout_fence.py'), 'utf8'), 'print("the fence")\n');
+  assert.equal(await readFile(join(p.checkout, 'factory/consumer.py'), 'utf8'), '# stand-in\n', 'a file it deleted is back');
+  for (const made of ['.factory/hooks/also.py', 'harness/extra.md', 'harness/new-folder']) await assert.rejects(stat(join(p.checkout, made)), made);
+  const mission = await readFile(join(p.checkout, 'MISSION.md'), 'utf8');
+  assert(!mission.includes('rewritten by the assistant'), mission);
+  if (outcome === 'goes on') {
+    const committed = (await git(['show', '--name-only', '--format=', 'main'], p.remote)).stdout.trim().split('\n').sort();
+    assert.deepEqual(committed, ['.claude/settings.json', '.factory/holdout/HOLDOUT.md', '.factory/hooks/holdout_fence.py', '.gitignore', '.ignore', 'FACTORY.md', 'FACTORY_RULES.md', 'MISSION.md', 'engineering.md', 'factory/consumer.py', 'harness/END-TO-END.md', 'harness/harness.config.json'], 'only the files known before it ran, the two it writes and MISSION.md');
+    assert.equal(await remoteFile(p, '.factory/hooks/holdout_fence.py'), 'print("the fence")\n');
+  } else {
+    assert.equal((await git(['log', '-1', '--format=%s'], p.checkout)).stdout.trim(), 'seed', 'nothing was committed');
   }
 }
 
@@ -272,13 +332,20 @@ testCase('a protected default branch: setup opens a pull request and merges it; 
     }
     return { stdout: '' };
   };
+  // A branch of the name setup would take first is already on GitHub: it is left exactly as it is.
+  const seed = join(p.root, 'seed');
+  await git(['push', '-q', p.remote, 'main:refs/heads/forge-setup-202611221234'], seed);
+  const taken = (await git(['rev-parse', 'forge-setup-202611221234'], p.remote)).stdout.trim();
+  const now = () => Date.parse('2026-11-22T12:34:56Z');
   const w = world(p, { gh });
-  assert.equal(await stopOf(finishFactory(w.context(['']), { home: p.home })), 'Setup stopped because owner/app takes changes only through a pull request that passes its checks, so setup opened one with the project\'s setup files. Once it is merged, try setup again: https://github.com/owner/app/pull/7');
-  assert.deepEqual(pr.created.slice(0, 8), ['pr', 'create', '--repo', 'owner/app', '--base', 'main', '--head', 'forge-setup']);
+  assert.equal(await stopOf(finishFactory(w.context(['']), { home: p.home, now })), 'Setup stopped because owner/app takes changes only through a pull request that passes its checks, so setup opened one with the project\'s setup files. Once it is merged, try setup again: https://github.com/owner/app/pull/7');
+  assert.deepEqual(pr.created.slice(0, 8), ['pr', 'create', '--repo', 'owner/app', '--base', 'main', '--head', 'forge-setup-202611221234-2']);
   assert.equal(pr.auto, true, 'GitHub is asked to merge it once its checks pass');
-  assert.equal((await git(['show', 'forge-setup:harness/END-TO-END.md'], p.remote)).stdout, JOURNEYS, 'the branch holds the files');
+  assert.equal((await git(['show', 'forge-setup-202611221234-2:harness/END-TO-END.md'], p.remote)).stdout, JOURNEYS, 'the new branch holds the files');
+  assert.equal((await git(['rev-parse', 'forge-setup-202611221234'], p.remote)).stdout.trim(), taken, 'the branch that was there is untouched');
+  assert(!w.calls.some(call => /\bpush\b.*(--force|-f\b|\+)/.test(call)), w.calls.join('\n'));
   const again = world(p, { gh });
-  await finishFactory(again.context([]), { home: p.home });
+  await finishFactory(again.context([]), { home: p.home, now });
   assert.deepEqual([again.agentRuns, again.asked], [0, []]);
   assert.deepEqual(again.said, ['Setup added the project\'s mission, journeys and checks to owner/app on GitHub.']);
 }
@@ -319,7 +386,7 @@ testCase('setup runs the factory\'s setup after the mission questions and before
     return w.run(command, args, options);
   };
   const said = [];
-  const answers = ['Notes.', 'People.', ''];
+  const answers = ['Notes.', 'People.', '', 'yes'];
   await setupRepository(REPO, {
     config: { ...defaults(p.root), projectsRoot: join(p.root, 'projects') }, paths: { state: join(p.root, 'state') }, commands: { run },
     github: { appStatus: async () => 'installed', begin: async m => ({ url: `https://example.test/${m.name}` }), callback: async () => 'c', exchange: async () => ({ id: 1, pem: 'K', slug: 's' }), install: async () => true },

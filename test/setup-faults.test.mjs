@@ -5,7 +5,7 @@
 // code (as real network failures do), and GitHub calls and questions as if the input closed. Every place in lib/ that reads or writes a file, runs a command, calls GitHub, asks a question
 // or takes that hold must be made to fail by some scenario here, so a new step that no scenario reaches fails
 // this test.
-// test cases: 19
+// test cases: 20
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { files } from '../lib/files.mjs';
 import { InputClosed, setupCommand } from '../lib/setup.mjs';
 import { signIn, AGENT_QUESTION, CODE_QUESTION } from '../lib/signin.mjs';
-import { createFactorySetup, STRIKE_QUESTION } from '../lib/factory-setup.mjs';
+import { createFactorySetup, CONFIRM_QUESTION, STRIKE_QUESTION } from '../lib/factory-setup.mjs';
 import { defaults } from '../lib/config.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { testCase } from './cases.mjs';
@@ -193,6 +193,10 @@ function standInStart(world) {
 
 // The stand-in coding assistant's answer: seven proposals, two journeys and the checks.
 async function assistantWrites(cwd, behaviour = {}) {
+  if (behaviour.overreach) {
+    await writeFile(join(cwd, 'harness/extra.md'), 'not the assistant\'s to write\n');
+    await writeFile(join(cwd, 'factory/consumer.py'), '# changed by the assistant\n');
+  }
   await writeFile(join(cwd, '.forge-out-of-scope.json'), JSON.stringify(['One.', 'Two.', 'Three.', 'Four.', 'Five.', 'Six.', 'Seven.']));
   await writeFile(join(cwd, 'harness/END-TO-END.md'), '# End-to-end journeys\n\n## A person signs in\n\n1. Open it.\n\n## A person signs out\n\n1. Close it.\n');
   await writeFile(join(cwd, 'harness/harness.config.json'), JSON.stringify({ static: '', unit: 'npm test', required_checks: behaviour.checksLeftEmpty ? '' : 'none', protected_paths: 'changed' }));
@@ -256,7 +260,7 @@ async function setup(world, { behaviour = {}, faults } = {}) {
   const output = [];
   const watched = faults ? { events: [], faults, fired: [] } : null;
   const github = Object.fromEntries(Object.entries(world.github).map(([op, call]) => [op, point('github', op, call)]));
-  const answers = { 'What is this software for?': 'Purpose.', 'Who uses it?': 'Users.', [AGENT_QUESTION]: 'claude', [CODE_QUESTION]: 'the code', [STRIKE_QUESTION]: '2 5' };
+  const answers = { 'What is this software for?': 'Purpose.', 'Who uses it?': 'Users.', [AGENT_QUESTION]: 'claude', [CODE_QUESTION]: 'the code', [STRIKE_QUESTION]: '2 5', [CONFIRM_QUESTION(repository)]: 'yes' };
   const start = startPoint(standInStart(world));
   current = watched;
   let code;
@@ -329,6 +333,8 @@ const SCENARIOS = [
   { name: 'signed out', finish: 'complete', behaviour: { signedOut: true } },
   // The default branch takes changes only through a pull request, whose first merge GitHub holds for its checks.
   { name: 'protected branch', finish: 'complete', behaviour: { protected: true } },
+  // The coding assistant also changes a file of the factory and adds one to the checks' folder: both are put back.
+  { name: 'assistant overreaches', finish: 'complete', behaviour: { overreach: true } },
   // The coding assistant names no CI checks for a project that has no CI workflows: none are required.
   { name: 'no checks named', finish: 'complete', behaviour: { checksLeftEmpty: true } },
   // #100: a temporary a stopped earlier run left beside its saves; the own pid with no save in flight is
