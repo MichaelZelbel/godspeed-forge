@@ -2,12 +2,12 @@
 // GitHub on 127.0.0.1, a stand-in bridge to Godspeed, a stand-in coding agent, project checkouts with an origin on
 // this machine and a stand-in factory/consumer.py. The acceptance of tickets 03 (questions reach the chat) and 04
 // (a finished release stages itself) of the Forge 0.1.0 plan, and ticket 02's facts. No network, no AI.
-// test cases: 14
+// test cases: 15
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { testCase } from './cases.mjs';
-import { fakeGithub, standInBridge, setUpProject, projectCheckout, tmpDir, assertPlain } from './forge-owner-fakes.mjs';
+import { fakeGithub, standInBridge, setUpProject, projectCheckout, standInGh, tmpDir, assertPlain } from './forge-owner-fakes.mjs';
 import * as questionsStep from '../driver/steps/owner-questions.mjs';
 import * as releasesStep from '../driver/steps/owner-releases.mjs';
 import { plan, go, status } from '../lib/owner/releases.mjs';
@@ -346,6 +346,37 @@ testCase('when GitHub refuses a step of putting a checked release up to try, the
   assert.equal(sentSince(n).length, 1);
   assert.match(sentSince(n)[0].text, /^refused 0\.1\.0 is ready to try: https:\/\/github\.example\/acme\/refused\/releases\/\d+\. Shall I make it public\? Reply go\.$/);
   assert.deepEqual(c.consumerLog(), ['pause', 'unpause'], 'the checks ran once');
+}
+
+testCase('a move of staging GitHub refuses the release App because it brings in a workflow change is made once with the owner\'s own sign-in; any other refusal is retried by the App and never uses it');
+{
+  const ownerGh = standInGh(gh);
+  const withGh = { settings: settings({ steps: { 'owner-releases': { python: 'python3', check_minutes: 1, gh: ownerGh.command } } }) };
+  const { co: c, project, issue } = await plannedProject('workflows', { unit: 'true' });
+  const sha = c.commit({ unit: 'true' }, 'changes a workflow');
+  gh.merge('acme/workflows', issue, sha);
+  gh.S.workflowShas.add(sha);
+  const n = bridge.sent.length;
+  const r = await releasesStep.run({ ...ctxFor([project]), ...withGh });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(gh.repo('acme/workflows').refs['heads/staging'], sha);
+  assert.deepEqual(ownerGh.calls(), [['api', '-X', 'POST', 'repos/acme/workflows/git/refs', '-f', 'ref=refs/heads/staging', '-f', `sha=${sha}`]]);
+  assert.equal(sentSince(n).length, 1);
+  assert.match(sentSince(n)[0].text, /^workflows 0\.1\.0 is ready to try: /);
+  await releasesStep.run({ ...ctxFor([project]), ...withGh });
+  assert.equal(ownerGh.calls().length, 1, 'once');
+  assert.equal(sentSince(n).length, 1);
+  // another refusal: the App's own failure, retried by the next run, and the owner's sign-in is never used
+  const other = await plannedProject('other-refusal', { unit: 'true' });
+  gh.merge('acme/other-refusal', other.issue, other.co.commit({ unit: 'true' }, 'change'));
+  gh.S.fail.push({ method: 'POST', path: /^\/repos\/acme\/other-refusal\/git\/refs$/, status: 403, times: 1, skip: 1 });
+  const m = bridge.sent.length;
+  assert.equal((await releasesStep.run({ ...ctxFor([other.project]), ...withGh })).ok, false);
+  assert.equal(releaseRecord(state, 'acme/other-refusal', '0.1.0').state, 'checked');
+  assert.equal((await releasesStep.run({ ...ctxFor([other.project]), ...withGh })).ok, true);
+  assert.equal(releaseRecord(state, 'acme/other-refusal', '0.1.0').state, 'staged');
+  assert.equal(sentSince(m).length, 1);
+  assert.equal(ownerGh.calls().length, 1, 'the owner\'s sign-in was not used for it');
 }
 
 testCase('an item closed without a merged pull request gives one sentence to the owner and no freeze');

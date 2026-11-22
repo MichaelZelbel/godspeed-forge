@@ -30,6 +30,7 @@ import {
   setUpProjects, updateFacts, releaseFacts, readQuestions, openQuestions, cleanVersion, projectName, nowMs, iso, readJson, hasAppDetails,
 } from "./owner/records.mjs";
 import { stageWords, releaseNotes } from "./owner/words.mjs";
+import { ownerBranchMove } from "./owner/owner-gh.mjs";
 import { runAs, shellAs } from "./owner/run.mjs";
 import { tokenFor, missingRecords, forgeState } from "./owner/access.mjs";
 import { TITLE as QUESTIONS_TITLE } from "./owner/questions.mjs";
@@ -39,6 +40,7 @@ export const SETTINGS = [
   { key: "forge.state_dir", required: false, default: DEFAULT_STATE, meaning: "the Forge's private state: setup's records, the App details and the release records" },
   { key: "forge.config", required: false, default: "/etc/godspeed-forge/config.json", meaning: "the Forge's own config, whose commands.python runs the factory's pause and unpause" },
   { key: "steps.owner-releases.python", required: false, default: "the Forge config's commands.python, else python3", meaning: "the Python that runs the factory's pause and unpause" },
+  { key: "steps.owner-releases.gh", required: false, default: "the Forge config's commands.gh, else gh", meaning: "the gh signed in as the owner, used only when GitHub refuses the release App a move of staging that brings in a change to the project's workflow files" },
   { key: "steps.owner-releases.check_minutes", required: false, default: 25, meaning: "how long one of the project's checks may run on a candidate" },
   { key: "steps.owner-releases.work_dir", required: false, default: "<server.work_root>/candidates", meaning: "where the temporary worktree of a candidate is made (the factory's account must be able to write there)" },
   { key: "projects[].profile.staging_url", required: false, default: "none: the pre-release's page", meaning: "per project: the address of the staging copy, sent as the link to try" },
@@ -55,12 +57,15 @@ const DAY = 24 * 3600 * 1000;
 export const olderStepStages = (settings, project) => !!(project && project.releases && dig(settings, "steps.stage.enabled") !== false);
 const profileOf = project => ({ ...(project || {}), ...((project && project.profile) || {}) });
 
-export function forgePython(settings) {
-  const own = dig(settings, "steps.owner-releases.python");
+// A command the Forge's own config names (commands.python, commands.gh), unless this step's settings name it.
+const forgeCommand = (settings, name, fallback) => {
+  const own = dig(settings, `steps.owner-releases.${name}`);
   if (own) return String(own);
   const config = readJson(dig(settings, "forge.config") || "/etc/godspeed-forge/config.json", null);
-  return (config && config.commands && config.commands.python) || "python3";
-}
+  return (config && config.commands && config.commands[name]) || fallback;
+};
+export const forgePython = settings => forgeCommand(settings, "python", "python3");
+export const forgeGh = settings => forgeCommand(settings, "gh", "gh");
 
 function authorKind(item, repository, settings) {
   const user = item.user || {};
@@ -304,7 +309,7 @@ async function putUp(ctx, gs, state, project, r, { rp, now, releaser }) {
   if (!pre) pre = await releaser.post(`${rp}/releases`, { tag_name: tag, target_commitish: commit, name: `${r.version} (to try)`, body: notes, prerelease: true, draft: false, make_latest: "false" });
   r.prerelease = { id: pre.id, url: pre.html_url };
   if (r.stagingBefore === undefined) r.stagingBefore = await refCommit(releaser, repository, "heads/staging");
-  await setBranch(releaser, repository, "staging", commit);
+  await setBranch(releaser, repository, "staging", commit, { ownerMove: ownerBranchMove(forgeGh(settings)) });
   await save();
   const profile = profileOf(project);
   if (profile.deploy || profile.health) {

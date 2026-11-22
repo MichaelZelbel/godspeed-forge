@@ -4,12 +4,19 @@ export const DEFAULT_API = "https://api.github.com";
 
 export class GithubError extends Error {
   constructor(method, path, status, message) {
-    super(`GitHub answered ${status || "nothing"} to ${method} ${path}${message ? ` (${message})` : ""}`);
+    super(`GitHub answered ${status || "nothing"} to ${method} ${path}${message ? ` (${String(message).slice(0, 200)})` : ""}`);
     this.name = "GithubError";
     this.status = status;
     this.path = path;
+    this.detail = String(message || "");
   }
 }
+
+// GitHub's refusal of a branch move by an App without the Workflows permission, when the move brings in changes
+// under .github/workflows/ ("refusing to allow a GitHub App to create or update workflow `...` without
+// `workflows` permission").
+export const WORKFLOW_REFUSAL = /refusing to allow a GitHub App to create or update workflow|without [`'"]?workflows[`'"]? permission/i;
+export const workflowRefusal = e => e instanceof GithubError && WORKFLOW_REFUSAL.test(e.detail);
 
 export const apiBase = api => String(api || process.env.FORGE_GITHUB_API_URL || DEFAULT_API).replace(/\/+$/, "");
 export const repoPath = repository => {
@@ -39,7 +46,7 @@ export function githubClient({ token, api, fetch: fetchImpl = globalThis.fetch }
     try { json = text ? JSON.parse(text) : null; } catch { json = null; }
     return { status: res.status, ok: res.ok, json };
   }
-  const fail = (method, path, r) => new GithubError(method, path, r.status, r.json && r.json.message ? String(r.json.message).slice(0, 200) : "");
+  const fail = (method, path, r) => new GithubError(method, path, r.status, r.json && r.json.message ? String(r.json.message) : "");
   return {
     request,
     async get(path) {
@@ -96,12 +103,20 @@ export async function refCommit(gh, repository, ref) {
 }
 
 // Points a branch at a commit: made when missing, moved (with force, never deleting anything) when there.
-// -> the commit the branch pointed at before, or null when it was made.
-export async function setBranch(gh, repository, branch, sha) {
+// ownerMove({ repository, branch, sha, exists }): how the branch is moved when GitHub refuses the App the move
+// only because it brings in a change under .github/workflows/ (the Apps have no Workflows permission, on
+// purpose): with the owner's own GitHub sign-in on this server (owner-gh.mjs). Tried once, for that refusal only;
+// any other refusal is the App's failure as it is. -> the commit the branch pointed at before, or null when made.
+export async function setBranch(gh, repository, branch, sha, { ownerMove } = {}) {
   const before = await refCommit(gh, repository, `heads/${branch}`);
   if (before === sha) return before;
-  if (before === null) await gh.post(`${repoPath(repository)}/git/refs`, { ref: `refs/heads/${branch}`, sha });
-  else await gh.patch(`${repoPath(repository)}/git/refs/heads/${branch.split("/").map(encodeURIComponent).join("/")}`, { sha, force: true });
+  try {
+    if (before === null) await gh.post(`${repoPath(repository)}/git/refs`, { ref: `refs/heads/${branch}`, sha });
+    else await gh.patch(`${repoPath(repository)}/git/refs/heads/${branch.split("/").map(encodeURIComponent).join("/")}`, { sha, force: true });
+  } catch (e) {
+    if (!ownerMove || !workflowRefusal(e)) throw e;
+    await ownerMove({ repository, branch, sha, exists: before !== null });
+  }
   return before;
 }
 

@@ -2,12 +2,12 @@
 // tokens they use (lib/app-token.mjs), against a stand-in GitHub on 127.0.0.1 and a stand-in bridge to Godspeed.
 // The acceptance of tickets 02 (filing) and 05 (go, take it back, release status) of the Forge 0.1.0 plan, and the
 // answer half of ticket 03. No network, no AI.
-// test cases: 11
+// test cases: 12
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { testCase } from './cases.mjs';
-import { fakeGithub, standInBridge, setUpProject, tmpDir, assertPlain } from './forge-owner-fakes.mjs';
+import { fakeGithub, standInBridge, setUpProject, standInGh, tmpDir, assertPlain } from './forge-owner-fakes.mjs';
 import { appToken, AppTokenError, forgetAppTokens } from '../lib/app-token.mjs';
 import { plan, go, takeBack, status } from '../lib/owner/releases.mjs';
 import { answer } from '../lib/owner/questions.mjs';
@@ -273,6 +273,42 @@ testCase('an answer is posted once as an Owner decision with the owner\'s words 
   assert.deepEqual(await answer({ id: 'a4', kind: 'answer', words: 'F2: keep it' }, ctx()), { ok: false, say: 'Question F2 was taken back by the my-app factory, so your answer was not passed on.' });
   assert.deepEqual(await answer({ id: 'a5', kind: 'answer', words: 'yes please' }, ctx()), { ok: false, say: 'Tell me which question you are answering, like F1, and your answer.' });
   assert.equal(app.comments['40'].length, 1, 'nothing more was posted');
+}
+
+testCase('a move of live GitHub refuses the release App because it brings in a workflow change is made once with the owner\'s own sign-in; any other refusal is a plain failure without it');
+{
+  const ownerGh = standInGh(gh);
+  const c = { ...ctx(), config: { commands: { gh: ownerGh.command } } };
+  const W = 'e'.repeat(40), L0 = 'f'.repeat(40);
+  for (const name of ['wf', 'wf2']) {
+    const full = `acme/${name}`;
+    setUpProject(state, gh, full);
+    Object.assign(gh.repo(full).refs, { 'heads/live': L0, 'tags/candidate/1.0.0': W });
+    await saveRelease(state, {
+      repository: full, version: '1.0.0', summary: 'One change.', later: '', words: 'yes', at: '2026-11-22T09:00:00Z', requestId: 'x', filedAt: '2026-11-22T09:00:00Z', state: 'staged',
+      items: [{ n: 1, title: 'A change', outcome: 'Something works.', size: 'light', why: 'A report.', issue: { number: 1 } }],
+      candidate: { commit: W, tag: 'candidate/1.0.0', at: '2026-11-22T09:30:00Z' }
+    });
+  }
+  gh.S.workflowShas.add(W);
+  const before = gh.S.calls.length;
+  const r = await go({ id: 'wf-go', kind: 'go', project: 'wf', words: 'go' }, c);
+  assert.equal(r.ok, true, r.say);
+  assert.match(r.say, /^wf 1\.0\.0 is public now: https:\/\/github\.example\/acme\/wf\/releases\/\d+$/);
+  assert.equal(gh.repo('acme/wf').refs['heads/live'], W, 'live shows the public version');
+  assert.deepEqual(ownerGh.calls(), [['api', '-X', 'PATCH', 'repos/acme/wf/git/refs/heads/live', '-f', `sha=${W}`, '-F', 'force=true']], 'the owner\'s sign-in moved live, once');
+  const writes = writesSince(before);
+  assert.deepEqual(writes.filter(w => w.role === 'owner').map(w => `${w.method} ${w.path}`), ['PATCH /repos/acme/wf/git/refs/heads/live']);
+  assert.ok(writes.filter(w => w.role !== 'owner').every(w => w.role === 'release'), 'the tag and the release stayed with the release App');
+  gh.S.workflowShas.add(L0);
+  assert.deepEqual(await takeBack({ id: 'wf-tb', kind: 'take-back', project: 'wf', words: 'take it back' }, c), { ok: true, say: 'wf 1.0.0 is taken back. There was no earlier version to return to, so the live copy stays on 1.0.0 until the next release.' });
+  assert.equal(gh.repo('acme/wf').refs['heads/live'], L0, 'take it back moved live back the same way');
+  assert.equal(ownerGh.calls().length, 2);
+  gh.S.fail.push({ method: 'PATCH', path: /^\/repos\/acme\/wf2\/git\/refs\/heads\/live$/, status: 403, times: 1 });
+  const refused = await go({ id: 'wf2-go', kind: 'go', project: 'wf2', words: 'go' }, c);
+  assert.deepEqual(refused, { ok: false, say: 'I could not finish making wf2 1.0.0 public: GitHub refused a step. Say go again in a few minutes and I will finish it.' });
+  assert.equal(gh.repo('acme/wf2').refs['heads/live'], L0, 'live did not move');
+  assert.equal(ownerGh.calls().length, 2, 'another refusal never uses the owner\'s sign-in');
 }
 
 testCase('every sentence the owner can get from these requests and steps is plain words: no long dash, no internal name, no item number, at most one link');

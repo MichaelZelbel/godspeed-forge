@@ -13,7 +13,10 @@ export const tmpDir = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
 // ---------------------------------------------------------------- GitHub
 export async function fakeGithub() {
-  const S = { repos: {}, apps: {}, installations: {}, tokens: {}, calls: [], fail: [], next: 1000, tokenCount: 0, expiresInMs: 3600 * 1000 };
+  // workflowShas: commits that bring in a change under .github/workflows/; GitHub refuses an App (no Workflows
+  // permission) a branch move to one of them, and lets the owner's own sign-in (token `owner-user-token`) make it.
+  const S = { repos: {}, apps: {}, installations: {}, tokens: { 'owner-user-token': { repository: '*', role: 'owner' } }, calls: [], fail: [], next: 1000, tokenCount: 0, expiresInMs: 3600 * 1000, workflowShas: new Set() };
+  const WORKFLOW_REFUSAL = { message: 'refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission' };
   const repo = full => {
     if (!S.repos[full]) S.repos[full] = { default_branch: 'main', issues: [], pulls: [], releases: [], refs: {}, comments: {}, checkRuns: [], latestId: null };
     return S.repos[full];
@@ -83,7 +86,7 @@ export async function fakeGithub() {
       }
       const who = S.tokens[auth.replace(/^Bearer\s+/i, '')];
       if (!who) return send(401, { message: 'Bad credentials' });
-      if (who.repository !== full) return send(404, { message: 'Not Found' });
+      if (who.repository !== full && who.repository !== '*') return send(404, { message: 'Not Found' });
       call.role = who.role;
       const r = repo(full);
       const page = rows => {
@@ -129,6 +132,7 @@ export async function fakeGithub() {
       if (rest === '/git/refs' && req.method === 'POST') {
         const ref = String(body.ref).replace(/^refs\//, '');
         if (r.refs[ref]) return send(422, { message: 'Reference already exists' });
+        if (ref.startsWith('heads/') && who.role !== 'owner' && S.workflowShas.has(body.sha)) return send(422, WORKFLOW_REFUSAL);
         r.refs[ref] = body.sha;
         return send(201, { ref: body.ref, object: { type: 'commit', sha: body.sha } });
       }
@@ -136,6 +140,7 @@ export async function fakeGithub() {
       if (m && req.method === 'PATCH') {
         const ref = decodeURIComponent(m[1]);
         if (!r.refs[ref]) return send(422, { message: 'Reference does not exist' });
+        if (who.role !== 'owner' && S.workflowShas.has(body.sha)) return send(422, WORKFLOW_REFUSAL);
         r.refs[ref] = body.sha;
         return send(200, { ref: `refs/${ref}`, object: { type: 'commit', sha: body.sha } });
       }
@@ -194,6 +199,31 @@ export async function fakeGithub() {
     return i;
   };
   return { url, S, repo, addApp, merge, issue, writes, close: () => new Promise(resolve => server.close(resolve)) };
+}
+
+// ---------------------------------------------------------------- the owner's own gh
+// A stand-in for this server's gh signed in as the owner: `gh api -X <method> <path> -f k=v -F k=v` against the
+// stand-in GitHub with the owner's token. -> { command, calls() } (each call's arguments, in order)
+export function standInGh(github, dir = tmpDir('forge-gh-')) {
+  const command = path.join(dir, 'gh');
+  const log = path.join(dir, 'calls.jsonl');
+  fs.writeFileSync(command, [
+    '#!/usr/bin/env node',
+    "const fs = require('fs');",
+    'const args = process.argv.slice(2);',
+    `fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + '\\n');`,
+    "let method = 'GET', target = '', body = {};",
+    'for (let i = 1; i < args.length; i++) {',
+    "  if (args[i] === '-X') method = args[++i];",
+    "  else if (args[i] === '-f' || args[i] === '-F') { const flag = args[i]; const raw = args[++i]; const at = raw.indexOf('='); let v = raw.slice(at + 1); if (flag === '-F' && (v === 'true' || v === 'false')) v = v === 'true'; body[raw.slice(0, at)] = v; }",
+    '  else target = args[i];',
+    '}',
+    `fetch(${JSON.stringify(github.url)} + '/' + target, { method, headers: { authorization: 'Bearer owner-user-token', 'content-type': 'application/json' }, body: method === 'GET' ? undefined : JSON.stringify(body) })`,
+    "  .then(async r => { const t = await r.text(); if (!r.ok) { process.stderr.write('gh: ' + t + ' (HTTP ' + r.status + ')\\n'); process.exit(1); } process.stdout.write(t); })",
+    "  .catch(e => { process.stderr.write(String(e) + '\\n'); process.exit(1); });",
+    ''
+  ].join('\n'), { mode: 0o755 });
+  return { command, calls: () => { try { return fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)); } catch { return []; } } };
 }
 
 // ---------------------------------------------------------------- the bridge to Godspeed
