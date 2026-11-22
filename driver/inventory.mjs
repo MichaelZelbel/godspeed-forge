@@ -21,8 +21,12 @@ export const CHAIN = { get reservedForRelease() { return Number(process.env.FD_A
 // rung 0 limits per kind of entry, in hours without a milestone
 export const LIMITS = { release: 2, stage: 2, ticket: null /* by size */, pr: 1, queue: 1, obstacle: 2 };
 export const SIZE_HOURS = { s: 4, m: 8, l: 16 };
-const OWNERS = { release: "auto-stage", stage: "auto-stage", ticket: "factory loop", pr: "factory loop", queue: "factory helpers", obstacle: "factory driver helpers", tomichael: "Michael" };
-export const RUNG_NAMES = ["normal owner", "acting run", "second acting run", "Michael told"];
+// How the owner is named in what the driver writes: the settings' server.name_in_messages (owner.name unless set),
+// which the settings put into FD_OWNER_NAME; "the owner" when there is none.
+export const ownerName = () => process.env.FD_OWNER_NAME || "the owner";
+const OWNERS = { release: "auto-stage", stage: "auto-stage", ticket: "factory loop", pr: "factory loop", queue: "factory helpers", obstacle: "factory driver helpers", get tomichael() { return ownerName(); } };
+export const RUNG_NAMES = ["normal owner", "acting run", "second acting run", "owner told"];
+export const rungName = k => (k === 3 ? `${ownerName()} told` : RUNG_NAMES[k]);
 
 // ---- auto-stage's own words: "Release <id> (<version>): ...", "Waiting: <reason> (for N minutes).", "Result: <r>."
 export function parseStage(text) {
@@ -173,7 +177,7 @@ function buildEntries(world, ledger, obstacles, ctx) {
   if (ctx.clock && (ctx.clock.ok === false || ctx.clock.backwards))
     add({ id: "clock", kind: "obstacle", obstacleKind: "clock", owner: null, title: "this machine's clock is wrong", milestoneAt: now, limitH: 0, evidence: [ctx.clock.backwards ? "time went backwards since the last round" : `the clock differs from GitHub's by ${Math.round(Math.abs(ctx.clock.skewMs) / 60000)} minutes`] });
   // (8.11) a notice without a receipt for 30 minutes is a stall of the delivery path
-  each("notice", ctx.undelivered, n => add({ id: `delivery:${n.id}`, kind: "obstacle", obstacleKind: "delivery", owner: null, title: `a message to Michael has no delivery receipt (${n.id})`, milestoneAt: n.since, limitH: 0, evidence: [`notice ${n.id} was written at ${new Date(n.since).toISOString()} and neither Telegram nor GitHub gave a receipt`] }));
+  each("notice", ctx.undelivered, n => add({ id: `delivery:${n.id}`, kind: "obstacle", obstacleKind: "delivery", owner: null, title: `a message to ${ownerName()} has no delivery receipt (${n.id})`, milestoneAt: n.since, limitH: 0, evidence: [`notice ${n.id} was written at ${new Date(n.since).toISOString()} and neither Telegram nor GitHub gave a receipt`] }));
 
   // the releases the journal holds open: each in its own try/catch (isolation), times from the journal only
   each("release", jv.open, jr => {
@@ -235,20 +239,20 @@ function buildEntries(world, ledger, obstacles, ctx) {
       evidence: [`left for Mission Control in the factory's queue since ${q.asked}: ${q.heading}`, `repository ${q.repo}; owner issue ${q.link || "unknown"}`, `question: ${String(q.question || "").slice(0, 3000)}`, `why it came to Mission Control: ${q.why || ""}`] });
   });
   each("to-michael", Object.entries(world.toMichael && !Array.isArray(world.toMichael) ? world.toMichael : {}).flatMap(([repo, list]) => (Array.isArray(list) ? list : []).map(h => ({ repo, h }))), x =>
-    add({ id: `tomichael:${queueKey(x.repo, x.h)}`, kind: "tomichael", title: `a question for Michael: ${x.h}`, milestoneAt: NaN, limitH: 72, owner: "Michael", remindOnly: true,
-      reminder: `A question about what the software does for its users is still waiting for your answer: ${String(x.h).slice(0, 140)}. Answer it in the chat and the factory goes on.`, evidence: [`a question of what the software does for its users, with Michael: ${x.h}`] }));
+    add({ id: `tomichael:${queueKey(x.repo, x.h)}`, kind: "tomichael", title: `a question for ${ownerName()}: ${x.h}`, milestoneAt: NaN, limitH: 72, owner: ownerName(), remindOnly: true,
+      reminder: `A question about what the software does for its users is still waiting for your answer: ${String(x.h).slice(0, 140)}. Answer it in the chat and the factory goes on.`, evidence: [`a question of what the software does for its users, with ${ownerName()}: ${x.h}`] }));
   // every pause: a HOLD, a PAUSE or STOP file, a deliberately parked project. Owner: Michael's decision, with a
   // reminder deadline (the expiry written in it, else 24 hours): the reminder is the sentence, never an acting run.
   each("pause", ctx.pauses, p => {
     const since = Number.isFinite(p.since) ? p.since : now;
     const when = new Date(since).toISOString().slice(0, 16).replace("T", " ");
     if (p.ownerRef) { // (8.8) his pause exists only with a reference to his own words; no expiry; one reminder a day
-      add({ id: `pause:${p.id}`, kind: "pause", owner: "Michael's decision", remindOnly: true, title: `${p.what} since ${when} UTC`, milestoneAt: since, limitH: Number.isFinite(p.expiresAt) ? Math.max(0, (p.expiresAt - since) / H) : 24,
+      add({ id: `pause:${p.id}`, kind: "pause", owner: `${ownerName()}'s decision`, remindOnly: true, title: `${p.what} since ${when} UTC`, milestoneAt: since, limitH: Number.isFinite(p.expiresAt) ? Math.max(0, (p.expiresAt - since) / H) : 24,
         reminder: `The factory is still paused since ${when} UTC (${p.what}); say continue or it stays paused.`, evidence: [`${p.what}: ${p.line || ""} (his words: ${p.ownerRef})`] });
     } else { // any other pause is a program's: no acting run ever undoes a pause (Michael may have parked it on purpose); he is told
-      add({ id: `pause:${p.id}`, kind: "pause-program", owner: "Michael's decision", remindOnly: true, title: `${p.what} since ${when} UTC (no record of who asked)`, milestoneAt: since, limitH: 24,
+      add({ id: `pause:${p.id}`, kind: "pause-program", owner: `${ownerName()}'s decision`, remindOnly: true, title: `${p.what} since ${when} UTC (no record of who asked)`, milestoneAt: since, limitH: 24,
         reminder: `${p.what} is still paused since ${when} UTC and nothing records who asked; say continue or it stays paused.`,
-        evidence: [`${p.what}: ${p.line || ""}`, "there is no pause record with a reference to Michael's own words; a program's stale STOP file is removed by housekeeping, anything else waits for his word, and he is reminded daily"] });
+        evidence: [`${p.what}: ${p.line || ""}`, `there is no pause record with a reference to ${ownerName()}'s own words; a program's stale STOP file is removed by housekeeping, anything else waits for his word, and he is reminded daily`] });
     }
   });
   // every obstacle the driver already has (its helpers are the rung 0 owner); a kind this code has never
@@ -345,7 +349,7 @@ export function advance(entries, chain0, now, opts = {}) {
   // the invariant, checked here and not trusted: every entry has an owner and a future deadline, or moved this round
   const violations = [];
   for (const r of rows) {
-    r.action = r === actions.launch ? "launch acting run" : actions.tell.includes(r) ? "tell Michael" : null;
+    r.action = r === actions.launch ? "launch acting run" : actions.tell.includes(r) ? `tell ${ownerName()}` : null;
     const ok = r.entry.owner !== null || r.rung >= 1;
     const future = r.deadline > now;
     if (!ok || !(future || r.moved || r.action)) violations.push(r);
@@ -357,6 +361,6 @@ export const violationEntry = r => ({ id: `invariant:${r.entry.id}`, kind: "obst
   evidence: [`entry ${r.entry.id} (${r.entry.kind}) had ${r.entry.owner === null ? "no owner" : "no future deadline"} at rung ${r.rung}`] });
 
 export const describeRow = (r, now) => {
-  const d = r.deadline === Infinity ? "with Michael" : `deadline ${new Date(r.deadline).toISOString().slice(0, 16).replace("T", " ")}Z${r.deadline <= now ? " (passed)" : ""}`;
-  return `${r.entry.kind} ${r.entry.title}: owner ${r.rung === 0 ? (r.entry.owner || "none") : RUNG_NAMES[r.rung]}, rung ${r.rung}, ${d}${r.moving ? ", MOVING: visibly working, not escalated" : ""}${r.action ? `, THIS ROUND: ${r.action}` : ""}`;
+  const d = r.deadline === Infinity ? `with ${ownerName()}` : `deadline ${new Date(r.deadline).toISOString().slice(0, 16).replace("T", " ")}Z${r.deadline <= now ? " (passed)" : ""}`;
+  return `${r.entry.kind} ${r.entry.title}: owner ${r.rung === 0 ? (r.entry.owner || "none") : rungName(r.rung)}, rung ${r.rung}, ${d}${r.moving ? ", MOVING: visibly working, not escalated" : ""}${r.action ? `, THIS ROUND: ${r.action}` : ""}`;
 };
