@@ -36,10 +36,13 @@ GitHub Apps in the repository owner's personal or organization account, then gui
 questions, then finishes the factory's own setup: it sets the factory's AI models for the coding assistant it
 found, has that assistant read the project and propose seven things it must never become (you strike the
 wrong ones by number), writes two to five journeys of what the project does today and the project's checks,
-and pushes these files to the default branch (or, where the branch takes changes only through a pull request,
-opens and merges one). It reports the setup checks. It completes only after both installations are confirmed
-and the checks succeed, and it leaves automatic work off until you say "run one lap" and then "turn on automatic
-work" in your chat; "pause the factory" stops it starting new work. Only one setup
+shows you what it will add and, on your yes, pushes these files to the default branch (or, where the branch takes
+changes only through a pull request, pushes them to a new branch of their own and opens and merges one). The
+assistant may write only the journeys and the checks: every other file of the factory is put back as it was after
+it runs. It reports the setup checks. It completes only after both installations are confirmed
+and the checks succeed, and it leaves automatic work off until you say "plan release" with the project's name,
+then "run one lap" and then "turn on automatic work" in your chat; "pause the factory" stops it starting new work.
+Only one setup
 per repository runs at a time; asking again while one is running says so and changes nothing.
 Asking for setup again after it completed checks that both Apps are still on GitHub and installed on
 the repository, that their saved details are still on this server and that the project's build tools
