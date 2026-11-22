@@ -28,11 +28,18 @@ at one pinned revision, the way his README asks a coding agent to, and everythin
 
 ## Status
 
-Ask Godspeed to “set up the Forge for `owner/repository`”. Setup uses a signed-in Claude Code or
-Codex account, installs the pinned factory, guides you through creating separate builder and release
+Ask Godspeed to “set up the Forge for `owner/repository`”. Before it downloads anything, setup signs the
+server in to GitHub (with permission to change workflow files) and to Claude Code or Codex when either is
+missing, showing the link and code of each tool's own sign-in, and reuses sign-ins that already work. It installs
+the pinned factory, guides you through creating separate builder and release
 GitHub Apps in the repository owner's personal or organization account, then guides you to install each App only on that repository. Setup asks the two mission
-questions and reports the setup checks. It completes only after both installations are confirmed
-and the checks succeed, and it leaves the schedule off until you explicitly start it. Only one setup
+questions, then finishes the factory's own setup: it sets the factory's AI models for the coding assistant it
+found, has that assistant read the project and propose seven things it must never become (you strike the
+wrong ones by number), writes two to five journeys of what the project does today and the project's checks,
+and pushes these files to the default branch (or, where the branch takes changes only through a pull request,
+opens and merges one). It reports the setup checks. It completes only after both installations are confirmed
+and the checks succeed, and it leaves automatic work off until you say "run one lap" and then "turn on automatic
+work" in your chat; "pause the factory" stops it starting new work. Only one setup
 per repository runs at a time; asking again while one is running says so and changes nothing.
 Asking for setup again after it completed checks that both Apps are still on GitHub and installed on
 the repository, that their saved details are still on this server and that the project's build tools
@@ -82,7 +89,10 @@ round --dry-run` shows what the driver would do and changes nothing, and `godspe
 
 Its settings are two kinds of file in one folder (root Linux: `/etc/godspeed-forge/`): `driver.json` for the server, and
 one `projects/<owner>--<repository>.json` for each repository. `driver/settings.example.json` shows every setting with
-placeholders. The install checks them and names anything missing before it changes anything.
+placeholders. The install checks them and names anything missing before it changes anything. When a server has no
+`driver.json` yet, setup writes one for its new owner: only the steps that work for any owner are on, the driver starts
+no AI runs of its own, and its notices go to the owner's Godspeed. A `driver.json` that is already there is never
+written over.
 
 ## License
 
