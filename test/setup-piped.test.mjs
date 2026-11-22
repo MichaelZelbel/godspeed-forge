@@ -70,7 +70,7 @@ async function pipedSetup({ piped = '', end = true, onOutput = () => {} } = {}) 
 
 {
   testCase('answers piped all at once answer each question in order');
-  const answers = ['no', 'https://example.com/?code=builder1', 'yes', 'no', 'https://example.com/?code=release1', 'yes', 'Keep releases dependable.', 'Small teams.', '7'];
+  const answers = ['no', 'https://example.com/?code=builder1', 'yes', 'no', 'https://example.com/?code=release1', 'yes', 'Keep releases dependable.', 'Small teams.', '7', 'yes'];
   const { stdout, stderr, code, root } = await pipedSetup({ piped: `${answers.join('\n')}\n` });
   const lines = stdout.split('\n');
   const complete = lines.findIndex(line => line.startsWith('Setup is complete for owner/repo.'));
@@ -93,6 +93,13 @@ async function pipedSetup({ piped = '', end = true, onOutput = () => {} } = {}) 
     'Claude Code proposes these seven things the project must never become:',
     '1. One.', '2. Two.', '3. Three.', '4. Four.', '5. Five.', '6. Six.', '7. Seven.',
     'Type the numbers of any that are wrong, separated by spaces, or press Enter to keep all seven: ',
+    'Setup will add this to owner/repo on GitHub:',
+    'The 6 things the project must never become that you kept.',
+    'These journeys of what the project does today:',
+    '1. A person signs in',
+    '2. A person signs out',
+    "The project's checks, and the files the build tools need to work.",
+    'Type yes to add these to owner/repo on GitHub, or no to stop here: ',
     "Setup added the project's mission, journeys and checks to owner/repo on GitHub."
   ], stdout);
   assert.equal(stderr, '');

@@ -1,17 +1,19 @@
 // The sign-ins setup runs before it downloads anything (lib/signin.mjs), with stand-ins for gh, Claude Code and
 // Codex: what is already signed in is reused without a word, a missing sign-in runs the tool's own sign-in and relays
 // its link and code in one plain sentence, and each stop says what happened and what to do.
-// test cases: 14
+// test cases: 15
 import assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline/promises';
+import { PassThrough } from 'node:stream';
 import {
   AGENT_ANSWER_MESSAGE, AGENT_QUESTION, CODE_QUESTION, GITHUB_LOGIN, SIGN_IN_MESSAGES, ensureAgentSignIn, ensureGithubSignIn,
   githubAccess, signIn
 } from '../lib/signin.mjs';
 import { start } from '../lib/process.mjs';
-import { setupRepository } from '../lib/setup.mjs';
+import { answersFrom, setupRepository } from '../lib/setup.mjs';
 import { defaults } from '../lib/config.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { testCase } from './cases.mjs';
@@ -138,13 +140,54 @@ testCase('neither assistant signed in: the owner picks one, a wrong answer is as
 testCase('Claude Code\'s own sign-in: its page is relayed, the pasted code goes to it and is never printed');
 {
   const w = server({ claude: false, codex: false });
-  await ensureAgentSignIn({ run: w.run, start: w.start, prompt: w.prompt(['claude', 'the-one-time-code']), output: w.output });
+  const secret = [];
+  const promptSecret = async question => { secret.push(question); return 'the-one-time-code'; };
+  await ensureAgentSignIn({ run: w.run, start: w.start, prompt: w.prompt(['claude']), promptSecret, output: w.output });
+  assert.deepEqual(secret, [CODE_QUESTION], 'the code is asked for with the question that does not show what is typed');
   assert.deepEqual(w.started, ['claude auth login']);
   assert.deepEqual(w.said, ['To sign this server in to Claude Code, open this page in your browser, sign in, and copy the code it shows: https://claude.ai/oauth/authorize?code=true&state=abc']);
   assert.equal(CODE_QUESTION, 'Paste the code here:');
   assert.deepEqual(w.written, ['the-one-time-code\n']);
   assert(!w.said.join('\n').includes('the-one-time-code'));
   assert.deepEqual(w.calls.slice(-1), ['claude auth status'], 'setup checks again after the sign-in');
+}
+
+testCase('at a terminal the pasted code is not shown and is kept out of its history; the next question shows what is typed again');
+{
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let shown = '';
+  output.on('data', chunk => { shown += chunk; });
+  const readline = createInterface({ input, output, terminal: true });
+  const answers = answersFrom(readline);
+  const asked = answers.secretQuestion('Paste the code here: ');
+  input.write('secret-code-123\r');
+  assert.equal(await asked, 'secret-code-123');
+  assert(shown.includes('Paste the code here: '), JSON.stringify(shown));
+  assert(!shown.includes('secret'), JSON.stringify(shown));
+  assert(shown.endsWith('\n'), 'the answer ends its line');
+  assert(!readline.history.includes('secret-code-123'));
+  const next = answers.question('Who uses it? ');
+  input.write('Small teams\r');
+  assert.equal(await next, 'Small teams');
+  assert(shown.includes('Small teams'), 'an ordinary answer is shown as it is typed');
+  readline.close();
+  // Input that closes while the code is asked for shows output again, so the stop that follows is seen.
+  const closing = createInterface({ input: new PassThrough(), output: new PassThrough(), terminal: true });
+  let after = '';
+  closing.output.on('data', chunk => { after += chunk; });
+  const closingAnswers = answersFrom(closing);
+  const waitingCode = closingAnswers.secretQuestion('Paste the code here: ');
+  closing.close();
+  await assert.rejects(waitingCode);
+  closing.output.write('Setup stopped.');
+  assert(after.endsWith('Paste the code here: \nSetup stopped.'), JSON.stringify(after));
+  const piped = createInterface({ input: new PassThrough(), output: new PassThrough(), terminal: false });
+  const pipedAnswers = answersFrom(piped);
+  const pipedAsked = pipedAnswers.secretQuestion('Paste the code here: ');
+  piped.input.write('piped-code\n');
+  assert.equal(await pipedAsked, 'piped-code', 'piped input is read as it comes');
+  piped.close();
 }
 
 testCase('Codex\'s own device sign-in: its link and code are relayed with the setting that may be needed first');
