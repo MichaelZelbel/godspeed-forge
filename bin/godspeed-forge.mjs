@@ -30,6 +30,7 @@ runSetupCommand(repository, async () => {
   return {
     paths: defaultPaths(), commands: { run }, github: createGithubAdapter({ input: answers }), input, answers,
     prompt: question => answers.question(`${question} `),
+    promptSecret: question => answers.secretQuestion(`${question} `),
     output: message => console.log(message),
     signIn: context => signIn({ ...context, start }),
     factorySetup: createFactorySetup(),
