@@ -4,7 +4,6 @@ import fs from "node:fs"; import os from "node:os"; import path from "node:path"
 import { fileURLToPath } from "node:url";
 import { testCase } from "../../../test/cases.mjs";
 import { STEP, SETTINGS, run, envFor, trustedFor } from "../../steps/trust.mjs";
-import { isTrusted } from "../../release-driver/release-driver-owner-steps.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 void here;
@@ -46,11 +45,8 @@ assert.ok(e2.STATE_DIR.endsWith("/acme--side") && e2.STATE_DIR.startsWith(path.j
 testCase("a pass neutralises a stranger's decision comment and leaves the owner's and the Apps' alone");
 {
   const c = clock(), calls = [];
-  const during = [];
   const gh = github("acme/app", calls);
-  const r = await run({ settings, projects: [main], main, env: {}, ...c, maxMinutes: 1, deps: { trustGh: (args, input) => { during.push(["boss", "acme-release[bot]", "stranger"].map(x => isTrusted(x)).join()); return gh(args, input); } } });
-  assert.ok(during.every(x => x === "true,true,false"), "while the pass runs, who may decide comes from the settings");
-  assert.equal(isTrusted("boss"), false, "and the list is as it was afterwards");
+  const r = await run({ settings, projects: [main], main, env: {}, ...c, maxMinutes: 1, deps: { trustGh: gh } });
   assert.equal(r.ok, true, r.summary);
   const patches = calls.filter(x => x.args[0] === "-X");
   assert.equal(patches.length, 1, "one comment neutralised");
@@ -93,16 +89,26 @@ testCase("the main project keeps the old state folder by its repository, whateve
   assert.equal(envFor({ settings: st, env: {} }, main, main.repository === main.repository).STATE_DIR, path.join(tmp, "order"));
 }
 
-testCase("who may decide is restored right after each pass, before any wait");
+testCase("who may decide travels with each pass: the owner and that project's Apps, project by project");
 {
-  const c = clock(); const during = [];
-  const before = ["boss", "x"].map(x => isTrusted(x)).join();
-  const sleepSeen = [];
-  const gh = () => { during.push(isTrusted("boss")); return []; };
-  await run({ settings: { ...settings, steps: { trust: { state_dir: path.join(tmp, "restore") } } }, projects: [main, other], main, env: {}, nowMs: c.nowMs, sleep: async ms => { sleepSeen.push(isTrusted("boss")); await c.sleep(ms); }, deps: { trustGh: gh } });
-  assert.ok(during.length >= 2 && during.every(x => x === true), "set while a pass runs");
-  assert.ok(sleepSeen.length >= 1 && sleepSeen.every(x => x === false), "never set during a wait");
-  assert.equal(["boss", "x"].map(x => isTrusted(x)).join(), before);
+  const c = clock(); const seen = {};
+  const gh = repo => args => { const m = /^repos\/([^/]+\/[^/]+)\/issues\/comments/.exec(String(args[0])); if (m) seen[m[1]] = (seen[m[1]] || 0) + 1; return []; };
+  assert.deepEqual(envFor({ settings, env: {} }, main, true).TRUSTED_LOGINS, ["boss", "acme-builder[bot]", "acme-release[bot]"]);
+  assert.deepEqual(envFor({ settings, env: {} }, other, false).TRUSTED_LOGINS, ["boss", "acme-builder[bot]"]);
+  assert.equal(envFor({ settings, env: {} }, main, true).OWNER_LOGIN, "boss");
+  // a comment of the main project's release App is a stranger's on the side project
+  const calls = [];
+  const gh2 = (args, input) => {
+    calls.push({ args, input });
+    const a = String(args[0]);
+    if (a === "-X") return {};
+    if (/issues\/comments/.test(a) && a.includes("acme/side")) return [{ id: 9, body: "Owner decision: x", user: { login: "acme-release[bot]" }, issue_url: "https://api.github.com/repos/acme/side/issues/3", html_url: "u", node_id: "N" }];
+    if (a === "repos/acme/side/issues/3") return { state: "open" };
+    return [];
+  };
+  await run({ settings: { ...settings, steps: { trust: { state_dir: path.join(tmp, "perproject") } } }, projects: [main, other], main, env: {}, ...c, maxMinutes: 1, deps: { trustGh: gh2 } });
+  assert.equal(calls.filter(x => x.args[0] === "-X").length, 1, "on the side project only its own App and the owner may decide");
+  void gh; void seen;
 }
 
 testCase("without keys.env_file the keys file is keys.env in the settings folder");

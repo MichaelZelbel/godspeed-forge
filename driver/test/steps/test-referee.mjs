@@ -3,6 +3,7 @@
 import { testCase } from "../../../test/cases.mjs";
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
 import { repairLook, copyEvidence, auditRepair } from "../../steps/test-machine/referee.mjs";
+process.env.FD_TRUSTED_LOGINS = "boss,godspeed-dev-builder[bot]"; process.env.FD_OWNER_LOGIN = "boss"; // who may decide comes from the settings
 
 const HOUR = 3600 * 1000, NOW = Date.parse("2026-11-15T20:00:00Z");
 const bot = { login: "godspeed-dev-builder", __typename: "Bot" };

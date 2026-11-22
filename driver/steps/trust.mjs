@@ -8,12 +8,10 @@
 // configuration from the settings, one pass for every project the driver looks after.
 //
 // Who may decide, per project: the owner (settings owner.github_login) and the project's own two Apps
-// (project apps.builder, apps.release). release-driver-owner-steps.mjs keeps that list in an exported
-// array, TRUSTED; this step sets it for each project before the pass.
+// (project apps.builder, apps.release); the pass receives it as env.TRUSTED_LOGINS.
 import fs from "node:fs";
 import path from "node:path";
 import { defaults, trustPass } from "../release-driver/release-driver.mjs";
-import { TRUSTED } from "../release-driver/release-driver-owner-steps.mjs";
 
 export const STEP = { name: "trust", everyMinutes: 2, maxMinutes: 9, inRound: false };
 export const SETTINGS = [
@@ -51,6 +49,7 @@ export function envFor(ctx, project, first) { // first: the main project, which 
   };
   const env = defaults(["--trust-only"], { ...(ctx.env || {}), ...Object.fromEntries(Object.entries(rd).filter(([, v]) => v !== undefined && v !== null && v !== "")) });
   env.OWNER_LOGIN = rd.OWNER_LOGIN;
+  env.TRUSTED_LOGINS = trustedFor(s, project); // who may decide travels with the call (trustLook reads env.TRUSTED_LOGINS)
   env.DRY = !!ctx.dry;
   return env;
 }
@@ -69,28 +68,24 @@ export async function run(ctx) {
   const nowMs = ctx.nowMs || realNow, sleep = ctx.sleep || realSleep, log = ctx.log || (() => {});
   const every = (ctx.everyMinutes || STEP.everyMinutes) * 60000, max = (ctx.maxMinutes || STEP.maxMinutes) * 60000;
   const started = nowMs();
-  const before = [...TRUSTED]; // release-driver-owner-steps.mjs keeps who may decide in this exported list
   let passes = 0, handled = 0;
   const failures = [];
   for (;;) {
     for (const project of projects) {
       const env = envFor(ctx, project, project.repository === main.repository);
-      TRUSTED.splice(0, TRUSTED.length, ...trustedFor(ctx.settings, project));
       // the log the old timer wrote: decisions.jsonl in the pass's own folder
       const record = e => { fs.mkdirSync(env.STATE_DIR, { recursive: true }); fs.appendFileSync(path.join(env.STATE_DIR, "decisions.jsonl"), JSON.stringify({ at: new Date().toISOString(), ...e }) + "\n"); };
       try {
-        const r = trustPass(env, ctx.deps || {}, nowMs(), record); // synchronous: TRUSTED is restored below before any wait
+        const r = trustPass(env, ctx.deps || {}, nowMs(), record);
         handled += r.handled || 0;
         if (r.busy) log(`trust pass on ${project.repository}: one is going already`);
       } catch (e) { try { record({ kind: "trust look failed", why: String(e.message).slice(0, 200) }); } catch {} failures.push(`${project.repository}: ${String(e.message).slice(0, 200)}`); log(`trust pass on ${project.repository} failed: ${e.message}`); }
-      finally { TRUSTED.splice(0, TRUSTED.length, ...before); }
     }
     passes++;
     const next = every - ((nowMs() - started) % every);
     if (nowMs() - started + next > max) break;
     await sleep(next);
   }
-  TRUSTED.splice(0, TRUSTED.length, ...before);
   const summary = `${passes} trust pass${passes === 1 ? "" : "es"} over ${projects.length} project${projects.length === 1 ? "" : "s"}, ${handled} handled${failures.length ? `; failed: ${failures.join("; ")}` : ""}`;
   return failures.length ? { ok: false, summary, error: failures.join("; ") } : { ok: true, summary };
 }
