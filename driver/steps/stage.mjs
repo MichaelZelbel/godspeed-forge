@@ -4,6 +4,7 @@
 // driver's settings and that what used to be a message "Mission Control has to look at it" is a halt the
 // driver owns. The messages that are a real result for the owner (it is on your server, shall I make it
 // public; some tests failed) are sent as before, with the same ids, into the same queue.
+import fs from "node:fs";
 import path from "node:path";
 import * as S from "./release/auto-stage.mjs";
 import { prepare, settingsFor, stepValue, stepStateDir, refuseMissing, read } from "./release/from-settings.mjs";
@@ -43,15 +44,38 @@ function prepared(ctx) {
   return { env };
 }
 
+// The account of a real run, in the words of the old dry run ("Release <id> (<version>): ...", "Waiting: ...
+// (for N minutes).", "Result: <outcome>."): the driver reads it from <state_dir>/look.txt and treats a missing
+// or day-old file as unknown. A dry run writes nothing.
+function writeLook(dir, lines) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "look.txt");
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, [...lines, ""].join(String.fromCharCode(10)));
+    fs.renameSync(tmp, file);
+  } catch {
+    /* the look is only for the driver's reading: a missing file is read as unknown */
+  }
+}
+
 export async function run(ctx) {
   const p = prepared(ctx);
   if (p.fail) return p.fail;
+  const dry = !!ctx.dry;
+  const lines = [];
+  const say = (line) => {
+    lines.push(String(line));
+    if (ctx.log) ctx.log(line);
+  };
   try {
-    const out = await ((ctx.impl && ctx.impl.look) || S.look)({ env: p.env, dry: !!ctx.dry, log: ctx.log || (() => {}), clearHaltCommand: (step, key) => clearCommandFor(ctx, step, key) });
+    const out = await ((ctx.impl && ctx.impl.look) || S.look)({ env: p.env, dry, log: say, clearHaltCommand: (step, key) => clearCommandFor(ctx, step, key) });
+    if (!dry) writeLook(p.env.AUTO_STAGE_STATE_DIR, out.error ? [...lines, `Not looked: ${out.error}`] : lines);
     if (out.error) return { ok: false, summary: "stage: the look could not be made", error: out.error };
     const r = out.result;
     return { ok: true, summary: `stage: ${r.outcome}${r.why ? ` (${r.why})` : ""}`, ...(out.halt ? { halt: out.halt } : {}) };
   } catch (e) {
+    if (!dry) writeLook(p.env.AUTO_STAGE_STATE_DIR, [...lines, `Not looked: ${e && e.message ? e.message : String(e)}`]);
     return { ok: false, summary: "stage: the look failed", error: e && e.message ? e.message : String(e) };
   }
 }

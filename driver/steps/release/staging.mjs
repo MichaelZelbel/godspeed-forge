@@ -233,7 +233,7 @@ export function healthWords(h) {
 
 // How a version is put on the server (checked on 26 October 2026, exit 0, backup made, same
 // instance kept): the product's own native installer at the candidate's commit, run as root on
-// /root/godspeed with Hermes' folder on PATH (without it the installer stops with "The original
+// the product folder with Hermes' folder on PATH (without it the installer stops with "The original
 // installer has not installed Hermes yet." and changes nothing) and GODSPEED_DIR unset. It builds
 // the screens and takes several minutes, so it runs detached, writes its exit code beside its log,
 // and is polled. The full public line (install-godspeed.sh) is not used here: its kit-bootstrap
@@ -444,7 +444,7 @@ ${installedMain ? `printf '%s\\n' main > ${g}/stage-ref\nrm -f ${g}/stage.json\n
 //
 // Which godspeed-model: the one the product's installer writes into the Hermes home of this
 // installation (beside it, as on the maintainer's server), then Hermes' default home, then root's
-// PATH, then where the add-ons look. It is asked with --workspace /root/godspeed, so it answers
+// PATH, then where the add-ons look. It is asked with --workspace <the product folder>, so it answers
 // with this installation's connection. A Godspeed older than godspeed-model has none: that is said
 // and is not a failure, unless one was there before and is gone.
 const FIND_MODEL = `m=""

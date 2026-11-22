@@ -1,4 +1,4 @@
-// test cases: 9
+// test cases: 10
 // node driver/test/steps/test-steps-release.mjs
 // The three release steps (stage, plan, keep-main-green) as the driver calls them: what they ask of the
 // settings, what run() returns, and that a halt is returned and never sent. The helpers' own behaviour is
@@ -15,6 +15,7 @@ import * as kmg from "../../steps/keep-main-green.mjs";
 import { prepare } from "../../steps/release/from-settings.mjs";
 import { clearCommandFor, makeHalt, plainHaltWords } from "../../steps/release/halts.mjs";
 import * as A from "../../steps/release/auto-stage.mjs";
+import { parseStage } from "../../inventory.mjs";
 import { cfg } from "../../steps/release/config.mjs";
 import * as S from "./release/stand-ins.mjs";
 
@@ -206,6 +207,31 @@ test("no shipped file of the release steps names an installation: no person's re
     const text = fs.readFileSync(f, "utf8");
     for (const b of banned) assert.doesNotMatch(text, b, `${path.relative(shipped, f)} must not contain ${b}`);
   }
+});
+
+test("a real stage run writes look.txt that the driver's parseStage reads; a dry run writes nothing", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "steps-look-"));
+  const c = ctxFor();
+  c.settings.steps.stage.state_dir = dir;
+  const look = async ({ log }) => {
+    log("Release godspeed-2.0.0-beta.9-x (2.0.0-beta.9): approved, newer than what the public has.");
+    log("Waiting: main's newest change has not passed its required check yet (for 75 minutes).");
+    log("Result: waiting.");
+    return { result: { outcome: "waiting" } };
+  };
+  const dry = await stage.run({ ...c, dry: true, impl: { look } });
+  assert.equal(dry.ok, true);
+  assert.equal(fs.existsSync(path.join(dir, "look.txt")), false, "a dry run writes nothing");
+  const real = await stage.run({ ...c, dry: false, impl: { look } });
+  assert.equal(real.ok, true);
+  const st = parseStage(fs.readFileSync(path.join(dir, "look.txt"), "utf8"));
+  assert.deepEqual(st, { id: "godspeed-2.0.0-beta.9-x", reason: "main's newest change has not passed its required check yet", minutes: 75, result: "waiting" });
+  const failed = await stage.run({ ...c, dry: false, impl: { look: async ({ log }) => { log("Release r (1.0.0): x."); return { error: "GitHub said 401." }; } } });
+  assert.equal(failed.ok, false);
+  const after = fs.readFileSync(path.join(dir, "look.txt"), "utf8");
+  assert.match(after, /Not looked: GitHub said 401\./);
+  assert.equal(parseStage(after).result, null, "a run that could not look leaves no result");
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 await runCases();
