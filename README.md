@@ -66,6 +66,24 @@ credentials subtree.
 The builder App has repository permissions for Contents, Pull requests, Issues, and Actions read/write, plus Checks, Commit statuses, and Metadata read. The release App has repository permissions for Contents and Pull requests read/write, plus Checks, Actions, and Metadata read. Neither App receives organization,
 Administration, Secrets, Members, Workflows, environment-secret, or Deployment permission.
 
+## The factory driver
+
+The factory driver keeps the factory and every approved release moving without you: it notices work that has
+stopped, starts a fixed number of AI helpers to unstick it, and tells you only what truly needs you, once, in plain
+words. A small keeper puts the last good version back when an update goes wrong, and a dead-man watches the driver
+from outside, so each can repair the other. The jobs that used to run on timers of their own (checking who may decide,
+asking you the product questions, watching that the hidden checks can run, keeping main green, planning and staging
+releases) are now steps of the driver.
+
+Setup installs it when it finishes as root on a Linux server with systemd. You can also install or upgrade it any
+time with `godspeed-forge driver install` (add `--switch` to turn off the older timers it replaces; they are switched
+off, never deleted, and `--watcher` puts the outside watcher into its GitHub repository). `godspeed-forge driver
+round --dry-run` shows what the driver would do and changes nothing, and `godspeed-forge driver status` says how it is.
+
+Its settings are two kinds of file in one folder (root Linux: `/etc/godspeed-forge/`): `driver.json` for the server, and
+one `projects/<owner>--<repository>.json` for each repository. `driver/settings.example.json` shows every setting with
+placeholders. The install checks them and names anything missing before it changes anything.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). This covers the Forge's own files only, not Cole Medin's factory or

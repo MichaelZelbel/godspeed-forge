@@ -37,7 +37,7 @@ export async function discoverSteps(dir = STEPS_DIR) {
     try {
       const m = await import(pathToFileURL(path.join(dir, n)).href);
       if (!m.STEP || !m.STEP.name || typeof m.run !== "function") { errors.push(`${n}: not a step (no STEP and run)`); continue; }
-      steps.push({ name: m.STEP.name, STEP: m.STEP, SETTINGS: m.SETTINGS || [], run: m.run, file: n });
+      steps.push({ name: m.STEP.name, STEP: m.STEP, SETTINGS: m.SETTINGS || [], run: m.run, file: n, module: m });
     } catch (e) { errors.push(`${n}: ${String(e.message).split("\n")[0]}`); }
   }
   return { steps, errors };
@@ -128,7 +128,10 @@ export async function stepRound(ctx, deps = {}) {
       const due = !s.launchedAt || now >= s.launchedAt + cfg.every * MIN;
       if (!due || ctx.dry) continue;
       const argv = [`--unit=${unit}`, "--collect", "--quiet", `--description=Factory driver step: ${name}`, "-p", `RuntimeMaxSec=${cfg.max * 60}`, "-p", "CollectMode=inactive-or-failed", "-p", "TimeoutStopSec=30",
-        "--setenv=HOME=/root", "--setenv=LANG=C.UTF-8", ctx.node || process.execPath, driverMjs, "--step", name, "--settings-dir", ctx.settingsDir || ""];
+        "--setenv=HOME=/root", "--setenv=LANG=C.UTF-8",
+        ...(dig(ctx.settings, "keys.env_file") ? ["-p", `EnvironmentFile=-${dig(ctx.settings, "keys.env_file")}`] : []), // the keys the old units read with EnvironmentFile=; the file is optional
+        ...Object.entries(dig(ctx.settings, `steps.${name}.env`) || {}).map(([k, v]) => `--setenv=${k}=${v}`), // a step's own environment, from the settings
+        ctx.node || process.execPath, driverMjs, "--step", name, "--settings-dir", ctx.settingsDir || ""];
       const r = D.systemdRun(argv);
       if (r.status === 0) { s.launchedAt = now; s.unit = unit; out.launched.push(name); out.running[name] = { startedAt: now, maxMin: cfg.max }; }
       else { apply(s, { ok: false, error: `could not start: ${String(r.stderr || "").trim().split("\n").pop() || `exit ${r.status}`}` }, now); s.launchedAt = now; s.settledLaunch = now; out.collected.push({ name, ok: false, summary: s.lastError }); }

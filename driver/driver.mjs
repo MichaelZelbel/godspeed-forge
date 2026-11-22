@@ -820,7 +820,10 @@ export async function cli(argv = process.argv.slice(2), io = {}) {
     return 0; // the result is in last.json; a failed step is the runner's business, not a failed unit
   }
   const env = driverDefaults(process.env, dry ? [...argv, "--dry-run"] : argv);
-  const out = await round(env, { stepsCtx: { ...base, steps: found.steps }, ...(io.deps || {}) });
+  // The hidden checks' tools are read in this process, by the test-machine step's own reading (toolCoverage(envFor(ctx))), not by a program started for it.
+  const tm = found.steps.find(s => s.name === "test-machine" && s.module && typeof s.module.toolCoverage === "function" && typeof s.module.envFor === "function" && (loaded.settings.steps || {})["test-machine"]?.enabled !== false);
+  const worldDeps = tm ? { toolCoverage: () => tm.module.toolCoverage(tm.module.envFor({ ...base, now: Date.now() })) } : {};
+  const out = await round(env, { stepsCtx: { ...base, steps: found.steps }, worldDeps, ...(io.deps || {}) });
   if (out.busy) return 0;
   if (env.DRY) log(describe(out));
   else log(`round: ${out.obstacles.length} obstacle(s), ${out.collected.length} helper(s) collected, ${out.launched.length} launched (${out.launched.map(l => `${l.kind} ${l.obstacleKind}`).join(", ") || "none"}), housekeeping ${out.housekeeping.done.length} done / ${out.housekeeping.failed.length} not, ${out.applied.length} applied`);

@@ -48,6 +48,9 @@ test("a step that is due is started as a transient unit of the driver, collected
   const argv = w.runs[0].join(" ");
   for (const part of [`--unit=${stepUnit("alpha")}`, "--collect", "CollectMode=inactive-or-failed", "RuntimeMaxSec=1800", "/opt/driver/driver.mjs --step alpha --settings-dir /etc/example"]) assert.ok(argv.includes(part), part);
   assert.ok(!argv.includes("OnCalendar") && !/timer/i.test(argv), "no timer of its own");
+  const w2 = world({ keys: { env_file: "/etc/x/keys-file" }, steps: { alpha: { env: { STAGING_ON_SERVER_ITSELF: "1" } } } });
+  await stepRound(mk(w2), depsFor(w2));
+  assert.ok(w2.runs[0].includes("EnvironmentFile=-/etc/x/keys-file") && w2.runs[0].includes("--setenv=STAGING_ON_SERVER_ITSELF=1"), "the keys file and a step's own environment reach the child");
   w.now = NOW + 5 * MIN; await stepRound(mk(w), d);
   assert.equal(w.runs.length, 1, "not due yet");
   w.now = NOW + 11 * MIN; const o2 = await stepRound(mk(w), depsFor(w, { active: true }));
@@ -224,4 +227,13 @@ test("units listed as replaced (legacy_units) are never factory timers, never mu
   const server = { failedUnits: ["auto-stage.service", "test-machine.service", "web.service"], anonymousFailedUnits: [], logins: {} };
   await housekeep({ ...env, ALLOWED_RESTART: undefined }, { server, timersToStart: ["auto-stage.timer", "archonfactory-x.timer"], factories: [] }, { run: (argv) => { calls.push(argv.join(" ")); return { status: 0, stdout: "", stderr: "" }; }, sleep: async () => {} });
   assert.ok(!calls.some(c => /auto-stage|test-machine/.test(c)), `nothing is done to a replaced unit: ${calls.join(" | ")}`);
+});
+
+test("the driver reads the hidden checks' tools in its own process through the test-machine step: its answer reaches the world, and a failure of it is only an unreadable part", async () => {
+  const { readWorld } = await import("../world.mjs");
+  const w = await readWorld(TEST_ENV, { gh: () => { throw new Error("no GitHub in a test"); }, sh: () => "", now: () => NOW, readReleases: () => [], readFile: () => { throw new Error("none"); }, readDir: () => [], toolCoverage: () => ({ ids: ["H-1", "H-2"], missing: [{ id: "H-2", why: "H-2 has no tool" }] }) });
+  assert.deepEqual(w.tools, { scenarios: 2, missing: [{ id: "H-2", why: "H-2 has no tool" }] });
+  const bad = await readWorld(TEST_ENV, { gh: () => { throw new Error("no GitHub in a test"); }, sh: () => "", now: () => NOW, readReleases: () => [], readFile: () => { throw new Error("none"); }, readDir: () => [], toolCoverage: () => { throw new Error("the setting steps.test-machine.holdout is missing"); } });
+  assert.equal(bad.tools, null);
+  assert.ok(bad.unreadable.some(u => u.part === "tools" && /holdout is missing/.test(u.error)));
 });
