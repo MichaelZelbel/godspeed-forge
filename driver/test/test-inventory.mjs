@@ -152,12 +152,33 @@ test("auto-stage's own words become an entry; open issues are the factory workin
   assert.equal((await shippingFallbacks({ REPO: "o/r" }, st, state, NOW + H, run)).length, 0, "once per commit within 2 hours");
 });
 
-test("the 8 a day budget: with it spent, every entry that wants a run goes to rung 3 and nothing waits", () => {
-  const es = ["a", "b", "c"].map(id => ({ id, kind: "ticket", owner: "factory loop", title: id, milestoneAt: NOW - 9 * H, limitH: 2, evidence: [] }));
-  const a = advance(es, {}, NOW, { runsToday: 8 });
-  assert.ok(a.rows.every(r => r.rung === 3 && r.noBudget)); assert.equal(a.actions.launch, null); assert.equal(a.actions.tell.length, 3);
-  const b = advance(es, {}, NOW, { runsToday: 3, slotFree: false });
-  assert.equal(b.actions.launch, null, "one at a time"); assert.ok(b.rows.every(r => r.rung === 1));
+test("the 8-run rolling budget keeps work on its acting rung until the first current run leaves the window", () => {
+  const es = ["a", "b"].map(id => ({ id, kind: "ticket", owner: "factory loop", title: id, milestoneAt: NOW - 9 * H, limitH: 2, evidence: [] }));
+  const actRuns = Array.from({ length: 8 }, (_, i) => ({ at: NOW - (23 - i) * H, entry: `run-${i}`, provider: "codex" }));
+  const prior = { b: { rung: 2, rungSince: NOW - H, milestone: NOW - 9 * H, launched: false, told: false, tries: [{ rung: 1, result: "unresolved" }] } };
+  const a = advance(es, prior, NOW, { actRuns });
+  assert.deepEqual(a.rows.map(r => r.rung), [1, 2]);
+  assert.equal(a.actions.launch, null); assert.deepEqual(a.actions.tell, []);
+  assert.ok(a.rows.every(r => r.deadline === NOW + H), "each waits for the earliest current run to leave the rolling window");
+  const b = advance(es, a.chain, NOW + H, { actRuns: actRuns.slice(1) });
+  assert.equal(b.actions.tell.length, 0); assert.equal(b.actions.launch.entry.id, "a", "capacity returning launches normally");
+});
+
+test("a fully used rolling budget refreshes backlog retry deadlines across unavailable rounds", () => {
+  const backlog = { id: "backlog", kind: "pr", backlog: true, owner: "factory loop", title: "old pull request", milestoneAt: NOW - 9 * H, limitH: 1, evidence: [] };
+  const actRuns = Array.from({ length: 8 }, (_, i) => ({ at: NOW - H - i, entry: `run-${i}`, provider: "codex" }));
+  let chain = {};
+  for (const after of [0, H, 12 * H]) {
+    const at = NOW + after;
+    const advanced = advance([backlog], chain, at, { actRuns, slotFree: false });
+    const row = advanced.rows[0];
+    assert.equal(row.rung, 1, `round ${after / H}: backlog stays with its acting owner`);
+    assert.equal(advanced.actions.tell.length, 0, `round ${after / H}: backlog never notifies the owner`);
+    assert.deepEqual(advanced.violations, [], `round ${after / H}: no expired-deadline invariant violation`);
+    assert.equal(row.c.budgetRetryAt, NOW + 23 * H - 7, `round ${after / H}: the earliest rolling-capacity retry is retained in the chain`);
+    assert.ok(Number.isFinite(row.deadline) && row.deadline > at, `round ${after / H}: a future capacity retry is recorded`);
+    chain = advanced.chain;
+  }
 });
 
 test("a clock without a usable time starts at first sight and keeps running; a question with Michael is reminded", () => {
@@ -316,7 +337,7 @@ test("review fixes: main's runs hide only the release auto-stage waits for; an i
   assert.ok(Number.isFinite(heldUntil({ id: `ceiling:${REL}:installed`, kind: "ceiling", release: REL, milestoneAt: NOW - 80 * H }, { runs: [], stop: null, procs: [{ startedAt: NOW - 60000 }], at: NOW, releaseId: REL }, w, { [`ceiling|${REL}`]: 2 * H }, NOW)));
 });
 
-test("a rung is left upward only after its actor ran: waiting in line is not a failed attempt, and the day's budget says 'not attempted'", () => {
+test("a rung is left upward only after its actor ran: waiting for capacity is not a failed attempt", () => {
   const e = id => ({ id, kind: "pr", owner: "factory loop", title: `pr ${id}`, milestoneAt: NOW - 9 * H, limitH: 1, evidence: [] });
   // five hours in line for the one slot, never launched: still rung 1
   let a = advance([e("a")], {}, NOW); let c = a.chain; assert.equal(a.rows[0].rung, 1);
@@ -326,9 +347,8 @@ test("a rung is left upward only after its actor ran: waiting in line is not a f
   assert.equal(legacy.rows[0].rung, 1); assert.equal(legacy.actions.tell.length, 0);
   const legacy3 = advance([e("a")], { a: { rung: 3, rungSince: NOW - 2 * H, milestone: NOW - 9 * H, launched: true, told: false, tries: [] } }, NOW);
   assert.equal(legacy3.rows[0].rung, 1, "rung 3 with no attempt and no spent budget is put back too");
-  // the budget is spent: rung 3, and the sentence says it was NOT attempted, never "tried and failed"
-  const b = advance([e("a")], {}, NOW, { runsToday: 8 }); assert.equal(b.rows[0].rung, 3); assert.equal(b.actions.tell.length, 1);
-  const text = entryTellText(b.rows[0], NOW); assert.match(text, /has not attempted it yet: today's budget of automatic repair runs is spent/); assert.ok(!/tried/.test(text));
+  // full capacity leaves the entry on its acting rung and tells Michael nothing
+  const b = advance([e("a")], {}, NOW, { runsToday: 8 }); assert.equal(b.rows[0].rung, 1); assert.equal(b.actions.tell.length, 0);
   // a run that really ended without a milestone goes up, and the text says it was tried
   const tried = { a: { rung: 1, rungSince: NOW - 2 * H, milestone: NOW - 9 * H, launched: true, told: false, tries: [{ rung: 1, result: "unresolved" }] } };
   const up = advance([e("a")], tried, NOW); assert.equal(up.rows[0].rung, 2);
@@ -351,7 +371,7 @@ test("work behind a deliberate pause does not escalate and is listed under the p
   assert.ok(parked.some(x => x.id === "pr:o/r#5") && !parked.some(x => x.id === "pr:o/other#6"), "a parked project's items wait behind its pause");
 });
 
-test("review fixes: a lost run is timed from its launch and recorded as a try; rung 3 needs both actors or a spent budget; a pause covers nothing once expired", () => {
+test("review fixes: a lost run is timed from its launch and recorded as a try; rung 3 needs both actors; a pause covers nothing once expired", () => {
   const e = { id: "a", kind: "pr", owner: "o", title: "pr", milestoneAt: NOW - 9 * H, limitH: 1, evidence: [] };
   // waited 5 hours for the slot, launched a moment ago: not lost
   const fresh = advance([e], { a: { rung: 1, rungSince: NOW - 5 * H, milestone: NOW - 9 * H, launched: true, launchedAt: NOW - 60000, told: false, tries: [] } }, NOW);
@@ -360,7 +380,7 @@ test("review fixes: a lost run is timed from its launch and recorded as a try; r
   assert.equal(lost.rows[0].rung, 2); assert.equal(lost.rows[0].c.tries[0].result, "lost");
   const half = advance([e], { a: { rung: 3, rungSince: NOW - 2 * H, milestone: NOW - 9 * H, launched: true, told: false, tries: [{ rung: 1, result: "unresolved" }] } }, NOW);
   assert.equal(half.rows[0].rung, 2, "only rung 1 ran: back to rung 2, not told");
-  assert.match(entryTellText({ entry: e, c: { tries: [{ rung: 1 }], noBudget: true } }, NOW), /tried once.*a second attempt has not been made yet because today's budget/);
+  assert.match(entryTellText({ entry: e, c: { tries: [{ rung: 1 }] } }, NOW), /tried once/);
   const w = mkWorld({ openPrs: [{ repo: "o/r", number: 5, title: "t", updatedAt: ago(5) }], factories: [{ project: "p", repo: "o/r" }] });
   const covers = (pause) => !inv(w, [], { pauses: [pause] }, 80).some(x => x.id === "pr:o/r#5");
   assert.ok(covers({ id: "PAUSE:p", repo: "o/r", what: "w", since: NOW - H, expiresAt: NaN, ownerRef: "m" }));
@@ -372,9 +392,9 @@ test("review fixes: a lost run is timed from its launch and recorded as a try; r
 test("backlog is a queue with a known next action: never rung 3, 4 of the 8 daily runs are reserved for releases and machinery, oldest first, a new cycle after a day", () => {
   const bl = (id, h) => ({ id, kind: "pr", backlog: true, owner: "factory loop", title: id, milestoneAt: NOW - h * H, limitH: 1, evidence: [] });
   const mach = { id: "clock", kind: "obstacle", obstacleKind: "clock", owner: null, title: "clock", milestoneAt: NOW, limitH: 0, evidence: [] };
-  // the budget is spent: the machinery entry goes to Michael, the backlog stays on rung 1 and says nothing
+  // the budget is spent: both machinery and backlog entries stay on rung 1 and say nothing
   const spent = advance([bl("a", 9), mach], {}, NOW, { runsToday: 8 });
-  assert.equal(spent.rows.find(r => r.entry.id === "clock").rung, 3);
+  assert.equal(spent.rows.find(r => r.entry.id === "clock").rung, 1);
   assert.equal(spent.rows.find(r => r.entry.id === "a").rung, 1); assert.equal(spent.actions.tell.filter(r => r.entry.backlog).length, 0);
   // 4 reserved: with 4 runs used the backlog may not launch, a machinery entry still may; oldest backlog first otherwise
   assert.equal(advance([bl("a", 9)], {}, NOW, { runsToday: 4 }).actions.launch, null, "the rest of the day is for releases and machinery");
@@ -387,7 +407,7 @@ test("backlog is a queue with a known next action: never rung 3, 4 of the 8 dail
   assert.equal(advance([bl("a", 9)], after.chain, NOW + 2 * H).actions.launch, null, "the cool-off of a day");
   assert.ok(advance([bl("a", 9)], after.chain, NOW + 25 * H).actions.launch, "and then it is worked again");
   // an old state that put it on rung 3 (told) is put back
-  const legacy = advance([bl("a", 9)], { a: { rung: 3, rungSince: NOW - H, milestone: NOW - 9 * H, launched: true, told: true, noBudget: true, tries: [] } }, NOW);
+  const legacy = advance([bl("a", 9)], { a: { rung: 3, rungSince: NOW - H, milestone: NOW - 9 * H, launched: true, told: true, tries: [] } }, NOW);
   assert.equal(legacy.rows[0].rung, 1);
 });
 
@@ -415,10 +435,10 @@ test("work that belongs to an approved release is not backlog; a retired notice 
   const w2 = mkWorld({ queue: [{ repo: "o/r", heading: "see the pull request", asked: ago(5), question: "https://github.com/o/r/pull/5 needs a decision" }], openPrs: [] });
   w2.items[12] = { state: "open", labels: [], comments: [], prs: [{ number: 5, state: "open", requiredState: "none" }] }; w2.releases[0].repo = "o/r";
   assert.equal(inv(w2, [], {}, 80).find(x => x.kind === "queue").backlog, false, "a queue item naming a release pull request by its URL is the release's");
-  // a release-linked entry keeps the full chain and may reach the owner; a backlog entry cannot
+  // a release-linked entry keeps the full chain; a backlog entry cannot reach the owner
   const cs = id => ({ rung: 1, rungSince: NOW - 2 * H, milestone: NOW - 9 * H, launched: false, told: false, tries: [] });
   const spent = advance(e.filter(x => x.id === "pr:o/r#5" || x.id === "pr:o/r#77"), { "pr:o/r#5": cs(), "pr:o/r#77": cs() }, NOW, { runsToday: 8 });
-  assert.equal(spent.rows.find(r => r.entry.id === "pr:o/r#5").rung, 3, "the release's pull request, budget spent: it reaches the owner (truthfully)");
+  assert.equal(spent.rows.find(r => r.entry.id === "pr:o/r#5").rung, 1, "the release's pull request waits for capacity");
   assert.ok(!spent.actions.tell.some(r => r.entry.id === "pr:o/r#77"));
   // oldest first by first sight for entries without a usable time
   const a = advance([{ id: "n", kind: "pr", backlog: true, owner: "o", title: "n", milestoneAt: NaN, limitH: 1, evidence: [] }, { id: "o", kind: "pr", backlog: true, owner: "o", title: "o", milestoneAt: NaN, limitH: 1, evidence: [] }],

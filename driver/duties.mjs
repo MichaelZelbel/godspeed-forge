@@ -24,6 +24,15 @@ export function resendDue(notice, now) {
   const morning = new Date(now); morning.setUTCHours(7, 0, 0, 0);
   return now >= morning.getTime() && last < morning.getTime();
 }
+export const DELIVERY_RETRY_MS = 30 * MIN;
+// A notice that never obtained any receipt has no durable route to an owner. Retry exactly its
+// original two transports on a bounded timer; this is driver housekeeping, never an acting run.
+// Old journal records lack deliveryAttemptAt, so their original notice timestamp remains the timer.
+export function deliveryRetryDue(notice, now) {
+  if (notice.seen || Object.keys(notice.receipts || {}).length) return false;
+  const last = Number.isFinite(notice.deliveryAttemptAt) ? notice.deliveryAttemptAt : notice.at;
+  return Number.isFinite(last) && now - last >= DELIVERY_RETRY_MS;
+}
 // -> {seen: bool}. The receipt of transport B is the issue's URL; closed means he looked at it.
 export function seenCheck(notice, run = sysRun) {
   const url = notice.receipts && notice.receipts.github;
