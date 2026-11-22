@@ -1,6 +1,7 @@
+// test cases: 16
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test, runCases } from "../case-test.mjs";
 import { checkScope } from "../../../steps/release/scope-gate.mjs";
 import { PRODUCT_REPO } from "../../../steps/release/staging.mjs";
 
@@ -138,3 +139,5 @@ test("freeze refuses an approved plan whose feature ticket names no source and n
   const bug = `Ticket for 2.0.0-beta.30 (plan item 1). Type: bug.\n\n## Problem\nCrash.\n${done}`;
   await assert.doesNotReject(() => checkScope(records({ plan, body: bug }), PRODUCT_REPO, version, candidate, merged));
 });
+
+await runCases();

@@ -1,8 +1,9 @@
+// test cases: 6
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { test, runCases } from "../case-test.mjs";
 import { fileURLToPath } from "node:url";
 import * as G from "../../../steps/release/staging.mjs";
 
@@ -62,3 +63,5 @@ test("the go is accepted only with a cause for each non-blocking job; his waiver
   assert.deepEqual(both.waived, ["the new thing works, e2e"]);
   assert.equal(both.nonBlocking.length, 1);
 });
+
+await runCases();

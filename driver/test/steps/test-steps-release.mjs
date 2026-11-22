@@ -1,8 +1,9 @@
-// node --test driver/test/steps/test-steps-release.mjs
+// test cases: 9
+// node driver/test/steps/test-steps-release.mjs
 // The three release steps (stage, plan, keep-main-green) as the driver calls them: what they ask of the
 // settings, what run() returns, and that a halt is returned and never sent. The helpers' own behaviour is
 // tested by the moved tests beside this file (driver/test/steps/release/).
-import { test } from "node:test";
+import { test, runCases } from "./case-test.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -37,7 +38,8 @@ const ctxFor = (over = {}) => ({
   main: {
     repository: "owner/product",
     checkout: "/home/factory/product",
-    releases: { records_checkout: "/srv/records", kit_bootstrap_repo: "owner/kit", server: "box", godspeed_dir: "/srv/product", app_logins: { builder: "acme-builder", release: "acme-release" } },
+    apps: { builder: "acme-builder", release: "acme-release[bot]" },
+    releases: { records_checkout: "/srv/records", kit_bootstrap_repo: "owner/kit", server: "box", godspeed_dir: "/srv/product" },
     ...over.main,
   },
   env: {},
@@ -57,29 +59,35 @@ test("each step names itself, its timing and the settings it reads", () => {
       if (!s.required) assert.ok("default" in s, `${s.key} is optional, so it says its default`);
     }
   }
-  assert.ok(stage.SETTINGS.some((s) => s.key === "steps.stage.state_dir" && s.required));
+  assert.ok(stage.SETTINGS.some((s) => s.key === "releases.kit_bootstrap_repo" && s.required));
   assert.ok(plan.SETTINGS.some((s) => s.key === "steps.plan.standing_decision" && s.required));
-  assert.ok(kmg.SETTINGS.some((s) => s.key === "steps.keep-main-green.state_dir" && s.required));
+  assert.ok(kmg.SETTINGS.some((s) => s.key === "main.apps.release" && s.required));
+  for (const [mod, name] of [[stage, "stage"], [plan, "plan"], [kmg, "keep-main-green"]]) {
+    const own = mod.SETTINGS.find((s) => s.key === `steps.${name}.state_dir`);
+    assert.equal(own.required, false, "a step's state folder has the core's default under the driver's state folder");
+  }
 });
 
 test("a missing required setting is refused by its name and nothing runs", async () => {
   const c = ctxFor();
-  delete c.settings.steps.stage.state_dir;
   c.main.releases.kit_bootstrap_repo = "";
+  c.settings.keys.token_script = "";
   const r = await stage.run(c);
   assert.equal(r.ok, false);
-  assert.match(r.error, /steps\.stage\.state_dir/);
-  assert.match(r.error, /main\.releases\.kit_bootstrap_repo/);
+  assert.match(r.error, /releases\.kit_bootstrap_repo/);
+  assert.match(r.error, /keys\.token_script/);
   const p = ctxFor();
   p.settings.server.factory_user = "";
+  delete p.settings.steps.plan.standing_decision;
+  assert.match((await plan.run(p)).error, /server\.factory_user, |server\.factory_user$|steps\.plan\.standing_decision/);
   assert.match((await plan.run(p)).error, /server\.factory_user/);
   const k = ctxFor();
-  k.main.releases.app_logins = {};
-  assert.match((await kmg.run(k)).error, /main\.releases\.app_logins/);
+  k.main.apps = {};
+  assert.match((await kmg.run(k)).error, /main\.apps\.builder/);
 });
 
 test("the helpers are configured from the settings alone, with no value of any installation", () => {
-  const { env, missing } = prepare(ctxFor(), { need: ["repository", "checkout", "server", "godspeedDir", "appLogins", "tokenScript"], stepName: "plan", withKeysEnv: false });
+  const { env, missing } = prepare(ctxFor(), { need: ["repository", "checkout", "server", "godspeedDir", "builderApp", "releaseApp", "tokenScript"], stepName: "plan", withKeysEnv: false });
   assert.deepEqual(missing, []);
   assert.equal(cfg.productRepo, "owner/product");
   assert.equal(cfg.recordsRoot, "/srv/records");
@@ -103,10 +111,12 @@ test("the keys file is read into the environment and its values are not logged",
   const logged = [];
   c.log = (s) => logged.push(s);
   const { env } = prepare(c, { need: [], stepName: "stage", withKeysEnv: true });
-  assert.equal(env.GODSPEED_RELEASE_APP_ID, "123");
+  assert.equal(env.GODSPEED_RELEASE_APP_ID, "123", "the keys file wins over the machine's environment");
   assert.equal(env.GODSPEED_RELEASE_APP_KEY_B64, "c2VjcmV0");
   assert.equal(logged.join("").includes("c2VjcmV0"), false);
   c.settings.keys.env_file = path.join(dir, "missing.env");
+  assert.equal(prepare(c, { need: [], stepName: "stage", withKeysEnv: true }).env.GODSPEED_RELEASE_APP_ID, process.env.GODSPEED_RELEASE_APP_ID, "no keys file is no keys; the helper that needs one says so");
+  c.settings.keys.env_file = dir;
   assert.throws(() => prepare(c, { need: [], stepName: "stage", withKeysEnv: true }), /keys\.env_file/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -117,6 +127,7 @@ test("a halt carries its key, its plain words and the exact command that clears 
   assert.deepEqual(Object.keys(h).sort(), ["clear", "key", "words"]);
   assert.equal(h.words, "the freeze stopped: x");
   assert.equal(h.clear, "node /opt/driver/driver.mjs --step stage --clear-halt freeze-failed --settings-dir /etc/forge");
+  assert.equal(makeHalt({ ...c, settingsDir: undefined }, "plan", "run-failed", "x").clear, "node /opt/driver/driver.mjs --step plan --clear-halt run-failed");
   assert.equal(clearCommandFor({ clearHaltCommand: (s, k) => `forge ${s} ${k}` }, "plan", "run-failed"), "forge plan run-failed", "the runner's own command wins when it gives one");
   assert.equal(plainHaltWords("Godspeed 2.0.0-beta.9 is frozen. Nothing is public and I will not try again by myself. Mission Control has to look at it."), "Godspeed 2.0.0-beta.9 is frozen. Nothing is public.");
 });
@@ -171,6 +182,7 @@ test("clearing the by-hand halt writes the proceed line into the plan on the rec
   const c = ctxFor();
   c.settings.steps.stage.state_dir = stateDir;
   c.main.releases.records_checkout = records.root;
+  c.settings.keys.env_file = path.join(dir, "no-keys.env");
   const r = await stage.clearHalt(c, "blocked-by-hand");
   assert.equal(r.ok, true, r.error);
   assert.match(records.show(`releases/${id}/plan.md`), /^Auto-stage: proceed$/m);
@@ -192,3 +204,5 @@ test("no shipped file of the release steps names an installation: no person's re
     for (const b of banned) assert.doesNotMatch(text, b, `${path.relative(shipped, f)} must not contain ${b}`);
   }
 });
+
+await runCases();

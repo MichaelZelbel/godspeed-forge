@@ -1,6 +1,7 @@
+// test cases: 10
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test, runCases } from "../case-test.mjs";
 import * as D from "../../../steps/release/auto-drive.mjs";
 
 const plan = `Status: approved by Michael
@@ -128,3 +129,5 @@ test("a commit recorded at the drive's start wins over the staging record", asyn
   await step(d, { drive: drive({ from: "f".repeat(40) }) });
   assert.equal(calls.find((c) => c[0] === "release")[1].from, "f".repeat(40));
 });
+
+await runCases();

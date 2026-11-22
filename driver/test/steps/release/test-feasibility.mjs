@@ -1,6 +1,7 @@
+// test cases: 8
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test, runCases } from "../case-test.mjs";
 import { checkFeasibility, isBugTicket, FEASIBILITY_FROM } from "../../../steps/release/feasibility.mjs";
 
 const plan = (date = "2026-11-19") => `---\nrelease: godspeed-2.0.0-beta.30-x\nrepository: MichaelZelbel/godspeed-mission-control\n---\n\nStatus: approved by Michael on ${date} ("go")\n`;
@@ -80,3 +81,5 @@ test("a backticked word is not a name, and a named protocol counts", () => {
   assert.equal(f("OAuth 2.0 against the insurer's login", "hidden check H-12"), true);
   assert.equal(f("`GraphQL`", "`holdout-tools/x.sh`"), true);
 });
+
+await runCases();

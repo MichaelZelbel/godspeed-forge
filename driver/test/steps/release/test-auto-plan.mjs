@@ -1,9 +1,10 @@
+// test cases: 29
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test, runCases } from "../case-test.mjs";
 import { spawnSync } from "node:child_process";
 import * as P from "../../../steps/release/auto-plan.mjs";
 import * as A from "../../../steps/release/auto-stage.mjs";
@@ -539,3 +540,5 @@ test("the check wants a prerequisite in the plan, before what waits on it, and t
   many.items.push(...Array.from({ length: 6 }, (_, i) => item(4 + i, { issue: "new", sources: ["#697"] })));
   assert.match(P.checkPlan(many, c).problems.join(" | "), /9 items, and at most 8/);
 });
+
+await runCases();

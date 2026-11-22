@@ -1,9 +1,10 @@
+// test cases: 99
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test, runCases } from "../case-test.mjs";
 import * as A from "../../../steps/release/auto-stage.mjs";
 import * as D from "../../../steps/release/auto-drive.mjs";
 import { readDeferrals } from "../../../steps/release/scope-amendment.mjs";
@@ -1377,3 +1378,5 @@ test("without the plan's rule an item at a dead end is a halt and nothing is mov
   assert.equal(b.w.files.has(`releases/${b.w.id}/scope-amendment.json`), false, "auto-stage never cuts; a release is never cut down to nothing (freeze's reader refuses it)");
   assert.equal(b.w.notices.length, 0);
 });
+
+await runCases();

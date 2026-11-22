@@ -4,19 +4,16 @@
 // moved unchanged except that its settings come from the driver's settings and that "the AI could not plan
 // this one, Mission Control has to plan it" is a halt the driver owns, not a message.
 import * as P from "./release/auto-plan.mjs";
-import { KEYS, prepare, settingsFor, stepValue, refuseMissing, read } from "./release/from-settings.mjs";
+import { prepare, settingsFor, stepValue, stepStateDir, refuseMissing, read } from "./release/from-settings.mjs";
 import { clearCommandFor } from "./release/halts.mjs";
 
 export const STEP = { name: "plan", everyMinutes: 15, maxMinutes: 60, inRound: false };
 
-const NEEDS = ["repository", "checkout", "recordsCheckout", "ownerLogin", "appLogins"];
+const NEEDS = ["repository", "checkout", "recordsCheckout", "ownerLogin", "builderApp", "releaseApp"];
 export const SETTINGS = [
-  ...settingsFor([...NEEDS, "godspeedDir", "ownerName", "gitEmail", "noticesFile"], NEEDS),
-  { key: "steps.plan.state_dir", required: true, meaning: "where the step keeps what it did and said (state.json); point it at the existing folder to keep the record of what was said" },
+  ...settingsFor([...NEEDS, "factoryUser", "factoryHome", "archonConfig", "godspeedDir", "ownerName", "gitEmail", "noticesFile"], [...NEEDS, "factoryUser"]),
+  { key: "steps.plan.state_dir", required: false, default: "", meaning: "where the step keeps what it did and said (state.json); default <server.state_dir>/steps/plan; point it at an existing folder to keep the record of what was said" },
   { key: "steps.plan.standing_decision", required: true, meaning: "the owner's recorded words that let a release that only fixes bugs start without his yes; written into every plan the step starts" },
-  { key: "server.factory_user", required: true, meaning: "the factory's account, as which the planning AI and the issue writes run" },
-  { key: "server.factory_home", required: true, meaning: "that account's home folder" },
-  { key: "server.archon_config", required: true, meaning: "the factory's model settings file, which names the strongest tier the planner uses" },
   { key: "steps.plan.driver_state", required: false, default: "", meaning: "the retired release driver's state.json, read for its prereqs when it exists; may be absent" },
   { key: "steps.plan.max_runs_per_day", required: false, default: 3, meaning: "at most this many planning runs a day" },
   { key: "steps.plan.max_items", required: false, default: 8, meaning: "at most this many items in an automatic release" },
@@ -24,16 +21,20 @@ export const SETTINGS = [
 
 function prepared(ctx) {
   const p = prepare(ctx, { need: NEEDS, stepName: "plan", withKeysEnv: false });
-  for (const k of ["steps.plan.state_dir", "steps.plan.standing_decision", "server.factory_user", "server.factory_home", "server.archon_config"]) if (!read(ctx, k)) p.missing.push(k);
+  if (!stepValue(ctx, "plan", "standing_decision")) p.missing.push("steps.plan.standing_decision");
+  const factoryUser = read(ctx, "factoryUser");
+  const factoryHome = read(ctx, "factoryHome") || (factoryUser ? `/home/${factoryUser}` : "");
+  const archonConfig = read(ctx, "archonConfig") || (factoryHome ? `${factoryHome}/.archon/config.yaml` : "");
+  if (!factoryUser) p.missing.push("server.factory_user");
   if (p.missing.length) return { fail: refuseMissing("plan", p.missing) };
   const sv = (n, d) => stepValue(ctx, "plan", n, d);
   const env = {
     ...p.env,
-    AUTO_PLAN_STATE_DIR: sv("state_dir"),
-    AUTO_PLAN_FORGE_USER: read(ctx, "server.factory_user"),
-    AUTO_PLAN_FORGE_HOME: read(ctx, "server.factory_home"),
-    AUTO_PLAN_ARCHON_CONFIG: read(ctx, "server.archon_config"),
-    AUTO_PLAN_CODEX_CWD: read(ctx, KEYS.checkout.key),
+    AUTO_PLAN_STATE_DIR: stepStateDir(ctx, "plan"),
+    AUTO_PLAN_FORGE_USER: factoryUser,
+    AUTO_PLAN_FORGE_HOME: factoryHome,
+    AUTO_PLAN_ARCHON_CONFIG: archonConfig,
+    AUTO_PLAN_CODEX_CWD: read(ctx, "checkout"),
     AUTO_PLAN_DRIVER_STATE: sv("driver_state", ""),
     AUTO_PLAN_MAX_RUNS_PER_DAY: String(sv("max_runs_per_day", 3)),
     AUTO_PLAN_MAX_ITEMS: String(sv("max_items", 8)),

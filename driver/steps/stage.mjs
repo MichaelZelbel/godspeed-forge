@@ -6,16 +6,16 @@
 // public; some tests failed) are sent as before, with the same ids, into the same queue.
 import path from "node:path";
 import * as S from "./release/auto-stage.mjs";
-import { KEYS, prepare, settingsFor, stepValue, refuseMissing, read } from "./release/from-settings.mjs";
+import { prepare, settingsFor, stepValue, stepStateDir, refuseMissing, read } from "./release/from-settings.mjs";
 import { clearCommandFor } from "./release/halts.mjs";
 
 export const STEP = { name: "stage", everyMinutes: 15, maxMinutes: 200, inRound: false };
 
-const NEEDS = ["repository", "checkout", "recordsCheckout", "kitBootstrap", "server", "godspeedDir", "tokenScript", "appLogins"];
+const NEEDS = ["repository", "checkout", "recordsCheckout", "kitBootstrap", "server", "tokenScript", "builderApp", "releaseApp"];
 export const SETTINGS = [
-  ...settingsFor([...NEEDS, "routeSuffix", "stagingDir", "healthUrl", "scenariosWorkflow", "timezone", "gitEmail", "serverIsThisMachine", "notifyCommand", "ownerName", "keysEnv", "noticesFile"], NEEDS),
-  { key: "steps.stage.state_dir", required: true, meaning: "where the step keeps what it did and said (state.json); point it at the existing folder to keep the record of what was said" },
-  { key: "steps.stage.stop_file", required: false, default: "<main.checkout>/.factory/STOP", meaning: "the factory's STOP file, which the step makes while the scenarios run and is the only STOP a program removes" },
+  ...settingsFor([...NEEDS, "routeSuffix", "stagingDir", "healthUrl", "scenariosWorkflow", "timezone", "gitEmail", "serverIsThisMachine", "notifyCommand", "ownerName", "keysEnv", "noticesFile", "godspeedDir"], NEEDS),
+  { key: "steps.stage.state_dir", required: false, default: "", meaning: "where the step keeps what it did and said (state.json); default <server.state_dir>/steps/stage; point it at an existing folder to keep the record of what was said" },
+  { key: "steps.stage.stop_file", required: false, default: "", meaning: "default <main.checkout>/.factory/STOP: the factory's STOP file, which the step makes while the scenarios run and is the only STOP a program removes" },
   { key: "steps.stage.scenario_wait_minutes", required: false, default: 100, meaning: "how long one look waits for the scenarios, rerun included" },
   { key: "steps.stage.blocked_grace_minutes", required: false, default: 60, meaning: "how long a reason to wait may last before it is a halt" },
   { key: "steps.stage.stop_max_age_minutes", required: false, default: 120, meaning: "a STOP file the step made is removed when older than this" },
@@ -26,13 +26,12 @@ export const SETTINGS = [
 
 function prepared(ctx) {
   const p = prepare(ctx, { need: NEEDS, stepName: "stage", withKeysEnv: true });
-  if (!read(ctx, "steps.stage.state_dir")) p.missing.push("steps.stage.state_dir");
   if (p.missing.length) return { fail: refuseMissing("stage", p.missing) };
   const sv = (n, d) => stepValue(ctx, "stage", n, d);
-  const checkout = read(ctx, KEYS.checkout.key);
+  const checkout = read(ctx, "checkout") || "";
   const env = {
     ...p.env,
-    AUTO_STAGE_STATE_DIR: sv("state_dir"),
+    AUTO_STAGE_STATE_DIR: stepStateDir(ctx, "stage"),
     AUTO_STAGE_STOP_FILE: sv("stop_file", path.join(checkout, ".factory", "STOP")),
     AUTO_STAGE_SCENARIO_WAIT_MINUTES: String(sv("scenario_wait_minutes", 100)),
     AUTO_STAGE_BLOCKED_GRACE_MINUTES: String(sv("blocked_grace_minutes", 60)),

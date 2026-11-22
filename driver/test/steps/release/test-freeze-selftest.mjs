@@ -1,6 +1,7 @@
+// test cases: 1
 // The self-test of freeze.mjs, moved out of the shipped file unchanged. It runs the real helper as its own
 // process against stand-ins for GitHub and the server (stand-ins.mjs).
-import test from "node:test";
+import { test, runCases } from "../case-test.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -342,3 +343,5 @@ async function selfTest() {
 test("freeze self-test", async () => {
   assert.equal(await selfTest(), 0);
 });
+
+await runCases();
