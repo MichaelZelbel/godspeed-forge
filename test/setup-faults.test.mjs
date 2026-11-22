@@ -38,15 +38,34 @@ const EXEMPT = {
   'files.mjs': 'the file operations themselves, which this test makes fail where setup calls them',
   'github-adapter.mjs': 'the real GitHub, which this test replaces with the stand-in whose every call it makes fail'
 };
+// Modules in lib/ that setup does not use at all, and why. Neither check of this file applies to them, and the check
+// below follows setup's imports from its entry points, so the day setup reaches one of them it is checked again.
+const NOT_SETUP = {
+  'godspeed.mjs': 'the bridge to Godspeed, used by the installer, the chat inbox and the driver steps, never by setup',
+  'inbox.mjs': 'the chat inbox, which its own service runs, never setup'
+};
 const sources = new Map();
 for (const name of await readdir(lib)) {
   if (name.endsWith('.mjs')) sources.set(join(lib, name), await readFile(join(lib, name), 'utf8'));
 }
-for (const module of Object.keys(EXEMPT)) assert(sources.has(join(lib, module)), `lib/${module} no longer exists`);
+for (const module of [...Object.keys(EXEMPT), ...Object.keys(NOT_SETUP)]) assert(sources.has(join(lib, module)), `lib/${module} no longer exists`);
+{
+  const IMPORT = /(?:\bfrom\s+|\bimport\s*\(\s*|^\s*import\s+)['"]\.\/([\w.-]+\.mjs)['"]/gm;
+  const seen = new Set();
+  const queue = ['cli.mjs', 'setup.mjs', 'github-adapter.mjs'];
+  while (queue.length) {
+    const module = queue.pop();
+    if (seen.has(module)) continue;
+    seen.add(module);
+    for (const match of (sources.get(join(lib, module)) ?? '').matchAll(IMPORT)) queue.push(match[1]);
+  }
+  assert(['files.mjs', 'config.mjs', 'github-apps.mjs', 'agent.mjs', 'process.mjs'].every(module => seen.has(module)), `the walk follows setup's imports (reached ${[...seen].join(', ')})`);
+  for (const module of Object.keys(NOT_SETUP)) assert(!seen.has(module), `setup now uses lib/${module}, so this test must make its steps fail too`);
+}
 const staticSites = [];
 for (const [path, text] of sources) {
   const module = path.slice(lib.length);
-  if (module in EXEMPT) continue;
+  if (module in EXEMPT || module in NOT_SETUP) continue;
   text.split('\n').forEach((line, index) => {
     if (!line.trim().startsWith('//') && SEAM_CALL.test(line)) staticSites.push(`${module}:${index + 1}`);
   });
@@ -69,7 +88,7 @@ function siteOf(module, text) {
 // A file operation outside the seam could not be made to fail here.
 for (const [path, text] of sources) {
   const module = path.slice(lib.length);
-  if (module === 'files.mjs') continue;
+  if (module === 'files.mjs' || module in NOT_SETUP) continue;
   assert(!text.includes("from 'node:fs"), `${module} uses the file system without lib/files.mjs, so this test cannot make that step fail`);
 }
 
