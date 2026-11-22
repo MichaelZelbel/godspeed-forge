@@ -84,6 +84,41 @@ Its settings are two kinds of file in one folder (root Linux: `/etc/godspeed-for
 one `projects/<owner>--<repository>.json` for each repository. `driver/settings.example.json` shows every setting with
 placeholders. The install checks them and names anything missing before it changes anything.
 
+## For every owner
+
+Once a repository is set up, you talk to the Forge in your Godspeed chat. Two steps of the driver, `owner-questions`
+and `owner-releases`, run every 15 minutes for each repository set up with the Forge, and your chat hands your words to
+the Forge through files in your Godspeed workspace (`.godspeed/forge/`).
+
+- **Plan:** "plan release my-app" proposes one release in plain words, from what is wrong for the people using it
+  first, then what you found, then features. On your yes the Forge files each item as an issue through the builder App,
+  where Cole Medin's factory picks it up, and keeps the plan and which issue is which item on this server.
+- **Questions:** when the factory needs a decision only you can make, you get it once in your chat, with a short
+  handle (F1, F2, ...), an example, one sentence per choice, what happens if you do not answer, and the words to reply
+  with. Questions of how it is built stay with the factory. Your answer goes back to the factory in your own words.
+- **Staging:** when every item of the release is merged, the Forge freezes it as `candidate/<version>`, pauses the
+  factory while the project's own checks run on it, makes a GitHub pre-release to try, moves the branch `staging` to it
+  and sends you one message: the link and "Shall I make it public? Reply go.", or the checks that failed.
+- **Go:** "go" tags `v<version>` on exactly that candidate, makes it the latest GitHub release with the plan's
+  sentences as its notes, and moves the branch `live` to it. A go for a candidate that changed after it was put up to
+  try is refused.
+- **Take it back:** "take it back" makes the release before it the latest again, moves `live` back, and marks the
+  taken-back release as taken back. Nothing is ever deleted.
+- **Release status:** "release status" answers in one or two sentences: what is being built, what waits for you, what
+  is on staging and what is public.
+
+A hosting service that publishes from a branch can publish a staging copy from `staging` and your public site from
+`live`; `live` then always shows exactly the version you made public. Tags, releases and these two branches are moved
+by the release App. The one exception: GitHub lets an App move a branch over a change to the project's workflow files
+only with the Workflows permission, which neither Forge App has, so that one move is made with this server's own `gh`
+sign-in (setup signs it in with the `workflow` scope).
+
+None of this needs a setting. A project can add a profile in its driver settings file
+(`projects/<owner>--<repository>.json`): `"profile": { "staging_url": "...", "deploy": "...", "health": "..." }`, where
+`staging_url` is the link you get instead of the pre-release's page, `deploy` puts the candidate on your staging copy
+after `staging` moved, and `health` must then succeed and print the candidate's commit. The steps' other settings, all
+optional, are in `driver/settings.example.json`.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). This covers the Forge's own files only, not Cole Medin's factory or
