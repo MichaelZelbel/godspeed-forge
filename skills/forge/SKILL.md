@@ -1,6 +1,6 @@
 ---
 name: forge
-description: The Forge, which builds the owner's GitHub projects with an AI software factory and makes a release public only on their go. Use when the owner asks to plan a release ("plan release my-app", "plan the next my-app release", "what should go into the next version?"); says "go", "make it public", "take it back", "release status" or "where is the release?"; says "turn on automatic work", "pause the factory" or "run one lap"; replies to a Forge question (a message that starts with a Forge handle such as F7, or a bare answer when .godspeed/forge/waiting.json shows exactly one question waiting); or asks to set up the Forge.
+description: The Forge, which builds the owner's GitHub projects with an AI software factory and makes a release public only on their go. Use when the owner asks to plan a release ("plan release my-app", "plan the next my-app release", "what should go into the next version?"); says "go", "make it public", "take it back", "release status", "where is the release?" or asks in any words how the next version of one of their projects is coming along; says "turn on automatic work", "pause the factory" or "run one lap"; replies to a Forge question (a message that starts with a Forge handle such as F7, or a bare answer when .godspeed/forge/waiting.json shows exactly one question waiting); or asks to set up the Forge.
 ---
 
 # The Forge
@@ -22,6 +22,11 @@ Before you answer, read these files in the mission control folder:
   public release, what was merged since, the open bug reports, feature requests and pull requests with their labels,
   age and who opened them, failing checks, what the last plan left for later, and what is being built, staged and
   public.
+
+**Only projects set up with the Forge.** This skill is for the projects that have a file there. When the owner
+asks to plan, release or take back a project that has none, and does not ask to set it up, this skill does not
+apply: answer the way you would without it. When no project file exists at all and the owner asks about a release,
+a lap or automatic work, say that no project is set up with the Forge yet and give the setup line below.
 
 **Which project.** When the owner names one, match it to a project file by its repository name. When there is only
 one project, it is that one. When a go or a take back is meant and `waiting.json` shows exactly one release for it,
