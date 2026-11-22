@@ -25,8 +25,8 @@ const short = t => String(t || "").replace(/\s+/g, " ").trim();
 // worker's, the helper's and the loop's own comments are all posted by the builder App).
 export const ownerLogin = (e = process.env) => e.FD_OWNER_LOGIN || "";
 export const trustedLogins = (e = process.env) => String(e.FD_TRUSTED_LOGINS || "").split(",").map(s => s.trim()).filter(Boolean);
-// A login as REST gives it ("the-builder[bot]"), or an author as GraphQL gives it ({login:
-// "the-builder", __typename: "Bot"}): the bare name counts as the App only when GitHub says it
+// A login as REST gives it ("godspeed-dev-builder[bot]"), or an author as GraphQL gives it ({login:
+// "godspeed-dev-builder", __typename: "Bot"}): the bare name counts as the App only when GitHub says it
 // is a bot, since a person could register that name.
 export const loginOf = a => (a && typeof a === "object" ? (a.__typename === "Bot" && !String(a.login || "").endsWith("[bot]") ? `${a.login}[bot]` : String(a.login || "")) : String(a || ""));
 export const isTrusted = (who, trusted = trustedLogins()) => trusted.includes(loginOf(who));
@@ -438,6 +438,8 @@ export function pruneQuestions(env, repo, keep) {
 // a decision-style review by another account parks its pull request. Each case is recorded.
 // gh(args, input) as the builder App. -> number of cases handled.
 export function trustLook(env, gh, state, now, record) {
+  // who may decide comes with the call (env.TRUSTED_LOGINS, env.OWNER_LOGIN), never from a module global; the process's settings are the fallback
+  const trusted = env.TRUSTED_LOGINS || trustedLogins(), owner = env.OWNER_LOGIN || ownerLogin();
   state.trust ||= {};
   const since = state.trust.since || iso(now - 7 * 24 * HOUR); // the history before the first look was checked by hand (2026-11-15: none)
   const repo = env.REPO;
@@ -457,11 +459,11 @@ export function trustLook(env, gh, state, now, record) {
     handled++;
   };
   const page = url => { const all = []; for (let p = 1; ; p++) { const rows = gh([`${url}&per_page=100&page=${p}`]) || []; all.push(...rows); if (rows.length < 100) return all; if (p >= 100) throw new Error(`more than 10000 comments since ${since}: not all could be read`); } };
-  for (const c of untrustedHeaded(page(`repos/${repo}/issues/comments?since=${encodeURIComponent(since)}&sort=updated&direction=desc`))) neutralise(c, "issues");
-  for (const c of untrustedHeaded(page(`repos/${repo}/pulls/comments?since=${encodeURIComponent(since)}&sort=updated&direction=desc`))) neutralise(c, "pulls");
+  for (const c of untrustedHeaded(page(`repos/${repo}/issues/comments?since=${encodeURIComponent(since)}&sort=updated&direction=desc`), trusted)) neutralise(c, "issues");
+  for (const c of untrustedHeaded(page(`repos/${repo}/pulls/comments?since=${encodeURIComponent(since)}&sort=updated&direction=desc`), trusted)) neutralise(c, "pulls");
   const items = page(`repos/${repo}/issues?state=open&sort=updated&direction=desc`);
   for (const i of items.filter(i => String(i.updated_at || "") >= since && !(state.trust.read || {})[`${i.number}@${i.updated_at}`])) {
-    for (const c of untrustedHeaded(page(`repos/${repo}/issues/${i.number}/comments?x=1`))) { open.set(i.number, true); neutralise({ ...c, issue_url: c.issue_url || `/repos/${repo}/issues/${i.number}` }, "issues"); }
+    for (const c of untrustedHeaded(page(`repos/${repo}/issues/${i.number}/comments?x=1`), trusted)) { open.set(i.number, true); neutralise({ ...c, issue_url: c.issue_url || `/repos/${repo}/issues/${i.number}` }, "issues"); }
     state.trust.read = Object.fromEntries([...Object.entries(state.trust.read || {}), [`${i.number}@${i.updated_at}`, 1]].slice(-500));
   }
   // An issue an untrusted account opened stays parked on sight, but once Michael adopted it it is left
@@ -474,12 +476,12 @@ export function trustLook(env, gh, state, now, record) {
     if ((state.trust.adoptedByMichael || {})[String(i.number)]) return { by: "an earlier look", at: "" };
     let cs = [];
     try { cs = page(`repos/${repo}/issues/${i.number}/comments?x=1`); } catch { return "unknown"; } // not known: neither park nor adopt, the next look tries again
-    const c = cs.find(c => c.user && c.user.login === ownerLogin() && /^\s*Owner decision\b/i.test(c.body || "") && !String(c.body || "").includes("release-driver:"));
+    const c = cs.find(c => c.user && c.user.login === owner && /^\s*Owner decision\b/i.test(c.body || "") && !String(c.body || "").includes("release-driver:"));
     return c ? { by: c.user.login, at: c.created_at || iso(now) } : null;
   };
   for (const i of items) {
     const labels = (i.labels || []).map(l => l.name || l);
-    if (!isTrusted(i.user && i.user.login) && !labels.includes("needs-owner")) {
+    if (!isTrusted(i.user && i.user.login, trusted) && !labels.includes("needs-owner")) {
       const adopter = i.pull_request ? null : adoptedBy(i); // a stranger's pull request is never adopted by a comment: its code can change after
       if (adopter === "unknown") { /* retry next look */ } else if (adopter) {
         const key = String(i.number);
@@ -497,7 +499,7 @@ export function trustLook(env, gh, state, now, record) {
     let reviews = [];
     try { reviews = gh([`repos/${repo}/pulls/${i.number}/reviews?per_page=100`]) || []; } catch { continue; }
     const tag = `release-driver-untrusted-review:${i.number}`;
-    for (const r of reviews.filter(r => !isTrusted(r.user && r.user.login) && HEADED.test(String(r.body || "")))) {
+    for (const r of reviews.filter(r => !isTrusted(r.user && r.user.login, trusted) && HEADED.test(String(r.body || "")))) {
       const key = `review:${r.id}`;
       if ((state.trust.reviews || []).includes(key)) continue;
       if (!env.DRY) {

@@ -4,11 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadSettings, renderEnvFile, CORE } from "../settings.mjs";
-import { discoverSteps } from "../steps.mjs";
 
 const root = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
 const example = JSON.parse(fs.readFileSync(path.join(root, "settings.example.json"), "utf8"));
-const { steps } = await discoverSteps();
+// The keys the steps ask for (the steps themselves are other files; these are the kinds of key they declare).
+const steps = [
+  { name: "questions", SETTINGS: [{ key: "steps.questions.godspeed_dir", required: true }, { key: "steps.questions.hermes_home", required: true }, { key: "server.factory_home", required: true }, { key: "projects[].questions", required: false }] },
+  { name: "test-machine", SETTINGS: [{ key: "steps.test-machine.holdout", required: true }, { key: "ai.models.strong", required: false }, { key: "server.factory_gid", required: true }, { key: "projects[main].releases.tools_dir", required: true }, { key: "projects[main].releases.holdouts_dir", required: true }, { key: "projects[main].releases.records_checkout", required: true }, { key: "projects[main].checkout", required: true }] },
+];
 const stepSettings = steps.map(s => s.SETTINGS);
 
 // the example, written out as the settings folder
