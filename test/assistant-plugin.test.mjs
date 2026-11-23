@@ -1,6 +1,6 @@
 // The Forge's plugin for the owner's assistant: it shows the model what the Forge waits for, and the installer puts
 // it in place, switches it on and restarts the chat only when something changed, on a native and a Docker Godspeed.
-// test cases: 4
+// test cases: 5
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -30,6 +30,30 @@ testCase("the plugin is switched on in the assistant's settings once, keeping ev
   assert.match(once, /enabled: \["godspeed-coach", "godspeed-journal", "godspeed-forge"\]/);
   assert.equal(enablePlugin(once), null, 'already on: nothing to change');
   assert.match(enablePlugin('model:\n  default: x\n'), /plugins:\n {2}enabled: \["godspeed-forge"\]\n$/);
+  // a list written one name per line gets one more line, never a second "enabled"
+  const block = 'plugins:\n  enabled:\n    - godspeed-coach\n    - godspeed-journal\nmcp_servers: {}\n';
+  const added = enablePlugin(block);
+  assert.equal(added, 'plugins:\n  enabled:\n    - godspeed-coach\n    - godspeed-journal\n    - godspeed-forge\nmcp_servers: {}\n');
+  assert.equal(enablePlugin(added), null);
+  assert.equal((added.match(/enabled:/g) || []).length, 1);
+  // a form it does not recognise is left exactly as it is
+  assert.equal(enablePlugin('plugins:\n  enabled: godspeed-coach\n'), null);
+  assert.equal(enablePlugin('plugins: {enabled: [godspeed-coach]}\n'), null);
+}
+
+testCase("the assistant's settings keep their private mode, and a native chat owned by someone else is restarted as that person, never as root");
+{
+  const workspace = tmp('forge-ws-mode-'), home = tmp('forge-hermes-mode-');
+  fs.writeFileSync(path.join(home, 'config.yaml'), CONFIG, { mode: 0o600 });
+  fs.chmodSync(path.join(home, 'config.yaml'), 0o600);
+  const passwd = path.join(tmp('forge-passwd-'), 'passwd');
+  fs.writeFileSync(passwd, 'root:x:0:0:root:/root:/bin/bash\nalice:x:1001:1001::/home/alice:/bin/bash\n');
+  const gs = { ...bridge({ kind: 'native', workspace, home }), owner: { uid: 1001, gid: 1001 } };
+  const ran = [];
+  const run = async (command, args, options) => { ran.push({ line: [command, ...args].join(' '), home: options.env.HOME, hermes: options.env.HERMES_HOME }); return { stdout: '' }; };
+  assert.equal(await installAssistantPlugin(gs, SOURCE, { run, uid: 0, passwd }), 'installed');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(home, 'config.yaml')).mode & 0o777, 0o600, 'still readable only by its owner');
+  assert.deepEqual(ran, [{ line: 'runuser -u alice -- /opt/hermes/bin/hermes gateway restart', home: '/home/alice', hermes: home }]);
 }
 
 testCase('on a native Godspeed the plugin is written beside the others, switched on, and the chat restarted once');
