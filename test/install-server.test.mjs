@@ -121,7 +121,7 @@ async function rootInstall({ found, settings = fresh(), tools = async () => ({ o
     env: { FORGE_SOURCE: repo, FORGE_SETTINGS_DIR: settings, FORGE_UNITS_DIR: units }, paths, uid, platform: 'linux', systemd: () => systemd,
     fs: { ...fs, chownSync: (p, u, g) => chowns.push([p, u, g]) }, run, find: async () => found,
     installTools: async o => { toolsCalled = true; return tools(o); }, say: l => lines.push(l), warn: l => warnings.push(l),
-    watch: async o => { pageAsked = o; return page; },
+    watch: async o => { pageAsked = o; if (page instanceof Error) throw page; return page; },
   });
   return { code, lines, warnings, chowns, runs, units, paths, workspace, toolsCalled: () => toolsCalled, pageAsked: () => pageAsked };
 }
@@ -215,6 +215,9 @@ testCase('a watching page that cannot be set up is said in one sentence and neve
   const r = await rootInstall({ found: dockerFound(), page: { ok: false, why: WHY.noFront } });
   assert.equal(r.code, 0, r.warnings.join('\n'));
   assert.equal(r.lines.at(-1), "The page where you watch the factory could not be set up: this server has no web address from Godspeed for it to share, because Godspeed's notebook has none yet. Run this line again to try once more.");
+  const thrown = await rootInstall({ found: dockerFound(), page: new Error('EACCES: permission denied') });
+  assert.equal(thrown.code, 0, 'a failure the page throws never fails the install either');
+  assert.equal(thrown.lines.at(-1), 'The page where you watch the factory could not be set up: it did not start on this server. Run this line again to try once more.');
   const plain = await rootInstall({ found: dockerFound(), uid: 1000 });
   assert.equal(plain.pageAsked(), null);
   const noSystemd = await rootInstall({ found: dockerFound(), systemd: false });

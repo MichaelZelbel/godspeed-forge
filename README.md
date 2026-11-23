@@ -126,8 +126,13 @@ If the page does not open, your hosting company's firewall may be blocking it: l
   never the password.
 - **It only shows.** Nothing on the page can start, stop, answer or change a run: after the sign-in only reading
   requests (GET and HEAD) reach Archon, never its internal or webhook paths. Archon's server behind it listens on the
-  server itself only, starts no run of its own and may reach no address but the server's own, so it cannot reach
-  GitHub or an AI either.
+  server itself only and starts no run of its own. Archon's server also does background work of its own (it resumes a
+  run that waits, for example one stopped by an AI's usage limit, and tidies old work folders), so systemd makes every
+  file on the server read-only to it, the factory's database too, except the database's two side files that SQLite
+  needs for reading, and lets it reach no address but the server's own: that work fails at its first write and can
+  reach neither GitHub nor an AI. Before each start, a small preparation (`lib/watch-prepare.mjs`) makes what Archon's
+  server would otherwise write first, only when it is missing and with Archon's own code, as the factory's account:
+  the database on a server whose factory has not run yet, Archon's local key and the two side files.
 - **It keeps running.** The service `godspeed-forge-watch` starts with the server and again when it stops, as the
   account the factory runs as (`server.factory_user` in `driver.json`, root on a server the Forge set up). An hourly
   check (`godspeed-forge-watch-keep.timer`) puts back a site, container or service that went missing. When the Forge

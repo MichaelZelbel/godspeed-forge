@@ -1,7 +1,7 @@
 // The page where the owner watches the factory (lib/watch.mjs), its chat answer (lib/owner/watch.mjs) and the lines
 // setup ends with. The server is a stand-in: a folder of the test's own is its file system, and systemctl, docker, git,
 // bun, caddy and the page's answers are stand-ins, so nothing is installed and nothing reaches the network.
-// test cases: 12
+// test cases: 14
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -15,6 +15,7 @@ import {
   dockerCaddyfile, ensureWatchPage, pageDir, readRecord, runWatchCommand, siteText, watchLines
 } from '../lib/watch.mjs';
 import { SAY as CHAT, watch as chatWatch } from '../lib/owner/watch.mjs';
+import { prepare, SIDE_FILES } from '../lib/watch-prepare.mjs';
 
 const tmp = await mkdtemp(path.join(tmpdir(), 'forge-watch-'));
 let n = 0;
@@ -70,6 +71,7 @@ function server(root, { listening = '', validateFails = false, buildFails = fals
       }
     }
     if (command === 'bash' && args[1] === 'command -v bun') return ok('/usr/local/bin/bun\n');
+    if (command === 'bash' && args[1] === 'command -v runuser') return ok('/usr/sbin/runuser\n');
     if (command === '/usr/local/bin/bun' && args[0] === '-e') return ok(HASH);
     if (command === 'git' && args[0] === 'clone') { fs.mkdirSync(at(root, `${args.at(-1)}/.git`), { recursive: true }); return ok(); }
     if (command === 'git' && args.includes('rev-parse')) return ok(`${ARCHON_REVISION}\n`);
@@ -128,7 +130,10 @@ testCase("on Godspeed's Docker server the page is built from the pinned Archon, 
   assert.equal(read(at(root, `${DIR}/.forge-built`)), `${ARCHON_REVISION}\n`);
   const unit = read(at(root, `/etc/systemd/system/${UNIT}.service`));
   for (const line of ['Environment=HOST=127.0.0.1', 'IPAddressDeny=any', 'IPAddressAllow=localhost', 'Restart=always', 'WantedBy=multi-user.target', 'Environment="HOME=/root"', 'WorkingDirectory=/root',
+    'ProtectSystem=strict', 'ProtectHome=read-only', 'ReadWritePaths="-/root/.archon/archon.db-wal" "-/root/.archon/archon.db-shm"',
+    `ExecStartPre=+"/usr/local/bin/bun" "/usr/local/lib/godspeed-forge/lib/watch-prepare.mjs" "${DIR}"`,
     `ExecStart="/usr/local/bin/bun" "${DIR}/packages/cli/src/cli.ts" serve --port 3190`]) assert.ok(unit.includes(`${line}\n`), line);
+  assert.equal((unit.match(/^ReadWritePaths=/gm) || []).length, 1, 'the side files are the only files it may write; the database itself stays read-only');
   assert.ok(!/^User=/m.test(unit), 'on a server the Forge set up, the factory and its page run as root');
   assert.ok(!/^Environment=.*ARCHON_TRIGGER_HOST/m.test(unit), 'the page starts no run of its own');
   const run = s.calls.find(c => c.command === 'docker' && c.args[0] === 'run').args;
@@ -232,7 +237,9 @@ testCase('the page runs as the account the factory runs as');
   const r = await page(root, s).go();
   assert.equal(r.ok, true);
   const unit = read(at(root, `/etc/systemd/system/${UNIT}.service`));
-  for (const line of ['User=godspeed-forge', 'WorkingDirectory=/home/godspeed-forge', 'Environment="HOME=/home/godspeed-forge"', 'Environment="PATH=/home/godspeed-forge/.local/bin:/usr/local/bin:/usr/bin:/bin"']) assert.ok(unit.includes(`${line}\n`), line);
+  for (const line of ['User=godspeed-forge', 'WorkingDirectory=/home/godspeed-forge', 'Environment="HOME=/home/godspeed-forge"', 'Environment="PATH=/home/godspeed-forge/.local/bin:/usr/local/bin:/usr/bin:/bin"',
+    'ReadWritePaths="-/home/godspeed-forge/.archon/archon.db-wal" "-/home/godspeed-forge/.archon/archon.db-shm"',
+    `ExecStartPre=+"/usr/sbin/runuser" -m -u godspeed-forge -- "/usr/local/bin/bun" "/usr/local/lib/godspeed-forge/lib/watch-prepare.mjs" "${DIR}"`]) assert.ok(unit.includes(`${line}\n`), line);
   const lookup = s.calls.find(c => c.command === 'bash');
   assert.ok(lookup.options.env.PATH.startsWith('/home/godspeed-forge/.local/bin:'), "the factory account's own Bun comes first");
 }
@@ -326,6 +333,46 @@ testCase('asked in the chat, the Forge gives the address and the user name, neve
   assert.deepEqual(here, { ok: true, say: "You can watch the factory at https://srv1.example.com:48445. Sign in as forge with the password setup showed you. If you no longer have it, type godspeed-forge watch in your server's terminal, logged in as root, and it shows it again." });
   assert.ok(!here.say.includes('Kq7dWm2xPz9bTn4hRv3s'));
   assert.deepEqual(await chatWatch({ kind: 'watch' }, { paths, run: stopped }), { ok: false, say: CHAT.stopped('https://srv1.example.com:48445') });
+}
+
+testCase('a failure that throws, even before the page takes its lock, never escapes: setup and the hourly run each say it in one sentence');
+{
+  const root = fresh();
+  const broken = { ...fs, mkdirSync: () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } };
+  const s = server(root);
+  assert.deepEqual(await ensureWatchPage({ root, run: s.run, ask: s.ask, fs: broken, paths: { state: path.join(root, 'state'), addon: '/a' }, env: {}, sleep: async () => {} }), { ok: false, why: WHY.start });
+  const host = { platform: 'linux', uid: 0, systemd: () => true };
+  const thrown = async () => { throw new Error('boom'); };
+  assert.deepEqual(await watchLines({ ...host, ensure: thrown }), { ok: false, lines: [SAY.failed(WHY.start, SAY.againWatch)] });
+  const said = [];
+  assert.equal(await runWatchCommand(['keep'], { ...host, ensure: thrown, output: l => said.push(l) }), 1);
+  assert.deepEqual(said, [SAY.failed(WHY.start, SAY.againWatch)]);
+}
+
+testCase("before each start the page's preparation makes only what is missing, with Archon's own code, and never opens a database the factory already has");
+{
+  const dir = '/opt/godspeed-forge/watch/archon-x';
+  // a server the factory has not used yet: Archon's own read-only command makes the database
+  const home = fresh(), runs = [];
+  let keys = 0;
+  const run = (command, args) => { runs.push([command, ...args].join(' ')); fs.writeFileSync(path.join(home, 'archon.db'), 'tables'); return { status: 0 }; };
+  assert.equal(await prepare({ dir, home, run, makeKey: async () => { keys++; } }), 0);
+  assert.deepEqual(runs, [`${process.execPath} ${path.join(dir, 'packages', 'cli', 'src', 'cli.ts')} --cwd ${dir} isolation list`]);
+  assert.equal(keys, 1, "Archon's own function makes its local key");
+  for (const name of SIDE_FILES) assert.equal(read(path.join(home, name)), '', `${name} is made empty, as SQLite makes it`);
+  // a database the factory has: never opened, and side files that are there are left as they are
+  const used = fresh();
+  fs.writeFileSync(path.join(used, 'archon.db'), 'the factory\'s');
+  fs.writeFileSync(path.join(used, 'archon.db-shm'), 'in use');
+  const untouched = [];
+  assert.equal(await prepare({ dir, home: used, run: (...a) => { untouched.push(a); return { status: 0 }; }, makeKey: async () => {} }), 0);
+  assert.deepEqual(untouched, [], 'no Archon command runs on a database that is there');
+  assert.equal(read(path.join(used, 'archon.db-shm')), 'in use');
+  assert.equal(read(path.join(used, 'archon.db-wal')), '');
+  // Archon could not make the database: the start fails, nothing else is made
+  const failing = fresh();
+  assert.equal(await prepare({ dir, home: failing, run: () => ({ status: 1 }), makeKey: async () => { throw new Error('must not run'); } }), 1);
+  assert.deepEqual(fs.readdirSync(failing), []);
 }
 
 testCase('everything the owner reads about the page is plain: no long dashes, no internal names, at most one link');
