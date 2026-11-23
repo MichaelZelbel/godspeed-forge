@@ -17,7 +17,7 @@ import {
 } from '../lib/github-apps.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { run as runProcess } from '../lib/process.mjs';
-import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
+import { ARCHON_REVISION, ARCHON_SOURCE, FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
 // test cases: 195
@@ -61,12 +61,12 @@ const run = async (command, args, options = {}) => {
     return { stdout: '' };
   }
   if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-  if (command === 'python3' && args.at(-1) === 'init') {
+  if (command === 'python3' && args[1] === 'init') {
     await mkdir(join(options.cwd, 'factory'), { recursive: true });
     await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n\nFactory template.\n');
     await writeFile(join(options.cwd, 'factory/consumer.py'), '# factory stand-in\n');
     await mkdir(join(options.cwd, '.factory'), { recursive: true });
-    await writeFile(join(options.cwd, '.factory/consumer.json'), '{}\n');
+    await writeFile(join(options.cwd, '.factory/consumer.json'), JSON.stringify({ source: join(root, 'cache/factory/archon', args[args.indexOf('--revision') + 1]) }));
   }
   if (command === 'python3' && args.at(-1) === 'doctor' && !(await isPresent(join(options.cwd, args[0])))) {
     throw Object.assign(new Error('Command failed'), { stderr: `python3: can't open file '${join(options.cwd, args[0])}': [Errno 2] No such file or directory\n` });
@@ -90,8 +90,35 @@ const mission = await readFile(join(checkout, 'MISSION.md'), 'utf8');
 assert.match(mission, /Factory template/);
 assert.match(mission, /Keep releases dependable\./);
 assert.match(mission, /Small software teams\./);
-assert.equal(calls.find(call => call.args.at(-1) === 'init').cwd, checkout);
+const initCall = calls.find(call => call.args[1] === 'init');
+assert.equal(initCall.cwd, checkout);
+assert.deepEqual(initCall.args.slice(1), ['init', '--source', ARCHON_SOURCE, '--revision', ARCHON_REVISION]);
 assert(calls.some(call => call.args.includes(FACTORY_REVISION)));
+assert.deepEqual(JSON.parse(await readFile(join(checkout, '.factory/consumer.json'), 'utf8')), { source: join(root, 'cache/factory/archon', ARCHON_REVISION) });
+
+testCase('setup run again on a project set up with the older Archon revision moves it to the current one and keeps the old cache folder');
+const olderCheckout = join(projectsRoot, 'owner', 'older');
+const oldCache = join(root, 'cache/factory/archon/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb');
+const setupOlder = () => {
+  let olderAnswer = 0;
+  return setupRepository('owner/older', {
+    config: { ...defaults(root), projectsRoot }, paths: { state: join(root, 'older-state') },
+    commands: { run: async (command, args, options) => command === 'git' && args[0] === 'remote' ? { stdout: 'https://github.com/owner/older.git\n' } : run(command, args, options) },
+    github: {
+      begin: async manifest => ({ url: `https://example.test/${manifest.name}` }),
+      callback: async () => 'code', exchange: async () => credentials,
+      install: async () => true, appStatus: async () => 'installed'
+    },
+    prompt: async () => ['Keep releases dependable.', 'Small software teams.'][olderAnswer++],
+    output: () => {}
+  });
+};
+await setupOlder();
+await mkdir(oldCache, { recursive: true });
+await writeFile(join(olderCheckout, '.factory/consumer.json'), JSON.stringify({ source: oldCache }));
+await setupOlder();
+assert.deepEqual(JSON.parse(await readFile(join(olderCheckout, '.factory/consumer.json'), 'utf8')), { source: join(root, 'cache/factory/archon', ARCHON_REVISION) });
+assert(await isPresent(oldCache));
 assert(!calls.some(call => call.args.includes('schedule')));
 assert.deepEqual(messages, [
   'Using Claude Code to set up the Forge.',
@@ -292,7 +319,7 @@ await assert.rejects(setupRepository('owner/failing-doctor', {
       if (command === 'claude') return { stdout: 'signed in' };
       if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
       if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-      if (command === 'python3' && args.at(-1) === 'init') {
+      if (command === 'python3' && args[1] === 'init') {
         await mkdir(join(options.cwd, 'factory'), { recursive: true });
         await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
         return { stdout: '' };
@@ -319,7 +346,7 @@ const retryRun = async (command, args, options = {}) => {
   if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
   if (command === 'git' && args[0] === 'remote') return { stdout: 'git@github.com:owner/retry-check.git\n' };
   if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-  if (command === 'python3' && args.at(-1) === 'init') {
+  if (command === 'python3' && args[1] === 'init') {
     await mkdir(join(options.cwd, 'factory'), { recursive: true });
     await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
     return { stdout: '' };
@@ -457,7 +484,7 @@ await assert.rejects(
 
 // Every refusal the pinned factory's doctor can raise, in its real report text, gets a message naming
 // what the check found and the one action that fixes it.
-const buildToolsCache = join(root, 'cache/factory/archon/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb');
+const buildToolsCache = join(root, `cache/factory/archon/${ARCHON_REVISION}`);
 const scenariosFolder = ['.factory', 'holdout', ''].join('/');
 const found = 'Setup stopped because the final check found that';
 const guard = 'the guard keeping your project\'s hidden test scenarios away from the coding agent';
@@ -482,7 +509,7 @@ const refusalCases = [
   [refusal("'source'"), SETTINGS],
   [refusal('Integration revision must be a full lowercase commit SHA'), SETTINGS],
   [refusal(`Pinned source has changes (bun.lock). The pinned tree is verified byte for byte. Restore it with: rm -rf ${buildToolsCache} && python3 bin/factory.py init from your repo.`), SOURCE_DAMAGED],
-  [refusal('Source SHA mismatch: expected 1cfb8fc541580fe5edf15e9a504b572bc9bb45bb, found 0000000000000000000000000000000000000000'), SOURCE_DAMAGED],
+  [refusal(`Source SHA mismatch: expected ${ARCHON_REVISION}, found 0000000000000000000000000000000000000000`), SOURCE_DAMAGED],
   [refusal('Untracked authoring file in pinned source: /srv/cache/.archon/workflows/extra.yaml'), SOURCE_DAMAGED],
   [refusal('Incomplete Archon source: missing packages/cli/src/cli.ts'), SOURCE_DAMAGED],
   [refusal('Archon dependencies missing; complete the pinned source installation'), SOURCE_DAMAGED],
@@ -512,7 +539,7 @@ for (const [index, [report, expected]] of refusalCases.entries()) {
         if (command === 'claude') return { stdout: 'signed in' };
         if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
         if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-        if (command === 'python3' && args.at(-1) === 'init') {
+        if (command === 'python3' && args[1] === 'init') {
           await mkdir(join(options.cwd, '.factory'), { recursive: true });
           await writeFile(join(options.cwd, '.factory', 'consumer.json'), JSON.stringify({ source: buildToolsCache }));
           await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
@@ -560,7 +587,7 @@ for (const [name, damage, report, expected] of replaceCases) {
   testCase(`trying again replaces a build tools download that is ${name}`);
   const repository = `owner/replace-${name}`;
   const caseRoot = join(root, `replace-${name}`);
-  const download = join(caseRoot, 'cache/factory/archon/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb');
+  const download = join(caseRoot, `cache/factory/archon/${ARCHON_REVISION}`);
   let downloads = 0;
   let checks = 0;
   const options = outputs => {
@@ -570,7 +597,7 @@ for (const [name, damage, report, expected] of replaceCases) {
       commands: {
         run: async (command, args, runOptions = {}) => {
           if (command === 'git' && args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` };
-          if (command === 'python3' && args.at(-1) === 'init') {
+          if (command === 'python3' && args[1] === 'init') {
             await mkdir(join(runOptions.cwd, '.factory'), { recursive: true });
             await writeFile(join(runOptions.cwd, '.factory', 'consumer.json'), JSON.stringify({ source: download }));
             await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
@@ -617,14 +644,14 @@ testCase('a refusal not about the download leaves it alone, and only download fo
 {
   const caseRoot = join(root, 'replace-other');
   const repository = 'owner/replace-other';
-  const download = join(caseRoot, 'cache/factory/archon/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb');
+  const download = join(caseRoot, `cache/factory/archon/${ARCHON_REVISION}`);
   const keep = join(caseRoot, 'keep');
   await mkdir(download, { recursive: true });
   await mkdir(keep, { recursive: true });
   let checks = 0;
   const run = (source, report) => async (command, args, runOptions = {}) => {
     if (command === 'git' && args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` };
-    if (command === 'python3' && args.at(-1) === 'init') {
+    if (command === 'python3' && args[1] === 'init') {
       await mkdir(join(runOptions.cwd, '.factory'), { recursive: true });
       await writeFile(join(runOptions.cwd, '.factory', 'consumer.json'), JSON.stringify({ source }));
       await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
@@ -666,7 +693,7 @@ await assert.rejects(setupRepository('owner/failing-github', {
       if (command === 'claude') return { stdout: 'signed in' };
       if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
       if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-      if (command === 'python3' && args.at(-1) === 'init') {
+      if (command === 'python3' && args[1] === 'init') {
         await mkdir(join(options.cwd, 'factory'), { recursive: true });
         await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
       }
@@ -1004,7 +1031,7 @@ async function setupAttempt(repository, stateDirectory, github, { doctor, init }
   const retryRun = async (command, args, options) => {
     if (command === 'git' && args[0] === 'remote') return { stdout: `https://github.com/${repository}.git\n` };
     if (args.at(-1) === 'doctor') await doctor?.();
-    if (args.at(-1) === 'init') await init?.();
+    if (args[1] === 'init') await init?.();
     return run(command, args, options);
   };
   try {
@@ -2292,7 +2319,7 @@ async function retryProject(repository) {
         if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
         if (command === 'git' && args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` };
         if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-        if (command === 'python3' && args.at(-1) === 'init') {
+        if (command === 'python3' && args[1] === 'init') {
           await mkdir(join(runOptions.cwd, 'factory'), { recursive: true });
           try { await stat(join(runOptions.cwd, 'MISSION.md')); } catch {
             await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n\nFactory template.\n');
@@ -2473,7 +2500,7 @@ async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPr
           if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
           if (command === 'git' && args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` };
           if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-          if (command === 'python3' && args.at(-1) === 'init') await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
+          if (command === 'python3' && args[1] === 'init') await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
           return { stdout: '' };
         }
       },
@@ -2940,7 +2967,7 @@ await assert.rejects(
 );
 
 await stopThenRetry('failing-preparation', {
-  run: (command, args) => command === 'python3' && args.at(-1) === 'init'
+  run: (command, args) => command === 'python3' && args[1] === 'init'
     && Object.assign(new Error('python3 failed.'), { stderr: `Traceback (most recent call last):\nPermissionError: [Errno 13] Permission denied: '${root}/x'\n` }),
   reason: 'initialization',
   message: 'Setup stopped because the build tools it downloaded could not prepare the project on this server. Install the latest version of the Forge on this server before trying setup again.'

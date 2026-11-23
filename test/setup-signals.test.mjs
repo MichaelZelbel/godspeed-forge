@@ -52,7 +52,7 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = 
         }
         if (command === 'git' && args[0] === 'fetch') await wait('download');
         if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-        if (command === 'python3' && args.at(-1) === 'init') {
+        if (command === 'python3' && args[1] === 'init') {
           await mkdir(join(runOptions.cwd, 'factory'), { recursive: true });
           await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
         }
@@ -429,7 +429,7 @@ if (process.argv[2] === 'command') {
       claude: 'echo signed in',
       gh: 'mkdir -p "${@: -1}/.git"',
       git: `case "$1" in remote) echo https://github.com/owner/repo.git;; clone) mkdir -p "\${@: -1}/.git";; rev-parse) echo ${FACTORY_REVISION};; esac`,
-      python3: 'if [ "${@: -1}" = init ]; then mkdir -p factory; echo "# Mission" > MISSION.md; fi'
+      python3: 'if [ "$2" = init ]; then mkdir -p factory; echo "# Mission" > MISSION.md; fi'
     };
     for (const [name, body] of Object.entries(tools)) {
       await writeFile(join(bin, name), `#!/bin/bash\n${body}\n`);
