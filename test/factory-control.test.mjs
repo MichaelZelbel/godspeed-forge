@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CONTROL_MESSAGES, LAP_ARGS, findProject, lap, registeredProjects, scheduleFor, workOff, workOn } from '../lib/factory-control.mjs';
+import { CONTROL_MESSAGES, KEEP_RUNS_DROPIN, LAP_ARGS, findProject, lap, registeredProjects, scheduleFor, workOff, workOn } from '../lib/factory-control.mjs';
 import { run as runProcess } from '../lib/process.mjs';
 import { testCase } from './cases.mjs';
 
@@ -107,6 +107,29 @@ testCase('on Linux the timer\'s user gets lingering first, which root must have 
   assert.equal((await workOn(request('work-on'), s.ctx, { ...root, run: recording(true) })).ok, false, 'root without lingering would lose the timer');
   ran.length = 0;
   assert.equal((await workOn(request('work-on'), s.ctx, { ...plainServer, systemd: async () => true, run: recording(true) })).ok, true, 'a user refused lingering keeps the timer while logged in');
+}
+
+testCase('turning on automatic work keeps each lap the factory's timer starts alive after the trigger ends, beside its own unit');
+{
+  const s = await server();
+  const home = await mkdtemp(join(tmpdir(), 'forge-home-'));
+  const units = join(home, '.config', 'systemd', 'user');
+  await mkdir(units, { recursive: true });
+  const mine = 'archonfactory-app.service', other = 'archonfactory-other.service';
+  await writeFile(join(units, mine), `[Service]\nType=oneshot\nWorkingDirectory=${s.checkouts['owner/app']}\nExecStart=/usr/bin/python3 factory/consumer.py schedule fire\n`);
+  await writeFile(join(units, other), '[Service]\nType=oneshot\nWorkingDirectory=/somewhere/else\n');
+  const ran = [];
+  const run = async (command, args, options) => {
+    ran.push([command, ...args].join(' '));
+    if (command === 'loginctl' || command === 'systemctl') return { stdout: '' };
+    return runProcess(command, args, options);
+  };
+  const root = { platform: 'linux', uid: () => 0, systemd: async () => true, owner: async () => ({ name: 'root', uid: 0, gid: 0, home }), run };
+  assert.equal((await workOn(request('work-on'), s.ctx, root)).ok, true);
+  assert.equal(await readFile(join(units, `${mine}.d`, KEEP_RUNS_DROPIN), 'utf8'), '[Service]\n# The Forge: the lap this trigger starts keeps running after the trigger ends.\nKillMode=process\n');
+  await assert.rejects(readFile(join(units, `${other}.d`, KEEP_RUNS_DROPIN), 'utf8'), 'another project\'s unit is left alone');
+  assert.equal(await readFile(join(units, mine), 'utf8').then(t => t.includes('KillMode')), false, 'the factory\'s own unit is never changed');
+  assert.deepEqual(ran, ['loginctl enable-linger root', 'python3 factory/consumer.py schedule install --apply', 'systemctl --user daemon-reload', 'python3 factory/consumer.py unpause']);
 }
 
 testCase('pause the factory pauses scheduled laps and lets running ones finish');
