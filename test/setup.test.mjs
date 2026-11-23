@@ -369,7 +369,8 @@ retryCheckPasses = true;
 const retryPassed = [];
 assert.deepEqual(
   await setupRepository('owner/retry-check', retryOptions(value => retryPassed.push(value))),
-  { completed: true, checkout: join(projectsRoot, 'owner/retry-check') }
+  { completed: true, checkout: join(projectsRoot, 'owner/retry-check'), agent: 'claude' },
+  'setup says which coding assistant it used, for the driver\'s settings'
 );
 assert.deepEqual(retryPassed, [
   'Using Claude Code to set up the Forge.',
@@ -377,7 +378,7 @@ assert.deepEqual(retryPassed, [
 ]);
 assert.equal(retryBegins, 2);
 assert.equal(retryInstalls, installsBeforeRetry);
-assert.equal(JSON.parse(await readFile(join(state, 'projects/owner/retry-check/registration.json'), 'utf8')).completed, true);
+assert.deepEqual(JSON.parse(await readFile(join(state, 'projects/owner/retry-check/registration.json'), 'utf8')), { repository: 'owner/retry-check', checkout: join(projectsRoot, 'owner/retry-check'), completed: true, agent: 'claude' }, 'the record of the finished setup keeps the coding assistant it used');
 
 testCase('a stop at the final check says the Apps are kept and retrying adds none');
 // A stop at the final check tells the owner their Apps are kept; stopping again and retrying add none.

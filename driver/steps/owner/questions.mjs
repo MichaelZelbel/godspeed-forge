@@ -62,9 +62,13 @@ export function parseQuestions(text) {
   });
 }
 
-// The open "Owner decisions needed" issue among a repository's open issues, newest first.
-export const pickIssue = issues => (issues || []).filter(i => i && !i.pull_request && i.state !== "closed" && String(i.title).trim() === TITLE)
-  .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")))[0] || null;
+// The factory's own open "Owner decisions needed" issue: the oldest one opened by a login in `trusted` (the identities the
+// factory writes as, access.mjs factoryLogins). An issue with that title opened by anyone else is never read, told or
+// answered: a stranger could otherwise put a question to the owner and receive the owner's answer.
+export const openedBy = issue => String((issue && issue.user && issue.user.login) || "").toLowerCase();
+export const pickIssue = (issues, trusted) => (issues || [])
+  .filter(i => i && !i.pull_request && i.state !== "closed" && String(i.title).trim() === TITLE && trusted && trusted.has(openedBy(i)))
+  .sort((a, b) => Number(a.number) - Number(b.number))[0] || null;
 
 // ---------------------------------------------------------------- who answers
 // Deterministic first. A question of how something is built (tests, checks, files, keys, tools, anything the

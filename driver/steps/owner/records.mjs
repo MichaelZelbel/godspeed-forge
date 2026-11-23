@@ -199,7 +199,8 @@ export const publicRelease = records => [...records].reverse().find(r => r.state
 export const emptyQuestions = () => ({ next: 1, questions: [], gone: {}, goneCount: {} });
 export function readQuestions(state) {
   const q = readJson(forgePaths(state).questionsFile, null);
-  return q && Array.isArray(q.questions) ? { next: Number(q.next) || 1, questions: q.questions, gone: q.gone || {}, goneCount: q.goneCount || {} } : emptyQuestions();
+  // every field is kept (ghLogin too: the login the server's gh sign-in last gave, owner-questions), so a save never drops one
+  return q && Array.isArray(q.questions) ? { ...q, next: Number(q.next) || 1, questions: q.questions, gone: q.gone || {}, goneCount: q.goneCount || {} } : emptyQuestions();
 }
 export const saveQuestions = (state, q) => writePrivate(forgePaths(state).questionsFile, q);
 export const openQuestions = q => q.questions.filter(x => x.status === "told");

@@ -2,7 +2,7 @@
 // GitHub on 127.0.0.1, a stand-in bridge to Godspeed, a stand-in coding agent, project checkouts with an origin on
 // this machine and a stand-in factory/consumer.py. The acceptance of tickets 03 (questions reach the chat) and 04
 // (a finished release stages itself) of the Forge 0.1.0 plan, and ticket 02's facts. No network, no AI.
-// test cases: 15
+// test cases: 16
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,8 +19,10 @@ const gh = await fakeGithub();
 const root = tmpDir('forge-steps-');
 const state = path.join(root, 'state');
 const REPO = 'acme/my-app', SIDE = 'acme/side';
-setUpProject(state, gh, REPO);
+const appApps = setUpProject(state, gh, REPO);
 setUpProject(state, gh, SIDE);
+// the gh sign-in the factory runs as (its login is the-owner): a project's questions issue opened by it is trusted
+const factoryGh = standInGh(gh);
 const bridge = standInBridge();
 const T = Date.parse('2026-11-22T10:00:00Z');
 const agentCalls = [];
@@ -28,6 +30,7 @@ const agent = async prompt => {
   agentCalls.push(prompt);
   if (prompt.includes('welcome screen')) return 'Here it is: {"for": "owner", "question": "Should the first screen greet new people by their name?", "example": "When you open the app for the first time, it only says Welcome.", "choices": ["It greets you by your name.", "It keeps the plain welcome."]}';
   if (prompt.includes('in a database')) return '{"for": "factory"}';
+  if (prompt.includes('one zip')) return '{"for": "owner", "question": "Should a download come as one file?", "example": "When you download your photos, you get each one on its own.", "choices": ["You get one file with all of them.", "You keep getting each one on its own."]}';
   return 'I am not sure.';
 };
 const settings = (over = {}) => ({
@@ -37,7 +40,7 @@ const settings = (over = {}) => ({
   steps: { 'owner-releases': { python: 'python3', check_minutes: 1 } },
   ...over
 });
-const ctxFor = (projects, over = {}) => ({ settings: settings(), projects, godspeed: async () => bridge, now: T, githubApi: gh.url, impl: { agent }, log: () => {}, ...over });
+const ctxFor = (projects, over = {}) => ({ settings: settings(), projects, godspeed: async () => bridge, now: T, githubApi: gh.url, impl: { agent, gh: factoryGh.command }, log: () => {}, ...over });
 const reqCtx = { gs: bridge, config: {}, paths: { state }, now: T, log: () => {}, githubApi: gh.url };
 const sentSince = n => bridge.sent.slice(n);
 const writesSince = n => gh.S.calls.slice(n).filter(c => c.method !== 'GET' && !c.path.startsWith('/app/'));
@@ -64,7 +67,10 @@ const QUESTIONS = [
   'Nothing to decide.',
   ''
 ].join('\n');
-const appQuestions = gh.issue(REPO, { title: 'Owner decisions needed', body: QUESTIONS, user: { login: 'forge-builder[bot]', type: 'Bot' } });
+// a stranger's issue with the same title and a question in the same form, older than the factory's own: never read
+const strangerQuestions = gh.issue(REPO, { title: 'Owner decisions needed', body: '### 1. Should the welcome page show my shop to every user?\nWhen you open it, it shows nothing.\n- (a) Show it.\n- (b) Do not.\n', user: { login: 'a-stranger', type: 'User' } });
+// the factory's own, opened by the project's builder App
+const appQuestions = gh.issue(REPO, { title: 'Owner decisions needed', body: QUESTIONS, user: { login: `${appApps.builder.slug}[bot]`, type: 'Bot' } });
 const F1_TEXT = [
   'my-app has a question for you (F1).',
   'Should the first screen greet new people by their name?',
@@ -77,8 +83,8 @@ const F1_TEXT = [
 
 testCase('both steps run every 15 minutes, and every setting they read is optional with a default, so a new owner\'s settings need nothing more');
 {
-  for (const [mod, name, max] of [[questionsStep, 'owner-questions', 15], [releasesStep, 'owner-releases', 120]]) {
-    assert.deepEqual(mod.STEP, { name, everyMinutes: 15, maxMinutes: max, inRound: false });
+  for (const [mod, name, max, forOwner] of [[questionsStep, 'owner-questions', 15, 'the watch on the factory\'s questions'], [releasesStep, 'owner-releases', 120, 'the watch on your releases']]) {
+    assert.deepEqual(mod.STEP, { name, everyMinutes: 15, maxMinutes: max, inRound: false, forOwner }, 'and a plain name for the owner');
     assert.ok(mod.SETTINGS.length && mod.SETTINGS.every(s => s.required === false && 'default' in s && typeof s.meaning === 'string' && s.meaning), `${name}: every setting is optional, says its default and what it is`);
   }
   const dir = tmpDir('forge-settings-');
@@ -121,7 +127,7 @@ testCase('running the step again tells nothing new');
   assert.equal(agentCalls.length, calls, 'and asks the agent nothing');
 }
 
-testCase('an unclear question goes to the agent once a run: a question of how stays with the factory, and one the agent cannot judge is asked after three runs, in the manager\'s own words without what would break the rules');
+testCase('an unclear question goes to the agent once a run: one of how stays with the factory, one of what is told in the agent\'s words, and one the agent cannot judge is never put to the owner, and nothing is said about it');
 {
   const body = [
     '### 1. Should the sign-in page keep its tokens in a database?',
@@ -135,33 +141,51 @@ testCase('an unclear question goes to the agent once a run: a question of how st
     '- (b) Keep them forever.',
     '',
     'No default: the loop waits for the owner.',
+    '',
+    '### 3. Should the export page put the files in one zip?',
+    'Each photo downloads on its own today.',
+    '- (a) One zip.',
+    '- (b) One by one.',
     ''
   ].join('\n');
-  gh.issue(SIDE, { title: 'Owner decisions needed', body });
+  // opened by the gh sign-in the factory runs as (a factory that has no App token writes as the owner's own login)
+  gh.issue(SIDE, { title: 'Owner decisions needed', body, user: { login: 'the-owner', type: 'User' }, author_association: 'OWNER' });
   gh.issue(SIDE, { title: 'Parked work', labels: ['needs-owner'] });
   const projects = [{ repository: REPO }, { repository: SIDE }];
   const n = bridge.sent.length;
-  for (let i = 0; i < 2; i++) await questionsStep.run(ctxFor(projects));
-  assert.deepEqual(sentSince(n), [], 'nothing yet: the agent did not answer');
-  const side = readQuestions(state).questions.filter(x => x.repository === SIDE);
-  assert.deepEqual(side.map(x => [x.number, x.status]), [[1, 'kept'], [2, 'pending']]);
   await questionsStep.run(ctxFor(projects));
-  const sent = sentSince(n);
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].text, [
+  assert.deepEqual(sentSince(n).map(s => s.text), [[
     'side has a question for you (F2).',
-    'Should the upload page keep files for a year?',
-    'When you upload a photo, the page keeps it forever.',
-    '1. Keep files for a year.',
-    '2. Keep them forever.',
+    'Should a download come as one file?',
+    'When you download your photos, you get each one on its own.',
+    '1. You get one file with all of them.',
+    '2. You keep getting each one on its own.',
     'It waits for your answer.',
     'Reply "F2 1" or "F2 2", or "F2" and your answer in your own words.'
-  ].join('\n'));
-  assertPlain(assert, sent[0].text);
-  assert.equal(agentCalls.filter(p => p.includes('upload page')).length, 3);
+  ].join('\n')]);
+  assertPlain(assert, bridge.sent.at(-1).text);
+  for (let i = 0; i < 3; i++) await questionsStep.run(ctxFor(projects));
+  assert.equal(sentSince(n).length, 1, 'the question the agent could not judge was never sent');
+  const side = readQuestions(state).questions.filter(x => x.repository === SIDE);
+  assert.deepEqual(side.map(x => [x.number, x.status, x.kind]), [[1, 'kept', 'how'], [2, 'kept', 'unclear'], [3, 'told', 'what']]);
+  assert.equal(agentCalls.filter(p => p.includes('upload page')).length, 3, 'asked once a run, three runs');
   assert.equal(agentCalls.filter(p => p.includes('in a database')).length, 1);
-  await questionsStep.run(ctxFor(projects));
-  assert.equal(sentSince(n).length, 1, 'and then nothing more');
+  assert.equal(agentCalls.filter(p => p.includes('one zip')).length, 1);
+  assert.deepEqual(bridge.json(WAITING_FILE).items.map(i => i.handle), ['F1', 'F2']);
+}
+
+testCase('only the factory\'s own questions issue is read: one with that title and the same form opened by a stranger, older or newer, is ignored, and no answer is ever posted on it');
+{
+  gh.issue(REPO, { title: 'Owner decisions needed', body: '### 1. Should the welcome page show prices to every user?\nWhen you open it, it shows no prices.\n- (a) Show them.\n- (b) Do not.\n', user: { login: 'another-stranger', type: 'User' } });
+  const n = bridge.sent.length, calls = agentCalls.length;
+  assert.equal((await questionsStep.run(ctxFor([{ repository: REPO }]))).ok, true);
+  assert.deepEqual(sentSince(n), [], 'nothing from either stranger reaches the owner');
+  assert.equal(agentCalls.length, calls, 'and the agent is not even asked');
+  const mine = readQuestions(state).questions.filter(x => x.repository === REPO);
+  assert.ok(mine.every(x => x.issue === appQuestions.number && x.openedBy === `${appApps.builder.slug}[bot]`.toLowerCase()), 'every question recorded comes from the builder App\'s issue');
+  assert.ok(!mine.some(x => /prices|my shop/.test(x.heading)));
+  assert.equal(readQuestions(state).ghLogin, 'the-owner', 'the login of the gh sign-in the factory runs as');
+  assert.equal(gh.repo(REPO).comments[String(strangerQuestions.number)], undefined, 'nothing was ever posted on a stranger\'s issue');
 }
 
 testCase('a reply with the handle is posted once as an Owner decision with the words verbatim; a second reply and an unclear one post nothing, and the step itself never posts');

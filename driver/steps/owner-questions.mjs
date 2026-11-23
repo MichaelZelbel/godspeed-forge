@@ -13,49 +13,54 @@
 // A project the Forge has not set up, or whose App details this server does not hold, is skipped quietly. While
 // the older questions step is configured (steps.questions.godspeed_dir), that step answers and this one does
 // nothing, so no question is told twice.
-import { tokenFor, missingRecords, forgeState } from "./owner/access.mjs";
+import fs from "node:fs";
+import { tokenFor, missingRecords, forgeState, factoryLogins } from "./owner/access.mjs";
+import { projectAgent, agentProgram, detectAgent } from "./owner/agent.mjs";
 import { githubClient, repoPath } from "./owner/github.mjs";
 import { DEFAULT_STATE, forgePaths, readQuestions, saveQuestions, withLock, writeWaiting, setUpProjects, projectName, nowMs, iso, hasAppDetails } from "./owner/records.mjs";
-import { parseQuestions, pickIssue, classify, agentPrompt, readAgentAnswer, fallbackWords, fallbackFor, OWNER_LABEL, idOf } from "./owner/questions.mjs";
+import { parseQuestions, pickIssue, openedBy, classify, agentPrompt, readAgentAnswer, fallbackWords, fallbackFor, OWNER_LABEL, idOf } from "./owner/questions.mjs";
 import { questionMessage, questionsGone } from "./owner/words.mjs";
 import { runAs } from "./owner/run.mjs";
 
-export const STEP = { name: "owner-questions", everyMinutes: 15, maxMinutes: 15, inRound: false };
+// forOwner: what the owner reads when this step is not working (never its internal name)
+export const STEP = { name: "owner-questions", everyMinutes: 15, maxMinutes: 15, inRound: false, forOwner: "the watch on the factory's questions" };
 export const SETTINGS = [
   { key: "forge.state_dir", required: false, default: DEFAULT_STATE, meaning: "the Forge's private state: setup's records, the App details, the release records and what this step told" },
-  { key: "steps.owner-questions.agent", required: false, default: "the project's own agent (its file's \"agent\"), else claude", meaning: "the coding agent asked once when it is unclear whose a question is, and for the plain words of the owner's: claude or codex" },
+  { key: "steps.owner-questions.agent", required: false, default: "the project's own agent (its file's \"agent\", which setup writes), else setup's record of it, else the one signed in on this server", meaning: "the coding agent asked once when it is unclear whose a question is, and for the plain words of the owner's: claude or codex" },
   { key: "steps.owner-questions.model", required: false, default: "haiku for Claude Code, the agent's own default for Codex", meaning: "the model of that one cheap call" },
   { key: "steps.owner-questions.agent_command", required: false, default: "none", meaning: "a command (a list) that replaces the agent; the prompt is added as its last argument and it answers on its output" },
-  { key: "steps.owner-questions.agent_tries", required: false, default: 3, meaning: "runs in which an unclear question may wait for the agent before it is asked of the owner anyway" },
-  { key: "projects[].agent", required: false, default: "claude", meaning: "per project: the coding agent the project uses (claude or codex)" },
+  { key: "steps.owner-questions.agent_tries", required: false, default: 3, meaning: "runs in which an unclear question may wait for the agent; after them it is left to the factory's own default and never sent" },
+  { key: "steps.owner-questions.gh", required: false, default: "the Forge config's commands.gh, else gh", meaning: "the gh whose sign-in the factory runs as; its login is one of the two identities whose questions issue is trusted" },
+  { key: "projects[].agent", required: false, default: "what setup used; else the one signed in on this server", meaning: "per project: the coding agent the project uses (claude or codex); setup writes it" },
 ];
 
 const dig = (o, key) => key.split(".").reduce((a, k) => (a == null ? undefined : a[k]), o);
 // The older, one-owner questions step is configured and on: it tells and relays, so this step stays quiet.
 export const olderStepAnswers = settings => !!(dig(settings, "steps.questions.godspeed_dir") && dig(settings, "steps.questions.enabled") !== false);
 
-// The command of the one cheap call: the project's coding agent, headless.
-export function agentCommand(settings, project, prompt) {
+// The command of the one cheap call: the project's coding agent (claude or codex, owner/agent.mjs), headless; null
+// when no agent is known, and then nothing is asked.
+export function agentCommand(settings, agent, prompt) {
   const own = dig(settings, "steps.owner-questions.agent_command");
   if (Array.isArray(own) && own.length) return [...own.map(String), prompt];
-  const agent = String(dig(settings, "steps.owner-questions.agent") || (project && project.agent) || dig(settings, "ai.agent") || "claude").toLowerCase();
-  const configured = dig(settings, `ai.bins.${agent === "codex" ? "codex" : "claude"}`);
-  let bin = configured || (agent === "codex" ? "codex" : "claude");
-  if (typeof bin === "string" && bin.trim().startsWith("[")) { try { bin = JSON.parse(bin); } catch { /* a plain path */ } }
-  const base = Array.isArray(bin) ? bin.map(String) : [String(bin)];
+  if (agent !== "claude" && agent !== "codex") return null;
+  const base = agentProgram(settings, agent);
   const model = dig(settings, "steps.owner-questions.model");
   if (agent === "codex") return [...base, "exec", "--skip-git-repo-check", ...(model ? ["-m", String(model)] : []), prompt];
   return [...base, "-p", "--model", String(model || "haiku"), "--output-format", "text", prompt];
 }
 
-async function askAgent(ctx, project, q) {
+async function askAgent(ctx, project, q, agent) {
   const prompt = agentPrompt(project.repository, q);
   let out = null;
   try {
-    if (ctx.impl && ctx.impl.agent) out = await ctx.impl.agent(prompt, { repository: project.repository });
+    if (ctx.impl && ctx.impl.agent) out = await ctx.impl.agent(prompt, { repository: project.repository, agent });
     else {
-      const [cmd, ...args] = agentCommand(ctx.settings, project, prompt);
-      const r = runAs(ctx.settings, cmd, args, { cwd: project.checkout || undefined, timeoutMs: 120000, env: { IS_SANDBOX: "1" } });
+      const command = agentCommand(ctx.settings, agent, prompt);
+      if (!command) return null;
+      const [cmd, ...args] = command;
+      const cwd = project.checkout && fs.existsSync(project.checkout) ? project.checkout : undefined;
+      const r = runAs(ctx.settings, cmd, args, { cwd, timeoutMs: 120000, env: { IS_SANDBOX: "1" } });
       if (r.status === 0) out = r.stdout;
     }
   } catch { out = null; }
@@ -69,7 +74,10 @@ async function lookAt(ctx, gs, state, project, now) {
   const P = forgePaths(state);
   const gh = githubClient({ token: await tokenFor(ctx, state, repository, "builder"), api: ctx.githubApi, fetch: ctx.fetch });
   const issues = await gh.list(`${repoPath(repository)}/issues?state=open`, 3);
-  const issue = pickIssue(issues);
+  // only the factory's own questions issue counts: one opened by the builder App or by the gh sign-in it runs as
+  const cached = readQuestions(state).ghLogin || null;
+  const who = await factoryLogins(ctx.settings, state, project, { ...(ctx.impl && ctx.impl.gh ? { gh: ctx.impl.gh } : {}), cached });
+  const issue = pickIssue(issues, who.logins);
   const waitingOnOwner = issues.some(i => labelNames(i).includes(OWNER_LABEL));
   const said = [];
   if (!issue) {
@@ -93,6 +101,7 @@ async function lookAt(ctx, gs, state, project, now) {
   const before = readQuestions(state);
   const known = new Map(before.questions.filter(x => x.repository === repository).map(x => [x.key, x]));
   const fresh = parsed.filter(x => !known.has(x.key) || known.get(x.key).status === "pending");
+  const agent = fresh.length ? projectAgent(ctx.settings, project, state, { detect: (ctx.impl && ctx.impl.detectAgent) || detectAgent }) : null;
   let comments = null;
   const decided = new Map();
   for (const pq of fresh) {
@@ -104,7 +113,7 @@ async function lookAt(ctx, gs, state, project, now) {
     let kind = classify(pq);
     let words = null, asked = false;
     if (kind !== "how") {
-      const a = await askAgent(ctx, project, pq);
+      const a = await askAgent(ctx, project, pq, agent);
       asked = true;
       if (a && kind === "unclear") kind = a.for === "factory" ? "how" : "what";
       if (a && a.words) words = a.words;
@@ -114,6 +123,7 @@ async function lookAt(ctx, gs, state, project, now) {
   await withLock(P.questionsLock, async () => {
     const q = readQuestions(state);
     if (q.gone[repository]) delete q.gone[repository];
+    if (who.ghLogin) q.ghLogin = who.ghLogin;
     const mine = q.questions.filter(x => x.repository === repository);
     const keys = new Set(parsed.map(x => x.key));
     for (const x of mine) if (x.status === "told" && !keys.has(x.key)) { x.status = "withdrawn"; x.withdrawnAt = iso(now); }
@@ -124,7 +134,7 @@ async function lookAt(ctx, gs, state, project, now) {
         rec = { repository, key: pq.key, qid: idOf(repository, pq.key), status: "pending", tries: 0, firstSeen: iso(now) };
         q.questions.push(rec);
       }
-      Object.assign(rec, { issue: issue.number, number: pq.number, heading: pq.heading, options: pq.options });
+      Object.assign(rec, { issue: issue.number, openedBy: openedBy(issue), number: pq.number, heading: pq.heading, options: pq.options });
       const d = decided.get(pq.key);
       if (rec.status !== "pending" || !d) continue;
       if (d.status === "answered-elsewhere") { rec.status = "answered-elsewhere"; continue; }
@@ -132,7 +142,10 @@ async function lookAt(ctx, gs, state, project, now) {
       if (d.asked) rec.tries = Number(rec.tries || 0) + 1;
       if (kind === "unclear") {
         if (rec.tries < tries) continue; // asked again next run
-        kind = "what"; // a stopped factory is worse than one extra question
+        // the agent could not say whose it is: it is never put to the owner as if it were theirs; the factory's own
+        // default applies, and nothing is said
+        rec.kind = "unclear"; rec.status = "kept"; rec.keptAt = iso(now);
+        continue;
       }
       rec.kind = kind;
       if (kind === "how") { rec.status = "kept"; rec.keptAt = iso(now); continue; }

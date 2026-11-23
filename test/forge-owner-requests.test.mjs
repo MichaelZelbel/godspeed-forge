@@ -11,14 +11,14 @@ import { fakeGithub, standInBridge, setUpProject, standInGh, tmpDir, assertPlain
 import { appToken, AppTokenError, forgetAppTokens } from '../lib/app-token.mjs';
 import { plan, go, takeBack, status } from '../lib/owner/releases.mjs';
 import { answer } from '../lib/owner/questions.mjs';
-import { releaseRecord, saveRelease, saveQuestions, emptyQuestions, factsFile, WAITING_FILE } from '../driver/steps/owner/records.mjs';
+import { releaseRecord, saveRelease, saveQuestions, readQuestions, emptyQuestions, factsFile, WAITING_FILE } from '../driver/steps/owner/records.mjs';
 import { idOf, keyOf } from '../driver/steps/owner/questions.mjs';
 import { projectWords, planWords, goWords, takeBackWords, statusWords, answerWords, questionMessage, questionsGone, stageWords, notPlain } from '../driver/steps/owner/words.mjs';
 
 const gh = await fakeGithub();
 const REPO = 'acme/my-app', SIDE = 'acme/side', EMPTY = 'acme/empty';
 const state = tmpDir('forge-state-');
-setUpProject(state, gh, REPO);
+const appApps = setUpProject(state, gh, REPO);
 setUpProject(state, gh, SIDE);
 setUpProject(state, gh, EMPTY);
 const bridge = standInBridge();
@@ -258,13 +258,16 @@ testCase('release status answers in at most two plain sentences');
 
 testCase('an answer is posted once as an Owner decision with the owner\'s words verbatim; a repeat, an unknown and a withdrawn handle get one plain sentence');
 {
-  const appIssue = { number: 40, title: 'Owner decisions needed', body: '### 1. Should the welcome screen greet people by name?\nx\n- (a) Greet them by name.\n- (b) Greet them with a plain hello.\n', state: 'open', labels: [], user: { login: 'forge-builder[bot]', type: 'Bot' } };
+  const appIssue = { number: 40, title: 'Owner decisions needed', body: '### 1. Should the welcome screen greet people by name?\nx\n- (a) Greet them by name.\n- (b) Greet them with a plain hello.\n', state: 'open', labels: [], user: { login: `${appApps.builder.slug}[bot]`, type: 'Bot' } };
+  const bot = `${appApps.builder.slug}[bot]`.toLowerCase();
+  // a stranger's issue with the same title, which a record must never lead an answer to
+  app.issues.push({ number: 41, title: 'Owner decisions needed', body: '### 1. Anything?\nx\n', state: 'open', labels: [], user: { login: 'a-stranger', type: 'User' } });
   app.issues.push(appIssue);
   const heading = 'Should the welcome screen greet people by name?';
   const q = emptyQuestions();
   q.next = 3;
-  q.questions.push({ repository: REPO, key: keyOf(heading), qid: idOf(REPO, keyOf(heading)), handle: 'F1', status: 'told', issue: 40, number: 1, heading, options: [{ label: '(a)', text: 'Greet them by name.' }, { label: '(b)', text: 'Greet them with a plain hello.' }], text: `my-app: ${heading}` });
-  q.questions.push({ repository: REPO, key: 'gone', qid: 'gone', handle: 'F2', status: 'withdrawn', issue: 40, number: 2, heading: 'Gone' });
+  q.questions.push({ repository: REPO, key: keyOf(heading), qid: idOf(REPO, keyOf(heading)), handle: 'F1', status: 'told', issue: 40, openedBy: bot, number: 1, heading, options: [{ label: '(a)', text: 'Greet them by name.' }, { label: '(b)', text: 'Greet them with a plain hello.' }], text: `my-app: ${heading}` });
+  q.questions.push({ repository: REPO, key: 'gone', qid: 'gone', handle: 'F2', status: 'withdrawn', issue: 40, openedBy: bot, number: 2, heading: 'Gone' });
   await saveQuestions(state, q);
   const r = await answer({ id: 'a1', kind: 'answer', handle: 'F1', words: 'F1 2', at: '2026-11-22T10:05:00Z' }, ctx());
   assert.deepEqual(r, { ok: true, say: 'Your answer to F1 is passed on to the my-app factory.' });
@@ -287,6 +290,11 @@ testCase('an answer is posted once as an Owner decision with the owner\'s words 
   assert.deepEqual(await answer({ id: 'a4', kind: 'answer', words: 'F2: keep it' }, ctx()), { ok: false, say: 'Question F2 was taken back by the my-app factory, so your answer was not passed on.' });
   assert.deepEqual(await answer({ id: 'a5', kind: 'answer', words: 'yes please' }, ctx()), { ok: false, say: 'Tell me which question you are answering, like F1, and your answer.' });
   assert.equal(app.comments['40'].length, 1, 'nothing more was posted');
+  const later = readQuestions(state);
+  later.questions.push({ repository: REPO, key: 'swapped', qid: 'swapped', handle: 'F3', status: 'told', issue: 41, openedBy: 'a-stranger', number: 1, heading: 'Anything?' });
+  await saveQuestions(state, later);
+  assert.deepEqual(await answer({ id: 'a6', kind: 'answer', handle: 'F3', words: 'F3 yes' }, ctx()), { ok: false, say: 'I did not pass your answer to F3 on, because that question on GitHub is no longer the factory\'s own.' });
+  assert.equal(app.comments['41'], undefined, 'never posted on an issue the factory did not open');
 }
 
 testCase('a move of live GitHub refuses the release App because it brings in a workflow change is made once with the owner\'s own sign-in; any other refusal is a plain failure without it');
@@ -382,7 +390,7 @@ testCase('every sentence the owner can get from these requests and steps is plai
     ...Object.values(goWords).map(f => f(R, '1.3.0', U)), ...Object.values(takeBackWords).map(f => f(R, '1.3.0', '1.2.0')),
     statusWords.building(R, '1.3.0', 1, 1), statusWords.stuck(R, '1.3.0'), statusWords.checking(R, '1.3.0'), statusWords.staged(R, '1.3.0', U), statusWords.failed(R, '1.3.0'), statusWords.stagingFailed(R, '1.3.0'), statusWords.idle(R),
     statusWords.publicAnd('1.2.0', 2), statusWords.publicAnd(null, 0),
-    answerWords.passed(R, 'F1'), answerWords.unknown('F9', ['F1', 'F2']), answerWords.already('F1'), answerWords.withdrawn(R, 'F1'), answerWords.missing, answerWords.failed('F1'),
+    answerWords.passed(R, 'F1'), answerWords.unknown('F9', ['F1', 'F2']), answerWords.already('F1'), answerWords.withdrawn(R, 'F1'), answerWords.missing, answerWords.failed('F1'), answerWords.untrusted('F1'),
     questionMessage(R, 'F1', { question: 'Should it greet people?', example: 'When you open it, it says Welcome.', choices: ['Greet them.', 'Do not.', 'Ask them.'] }, { deadline: T, fallback: 'keep the plain welcome' }),
     questionMessage(R, 'F1', { question: '', example: '', choices: [] }, { link: 'https://github.example/acme/my-app/issues/3' }),
     questionsGone(R),

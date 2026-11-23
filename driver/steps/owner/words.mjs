@@ -83,6 +83,7 @@ export const answerWords = {
   withdrawn: (repository, handle) => `Question ${handle} was taken back by the ${N(repository)} factory, so your answer was not passed on.`,
   missing: "Tell me which question you are answering, like F1, and your answer.",
   failed: handle => `I could not pass your answer to ${handle} on: GitHub refused it. Send it again in a few minutes.`,
+  untrusted: handle => `I did not pass your answer to ${handle} on, because that question on GitHub is no longer the factory's own.`,
 };
 
 // The one message for a question of what the software should do. w: { example, choices[] }; deadline: ms or

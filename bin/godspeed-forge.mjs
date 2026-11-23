@@ -35,6 +35,6 @@ runSetupCommand(repository, async () => {
     output: message => console.log(message),
     signIn: context => signIn({ ...context, start }),
     factorySetup: createFactorySetup(),
-    afterSetup: (repo, config) => driverAfterSetup(repo, { paths: defaultPaths(), config, output: message => console.log(message) })
+    afterSetup: (repo, config, result) => driverAfterSetup(repo, { paths: defaultPaths(), config, agent: result?.agent, output: message => console.log(message) })
   };
 });

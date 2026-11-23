@@ -15,7 +15,8 @@ export const tmpDir = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 export async function fakeGithub() {
   // workflowShas: commits that bring in a change under .github/workflows/; GitHub refuses an App (no Workflows
   // permission) a branch move to one of them, and lets the owner's own sign-in (token `owner-user-token`) make it.
-  const S = { repos: {}, apps: {}, installations: {}, tokens: { 'owner-user-token': { repository: '*', role: 'owner' } }, calls: [], fail: [], next: 1000, tokenCount: 0, expiresInMs: 3600 * 1000, workflowShas: new Set() };
+  // ownerLogin: the GitHub login of this server's gh sign-in (GET /user with the owner's token)
+  const S = { repos: {}, apps: {}, installations: {}, tokens: { 'owner-user-token': { repository: '*', role: 'owner' } }, calls: [], fail: [], next: 1000, tokenCount: 0, expiresInMs: 3600 * 1000, workflowShas: new Set(), ownerLogin: 'the-owner' };
   const WORKFLOW_REFUSAL = { message: 'refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission' };
   const repo = full => {
     if (!S.repos[full]) S.repos[full] = { default_branch: 'main', issues: [], pulls: [], releases: [], refs: {}, comments: {}, checkRuns: [], latestId: null };
@@ -73,6 +74,11 @@ export async function fakeGithub() {
         S.tokens[token] = { repository: inst.repository, role: inst.role };
         call.role = inst.role;
         return send(201, { token, expires_at: new Date(Date.now() + S.expiresInMs).toISOString() });
+      }
+      if (u.pathname === '/user' && req.method === 'GET') {
+        const who = S.tokens[auth.replace(/^Bearer\s+/i, '')];
+        if (!who || who.role !== 'owner') return send(401, { message: 'Bad credentials' });
+        return send(200, { login: S.ownerLogin });
       }
       m = /^\/repos\/([^/]+)\/([^/]+)(\/.*)?$/.exec(u.pathname);
       if (!m) return send(404, { message: 'Not Found' });
@@ -212,14 +218,15 @@ export function standInGh(github, dir = tmpDir('forge-gh-')) {
     "const fs = require('fs');",
     'const args = process.argv.slice(2);',
     `fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + '\\n');`,
-    "let method = 'GET', target = '', body = {};",
+    "let method = 'GET', target = '', body = {}, jq = null;",
     'for (let i = 1; i < args.length; i++) {',
     "  if (args[i] === '-X') method = args[++i];",
+    "  else if (args[i] === '--jq') jq = args[++i];",
     "  else if (args[i] === '-f' || args[i] === '-F') { const flag = args[i]; const raw = args[++i]; const at = raw.indexOf('='); let v = raw.slice(at + 1); if (flag === '-F' && (v === 'true' || v === 'false')) v = v === 'true'; body[raw.slice(0, at)] = v; }",
     '  else target = args[i];',
     '}',
     `fetch(${JSON.stringify(github.url)} + '/' + target, { method, headers: { authorization: 'Bearer owner-user-token', 'content-type': 'application/json' }, body: method === 'GET' ? undefined : JSON.stringify(body) })`,
-    "  .then(async r => { const t = await r.text(); if (!r.ok) { process.stderr.write('gh: ' + t + ' (HTTP ' + r.status + ')\\n'); process.exit(1); } process.stdout.write(t); })",
+    "  .then(async r => { const t = await r.text(); if (!r.ok) { process.stderr.write('gh: ' + t + ' (HTTP ' + r.status + ')\\n'); process.exit(1); } process.stdout.write(jq && /^\\.\\w+$/.test(jq) ? String(JSON.parse(t)[jq.slice(1)]) + '\\n' : t); })",
     "  .catch(e => { process.stderr.write(String(e) + '\\n'); process.exit(1); });",
     ''
   ].join('\n'), { mode: 0o755 });
