@@ -1,4 +1,4 @@
-// test cases: 29
+// test cases: 31
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -556,6 +556,44 @@ test("the check wants a prerequisite in the plan, before what waits on it, and t
   const many = mk(616, 652, 697);
   many.items.push(...Array.from({ length: 6 }, (_, i) => item(4 + i, { issue: "new", sources: ["#697"] })));
   assert.match(P.checkPlan(many, c).problems.join(" | "), /9 items, and at most 8/);
+});
+
+// ---------- found lists are read whole ----------
+
+const owner = () => P.trusted()[0];
+const fakeGithub = (issues) => async (method, url, body) => {
+  const q = body.query;
+  const node = (c) => ({ author: c.author === undefined ? { login: owner(), __typename: "User" } : c.author, body: c.body, createdAt: "2026-11-23T10:00:00Z" });
+  if (q.includes("issues(states")) {
+    return { ok: true, status: 200, json: { data: { repository: { issues: { pageInfo: { hasNextPage: false }, nodes: issues.map((i) => ({ number: i.number, title: i.title, body: "b", createdAt: "x", author: { login: owner(), __typename: "User" }, labels: { nodes: i.labels.map((name) => ({ name })) }, comments: { nodes: i.comments.slice(-3).map(node) } })) } } } } };
+  }
+  const i = issues.find((x) => x.number === body.variables.number);
+  const from = body.variables.after ? Number(body.variables.after) : 0;
+  const page = i.comments.slice(from, from + 4);
+  return { ok: true, status: 200, json: { data: { repository: { issue: { comments: { pageInfo: { hasNextPage: from + 4 < i.comments.length, endCursor: String(from + 4) }, nodes: page.map(node) } } } } } };
+};
+const promptFor = (read) => P.buildPrompt({ version: "2.0.0-beta.27", repo: REPO, staged: STAGED, content: { sources: read.map((i) => ({ kind: "issue", id: `#${i.number}`, issue: i.number })), openIssues: Object.fromEntries(read.map((i) => [i.number, i])), allowedIssues: [], wishes: [] }, proposed: null, planner: "p", processSection: "s", maxItems: 8 });
+const LIST = [
+  ...Array.from({ length: 6 }, (_, k) => ({ body: `Found: line ${k + 1}` })),
+  { body: "Found: stranger line", author: { login: "stranger", __typename: "User" } },
+  { body: "bookkeeping one" },
+  { body: "bookkeeping two" },
+];
+
+test("a found list is read whole: all six Found lines and the later comments, never the stranger's", async () => {
+  const read = await P.readOpenIssues(fakeGithub([{ number: 7, title: "list", labels: ["found-list", "bug"], comments: LIST }]), REPO);
+  const prompt = promptFor(read);
+  for (let k = 1; k <= 6; k++) assert.ok(prompt.includes(`Found: line ${k}`), `line ${k}`);
+  assert.ok(prompt.includes("bookkeeping one") && prompt.includes("bookkeeping two"));
+  assert.ok(!prompt.includes("stranger line"));
+  assert.ok(prompt.indexOf("Found: line 1") < prompt.indexOf("Found: line 6"), "oldest first");
+});
+
+test("an issue without the label is still read from its last three comments", async () => {
+  const read = await P.readOpenIssues(fakeGithub([{ number: 8, title: "plain", labels: ["bug"], comments: LIST }]), REPO);
+  const prompt = promptFor(read);
+  assert.ok(!prompt.includes("Found: line 1"));
+  assert.ok(prompt.includes("bookkeeping one") && prompt.includes("bookkeeping two"));
 });
 
 await runCases();
