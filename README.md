@@ -142,4 +142,4 @@ optional, are in `driver/settings.example.json`.
 ## License
 
 MIT, see [LICENSE](LICENSE). This covers the Forge's own files only, not Cole Medin's factory or
-Archon, which the Forge downloads from their own repositories.
+Archon, which the Forge downloads from their own repository and from the public copy of Archon linked above.
