@@ -1,7 +1,7 @@
 // The page where the owner watches the factory (lib/watch.mjs), its chat answer (lib/owner/watch.mjs) and the lines
 // setup ends with. The server is a stand-in: a folder of the test's own is its file system, and systemctl, docker, git,
 // bun, caddy and the page's answers are stand-ins, so nothing is installed and nothing reaches the network.
-// test cases: 17
+// test cases: 19
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -15,7 +15,7 @@ import {
   dockerCaddyfile, ensureWatchPage, factoryArchon, pageDir, readRecord, runWatchCommand, siteText, watchLines
 } from '../lib/watch.mjs';
 import { SAY as CHAT, watch as chatWatch } from '../lib/owner/watch.mjs';
-import { prepare, SIDE_FILES } from '../lib/watch-prepare.mjs';
+import { prepare, SIDE_FILES, usesDatabaseServer } from '../lib/watch-prepare.mjs';
 
 const tmp = await mkdtemp(path.join(tmpdir(), 'forge-watch-'));
 let n = 0;
@@ -45,7 +45,8 @@ function nativeGodspeed(root, { host = 'srv2.example.org', addons = true } = {})
 // The stand-in server's commands and the page's answers.
 function server(root, { listening = '', validateFails = false, buildFails = false, answersOutside = true, active = [], refuse = null, badRevision = null } = {}) {
   const calls = [];
-  const state = { active: new Set(active), container: null, restarts: 0, runs: 0 };
+  // frontImage: the image Godspeed's own Caddy runs; an image in brokenImages does not start, one in stoppingImages stops at once.
+  const state = { active: new Set(active), container: null, restarts: 0, runs: 0, frontImage: 'caddy:2.10.2-alpine', brokenImages: new Set(), stoppingImages: new Set() };
   const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
   const run = async (command, args = [], options = {}) => {
     calls.push({ command, args, options });
@@ -60,14 +61,17 @@ function server(root, { listening = '', validateFails = false, buildFails = fals
       if (args[0] === 'ps') return ok('');
       if (args[0] === 'compose') return ok('abc123def4567890\n');
       if (args[0] === 'inspect' && args[1] === 'abc123def4567890') {
-        return ok(JSON.stringify([{ State: { Running: true }, Config: { Image: 'caddy:2.10.2-alpine' }, Mounts: [{ Destination: '/data', Type: 'volume', Name: 'gm_godspeed-certificates' }] }]));
+        return ok(JSON.stringify([{ State: { Running: true }, Config: { Image: state.frontImage }, Mounts: [{ Destination: '/data', Type: 'volume', Name: 'gm_godspeed-certificates' }] }]));
       }
       if (args[0] === 'inspect') return state.container ? ok(JSON.stringify([state.container])) : { status: 1, stdout: '[]', stderr: 'Error: No such object' };
       if (args[0] === 'rm') { state.container = null; return ok(); }
       if (args[0] === 'run') {
         state.runs++;
+        const image = args[args.indexOf('XDG_DATA_HOME=/data') + 1];
+        if (state.brokenImages.has(image)) return { status: 125, stdout: '', stderr: `docker: Error response from daemon: pull access denied for ${image}` };
         const label = args[args.indexOf('--label') + 1].split('=');
-        state.container = { State: { Running: true }, Config: { Image: args[args.indexOf('XDG_DATA_HOME=/data') + 1], Labels: { [label[0]]: label[1] } } };
+        state.container = { State: { Running: !state.stoppingImages.has(image) }, Config: { Image: image, Labels: { [label[0]]: label[1] } } };
+        state.containerConfig = read(at(root, DOCKER_CADDYFILE));
         return ok('f00d\n');
       }
     }
@@ -396,6 +400,39 @@ testCase('systemd refusing to reload, enable or start what the page needs is nev
     assert.deepEqual(await p.go(), { ok: false, why: WHY.start }, verb);
     assert.match(read(path.join(p.paths.state, 'watch.log')), /systemd: Failed to enable unit/);
   }
+}
+
+testCase("on Godspeed's Docker server a new web server container that does not start, or stops at once, gives way to the one before");
+{
+  for (const how of ['brokenImages', 'stoppingImages']) {
+    const root = fresh();
+    dockerGodspeed(root);
+    const s = server(root);
+    assert.equal((await page(root, s).go()).ok, true);
+    const config = read(at(root, DOCKER_CADDYFILE));
+    s.state.frontImage = 'caddy:2.11.4-alpine';
+    s.state[how].add('caddy:2.11.4-alpine');
+    assert.deepEqual(await page(root, s).go(), { ok: false, why: WHY.front }, how);
+    assert.deepEqual([s.state.container?.Config.Image, s.state.container?.State.Running], ['caddy:2.10.2-alpine', true], `${how}: the container before runs again`);
+    assert.equal(read(at(root, DOCKER_CADDYFILE)), config, `${how}: with the configuration it had`);
+    assert.equal(s.state.containerConfig, config);
+  }
+}
+
+testCase('a factory that keeps its records in a database server gets no page, because only a database file can be kept read-only to it');
+{
+  const root = fresh();
+  dockerGodspeed(root);
+  write(at(root, '/root/.archon/.env'), 'CLAUDE_BIN_PATH=/usr/local/bin/claude\nDATABASE_URL=postgresql://archon@127.0.0.1/archon\n');
+  const s = server(root);
+  assert.deepEqual(await page(root, s).go(), { ok: false, why: WHY.databaseServer });
+  assert.equal(read(at(root, `/etc/systemd/system/${UNIT}.service`)), null);
+  assert.ok(!s.calls.some(c => c.command === 'git'), 'nothing downloaded');
+  const home = fresh();
+  fs.writeFileSync(path.join(home, '.env'), 'export DATABASE_URL="postgresql://archon@db/archon"\n');
+  assert.equal(await prepare({ dir: '/x', home, run: () => { throw new Error('must not run'); }, makeKey: async () => { throw new Error('must not run'); } }), 2, 'nor does the page start, if the settings change later');
+  assert.deepEqual(fs.readdirSync(home), ['.env']);
+  for (const [text, uses] of [['# DATABASE_URL=postgresql://x\n', false], ['DATABASE_URL=\n', false], ['OTHER=1\n', false]]) assert.equal(usesDatabaseServer(text), uses, text);
 }
 
 testCase('a failure that throws, even before the page takes its lock, never escapes: setup and the hourly run each say it in one sentence');

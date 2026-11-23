@@ -144,8 +144,10 @@ If the page does not open, your hosting company's firewall may be blocking it: l
   the install line, setup or `godspeed-forge watch` try the new one again. The page's copy of Archon lives in
   `/opt/godspeed-forge/watch/` (about 2 GB per version).
 - **When it cannot be set up** (no web address from Godspeed on the server yet, a Godspeed too old to give add-ons one,
-  a download that failed), the install and setup say why in one sentence and carry on; `godspeed-forge watch` tries
-  again.
+  a download that failed, or a factory whose Archon keeps its records in a database server through `DATABASE_URL`
+  instead of its database file, since only a file can be kept read-only to the page), the install and setup say why in
+  one sentence and carry on; `godspeed-forge watch` tries again. On Godspeed's Docker server a new web server container
+  that does not start gives way to the one before, with the configuration it had.
 
 ## For every owner
 
