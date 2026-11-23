@@ -171,22 +171,31 @@ export async function stepRound(ctx, deps = {}) {
   return out;
 }
 
-// The inventory entries of the steps' health (see the top). `ctx.steps`: the discovered steps.
+// What an owner reads about a step: its STEP.forOwner ("the watch on your releases"), never its internal name. On a new
+// owner's server (acting runs off: budget.act_runs_per_day 0) a step without one is "one of the Forge's jobs"; on the
+// first owner's server such a step keeps its internal name, as before. -> the phrase, or null
+export const GENERIC_JOB = "one of the Forge's jobs";
+export const newOwnerSettings = settings => !!(settings && settings.budget && settings.budget.act_runs_per_day !== undefined && settings.budget.act_runs_per_day !== "" && Number(settings.budget.act_runs_per_day) === 0);
+export const ownerPhrase = (mod, settings) => (mod.STEP && typeof mod.STEP.forOwner === "string" && mod.STEP.forOwner.trim()) || (newOwnerSettings(settings) ? GENERIC_JOB : null);
+
+// The inventory entries of the steps' health (see the top). `ctx.steps`: the discovered steps. An entry of a step with a
+// phrase for the owner carries it (forOwner) and its title uses it; the internal name stays in the evidence.
 export function stepEntries(state, steps, settings, now) {
   const out = [];
   for (const mod of steps || []) {
     const name = mod.STEP.name, cfg = stepConfig(settings, mod), s = (state.steps || {})[name];
+    const phrase = ownerPhrase(mod, settings);
     if (!s || !cfg.enabled) continue;
     const window = 3 * Math.max(cfg.every, cfg.max) * MIN;
     const base = s.lastSuccessAt || s.firstSeenAt || now;
     const failing = (s.failuresInRow || 0) >= 3 || now - base > window;
     if (failing && !(s.lastRunAt === undefined && !s.launchedAt)) {
-      out.push({ id: `step:${name}`, kind: "step", step: name, owner: "the factory driver", title: `the ${name} step is not working`, milestoneAt: base, limitH: Math.max(1, Math.ceil((3 * cfg.every) / 60)),
+      out.push({ id: `step:${name}`, kind: "step", step: name, owner: "the factory driver", title: phrase ? `${phrase} is not working` : `the ${name} step is not working`, ...(phrase ? { forOwner: phrase } : {}), milestoneAt: base, limitH: Math.max(1, Math.ceil((3 * cfg.every) / 60)),
         evidence: [`the ${name} step has failed ${s.failuresInRow || 0} runs in a row; its last successful run was ${s.lastSuccessAt ? iso(s.lastSuccessAt) : "never"}`,
           `its last error: ${s.lastError || "none recorded (no run has finished)"}`, `it runs every ${cfg.every} minutes, for at most ${cfg.max}; its state is in ${cfg.stateDir}; its runs are the unit ${stepUnit(name)} (journalctl -u ${stepUnit(name)})`] });
     }
     for (const [key, h] of Object.entries(s.halts || {})) {
-      out.push({ id: `halt:${name}:${key}`, kind: "halt", step: name, owner: null, title: `the ${name} step stopped itself (${key})`, milestoneAt: h.since, limitH: 0,
+      out.push({ id: `halt:${name}:${key}`, kind: "halt", step: name, owner: null, title: phrase ? `${phrase} has stopped` : `the ${name} step stopped itself (${key})`, ...(phrase ? { forOwner: phrase } : {}), milestoneAt: h.since, limitH: 0,
         evidence: [`the ${name} step stopped itself and reports, on every run while it holds: ${h.words}`, ...(h.clear ? [`when it is put right, the step's own command ends the halt: ${h.clear}`] : []),
           `a halt is put right by acting on the server, never by waiting; nothing else moves it`] });
     }
