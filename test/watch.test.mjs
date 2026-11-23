@@ -328,18 +328,20 @@ testCase('setup ends with the address and the sign-in in plain words, godspeed-f
   assert.deepEqual(refused, [NOT_HERE]);
 }
 
-testCase('asked in the chat, the Forge gives the address and the user name, never the password');
+testCase('asked in the chat, the Forge gives the address and the user name, never the password, and only while the address answers');
 {
   const state = fresh();
   const paths = { state };
-  const active = async () => ({ status: 0, stdout: '', stderr: '' });
-  const stopped = async () => ({ status: 3, stdout: '', stderr: '' });
-  assert.deepEqual(await chatWatch({ kind: 'watch' }, { paths, run: active }), { ok: false, say: CHAT.none });
+  const asked = [];
+  const answering = async q => { asked.push(q); return q.auth === 'forge:Kq7dWm2xPz9bTn4hRv3s' ? 200 : 401; };
+  const silent = async () => 0;
+  assert.deepEqual(await chatWatch({ kind: 'watch' }, { paths, ask: answering }), { ok: false, say: CHAT.none });
   fs.writeFileSync(path.join(state, 'watch.json'), JSON.stringify({ format: 1, host: 'srv1.example.com', port: 48445, upstream: 3190, user: 'forge', password: 'Kq7dWm2xPz9bTn4hRv3s', hash: HASH, revision: ARCHON_REVISION }));
-  const here = await chatWatch({ kind: 'watch' }, { paths, run: active });
+  const here = await chatWatch({ kind: 'watch' }, { paths, ask: answering });
   assert.deepEqual(here, { ok: true, say: "You can watch the factory at https://srv1.example.com:48445. Sign in as forge with the password setup showed you. If you no longer have it, type godspeed-forge watch in your server's terminal, logged in as root, and it shows it again." });
   assert.ok(!here.say.includes('Kq7dWm2xPz9bTn4hRv3s'));
-  assert.deepEqual(await chatWatch({ kind: 'watch' }, { paths, run: stopped }), { ok: false, say: CHAT.stopped('https://srv1.example.com:48445') });
+  assert.deepEqual(asked.at(-1), { secure: true, port: 48445, host: 'srv1.example.com', pathname: '/api/health', auth: 'forge:Kq7dWm2xPz9bTn4hRv3s' }, 'the address itself, signed in');
+  assert.deepEqual(await chatWatch({ kind: 'watch' }, { paths, ask: silent }), { ok: false, say: CHAT.stopped('https://srv1.example.com:48445') });
 }
 
 const COLE = { source: 'https://github.com/coleam00/Archon', revision: '1cfb8fc541580fe5edf15e9a504b572bc9bb45bb' };
