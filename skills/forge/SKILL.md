@@ -1,6 +1,6 @@
 ---
 name: forge
-description: The Forge, which builds the owner's GitHub projects with an AI software factory and makes a release public only on their go. Use it first for a short message with no other context, such as "go", "yes", "take it back" or one that starts with a handle like F7, whenever .godspeed/forge/waiting.json lists something: the Forge sent the owner a message the chat may not have seen, and this is the answer. Also use when the owner asks to plan a release ("plan release my-app", "plan the next my-app release", "what should go into the next version?"); says "go", "make it public", "take it back", "release status", "where is the release?" or asks in any words how the next version of one of their projects is coming along; says "turn on automatic work", "pause the factory" or "run one lap"; replies to a Forge question (a message that starts with a Forge handle such as F7, or a bare answer when .godspeed/forge/waiting.json shows exactly one question waiting); or asks to set up the Forge.
+description: The Forge, which builds the owner's GitHub projects with an AI software factory and makes a release public only on their go. Use it first for a short message with no other context, such as "go", "yes", "take it back" or one that starts with a handle like F7, whenever .godspeed/forge/waiting.json lists something: the Forge sent the owner a message the chat may not have seen, and this is the answer. Also use when the owner asks to plan a release ("plan release my-app", "plan the next my-app release", "what should go into the next version?"); says "go", "make it public", "take it back", "release status", "where is the release?" or asks in any words how the next version of one of their projects is coming along; says "turn on automatic work", "pause the factory" or "run one lap"; asks where to watch the factory at work ("where can I watch the factory?", "show me the factory working", "where do I see the laps?"); replies to a Forge question (a message that starts with a Forge handle such as F7, or a bare answer when .godspeed/forge/waiting.json shows exactly one question waiting); or asks to set up the Forge.
 ---
 
 # The Forge
@@ -75,6 +75,10 @@ Never write anything else under `.godspeed/forge/`, and never change the files t
 - **Turn on automatic work**: kind `work-on`. **Pause the factory**: kind `work-off`. **Run one lap**: kind `lap`.
   When the owner names no project and there are several, `project` may be left out: the Forge then does it for
   every project.
+- **Where can I watch the factory**, or any words asking where to see the factory, its laps or its projects at work:
+  kind `watch`, with `project` left out, because one page shows every project. The Forge's `say` names the page's
+  address and the user name to sign in with. The password is never in it and never in the chat: setup showed it to
+  the owner, and the server's terminal shows it again. Never ask the owner for it.
 - **A reply to a Forge question**: kind `answer`, with the question's handle:
 
   ```json

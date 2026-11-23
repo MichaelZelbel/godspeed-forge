@@ -45,7 +45,9 @@ const EXEMPT = {
 // below follows setup's imports from its entry points, so the day setup reaches one of them it is checked again.
 const NOT_SETUP = {
   'godspeed.mjs': 'the bridge to Godspeed, used by the installer, the chat inbox and the driver steps, never by setup',
-  'inbox.mjs': 'the chat inbox, which its own service runs, never setup'
+  'inbox.mjs': 'the chat inbox, which its own service runs, never setup',
+  'watch.mjs': 'the page where the owner watches the factory, which the install line, godspeed-forge watch and its hourly timer set up, and the setup command only once setup finished, as it installs the driver; test/watch.test.mjs makes its commands fail',
+  'watch-prepare.mjs': 'what the watching page\'s service makes before each start, run by bun from that service, never by setup'
 };
 const sources = new Map();
 for (const name of await readdir(lib)) {
