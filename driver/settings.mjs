@@ -51,7 +51,7 @@ export const CORE = [
   { key: "notices.godspeed_notices_file", def: g => `${g("ai.act_brain_dir")}/.godspeed/notices.json`, env: ["FD_NOTICES_FILE", "FD_ACT_NOTICES", "RD_NOTICES_FILE", "DM_NOTICES"], meaning: "the notice queue by which a program reaches the owner's chat" },
   { key: "notices.telegram_env_file", def: () => "", env: ["TG_ENV"], meaning: "env file with the owner's Telegram bot" },
   { key: "notices.telegram_machine_env_file", def: () => "", env: ["TG_MACHINE_ENV"], meaning: "env file with the machine's own Telegram bot" },
-  { key: "notices.watch_repo", required: true, env: ["WATCH_REPO", "DM_WATCH_REPO"], meaning: "the repository holding the outside watcher and the heartbeat issue" },
+  { key: "notices.watch_repo", def: () => "", env: ["WATCH_REPO", "DM_WATCH_REPO"], meaning: "the repository holding the outside watcher, the heartbeat issue and the notice issues; empty (a new owner) means the driver posts nothing on GitHub" },
   { key: "notices.watch_issues_repo", def: g => g("notices.watch_repo"), env: ["WATCH_ISSUES_REPO"], meaning: "where the watcher's notice issues are opened" },
   { key: "ai.bins.claude", def: g => `${g("server.factory_home")}/.local/bin/claude`, env: ["FD_CLAUDE_BIN"], fmt: json, meaning: "the Claude program (or a command as a list)" },
   { key: "ai.bins.codex", def: () => "/usr/local/bin/codex", env: ["FD_CODEX_BIN"], fmt: json, meaning: "the Codex program (or a command as a list)" },

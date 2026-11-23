@@ -2,7 +2,7 @@
 // driver settings yet): only steps that work with a new owner's settings are on, the driver starts no acting AI runs
 // and no AI helpers, and nothing it says names the first owner. A dry round is run against the generated settings
 // with GitHub and the server stood in for, and each step the settings turn off is shown to refuse them.
-// test cases: 6
+// test cases: 8
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,9 @@ import { NEW_OWNER_OFF, NEW_OWNER_ON, driverAfterSetup, newOwnerSettings, runDri
 import { loadSettings } from '../driver/settings.mjs';
 import { discoverSteps } from '../driver/steps.mjs';
 import { testCase } from './cases.mjs';
+import { publishHeartbeat, watcherHealth, mirroredHead, seenCheck, readActivity, nextReleaseFacts, supersessionLook, rung0 } from '../driver/duties.mjs';
+import { deliver } from '../driver/facts.mjs';
+import { tell } from '../driver/deadman/deadman.mjs';
 
 const USER = { username: 'root', uid: 0, gid: 0, homedir: '/root' };
 const WORKSPACE = '/var/lib/docker/volumes/godspeed-data/_data/workspace';
@@ -47,7 +50,7 @@ testCase('a new owner\'s driver settings: only the general steps on, no acting r
     budget: { act_runs_per_day: 0, reserved: 0 },
     env: { FD_MAX_HELPERS: '0' },
     server: { factory_user: 'root', factory_uid: 0, factory_gid: 0, factory_home: '/root' },
-    notices: { watch_repo: 'acme/app', godspeed_notices_file: `${WORKSPACE}/.godspeed/notices.json` },
+    notices: { watch_repo: '', godspeed_notices_file: `${WORKSPACE}/.godspeed/notices.json` },
     ai: { act_brain_dir: WORKSPACE }
   });
   assert.deepEqual([NEW_OWNER_OFF, NEW_OWNER_ON], [['plan', 'stage', 'questions', 'test-machine', 'trust', 'keep-main-green'], ['owner-releases', 'owner-questions']]);
@@ -143,3 +146,80 @@ testCase('a dry round on a new owner\'s settings starts no acting run and no hel
     assert(!/Michael/.test(out.join('\n')), step.name);
   }
 }
+
+// Every call that would put something on GitHub: an issue, a comment, an edit, a workflow run, a file.
+const WRITE = /-X\s+(?:POST|PATCH|PUT|DELETE)|--method\s+(?:POST|PATCH|PUT|DELETE)|\bworkflow run\b|\bissue (?:create|comment|edit|close|reopen)\b|\/comments\b/i;
+const asText = c => (Array.isArray(c) ? c.join(' ') : String(c));
+const writesIn = calls => calls.map(asText).filter(s => WRITE.test(s));
+
+testCase('without a watch repository the heartbeat, the outside watcher, notice issues and the dead-man\'s message put nothing on GitHub');
+{
+  for (const name of ['WATCH_REPO', 'WATCH_ISSUES_REPO', 'DM_WATCH_REPO']) delete process.env[name];
+  const calls = [];
+  const run = (cmd, args) => { calls.push([cmd, ...args]); return { status: 0, stdout: '[]', stderr: '' }; };
+  const env = { REPO: 'acme/app' };
+  assert.deepEqual(publishHeartbeat(env, { at: '2026-11-23T10:00:00Z', rung3: [], releases: [] }, run), { ok: true, skipped: 'no watch repository: no heartbeat issue' });
+  assert.equal(mirroredHead(env, run), '');
+  assert.deepEqual(watcherHealth(env, Date.now(), run, {}), { ok: true });
+  const issues = [];
+  const d = await deliver(env, { title: 'A title', text: 'A text', noticeId: 'n:1' }, { telegram: async () => ({ ok: false, why: 'no telegram here' }), issue: async (...a) => { issues.push(a); return { ok: true, receipt: 'x' }; } });
+  assert.deepEqual([d.receipts, issues], [{}, []], 'no notice issue');
+  const root = await mkdtemp(join(tmpdir(), 'forge-deadman-'));
+  await tell({ TG_ENV: join(root, 'none.env'), WATCH_REPO: '', OWNER: 'acme', NOTICES: join(root, 'notices.json') }, 'The factory needs a look.', { run, polls: 0, sleep: async () => {} });
+  assert.deepEqual(calls, [], 'gh was never asked');
+  // with a watch repository (the first owner's server) the heartbeat is written as before
+  publishHeartbeat({ WATCH_REPO: 'owner/records' }, { at: '2026-11-23T10:00:00Z', rung3: [], releases: [] }, run);
+  assert.ok(calls.some(c => c.join(' ').includes('repos/owner/records/issues')));
+}
+
+testCase('a new owner\'s dry round and a real round, with GitHub stood in, open no issue and post no comment anywhere');
+{
+  for (const name of ['WATCH_REPO', 'WATCH_ISSUES_REPO', 'DM_WATCH_REPO']) delete process.env[name];
+  const { dir, root } = await settingsFolder(driver => {
+    driver.notices.godspeed_notices_file = join(driver.server.state_dir, '..', 'notices.json');
+    driver.ai.act_brain_dir = join(driver.server.state_dir, '..', 'workspace');
+  });
+  const written = JSON.parse(await readFile(join(dir, 'driver.json'), 'utf8'));
+  assert.equal(written.notices.watch_repo, '', 'a new owner\'s settings name no watch repository');
+  // gh as a program, should anything reach for it: every call is written down, and it answers nothing
+  const bin = join(root, 'bin'), ghLog = join(root, 'gh.log');
+  await mkdir(bin);
+  await writeFile(join(bin, 'gh'), `#!/bin/sh\necho "$*" >> "${ghLog}"\nexit 1\n`);
+  for (const program of ['systemctl', 'systemd-run', 'journalctl']) await writeFile(join(bin, program), '#!/bin/sh\nexit 1\n');
+  for (const program of ['gh', 'systemctl', 'systemd-run', 'journalctl']) await chmod(join(bin, program), 0o755);
+  process.env.PATH = `${bin}:${process.env.PATH}`;
+  const calls = [];
+  const run = (cmd, args) => { calls.push([cmd, ...args]); return { status: 1, stdout: '', stderr: 'the stand-in answers nothing' }; };
+  const issues = [], acting = [];
+  const deps = {
+    ...roundDeps,
+    gh: (args, input) => { calls.push(['gh', ...args]); return roundDeps.gh(args, input); },
+    publishHeartbeat: (e, s) => publishHeartbeat(e, s, run),
+    watcherHealth: (e, n, _run, s) => watcherHealth(e, n, run, s),
+    mirroredHead: e => mirroredHead(e, run),
+    seenCheck: n => seenCheck(n, run),
+    activity: (e, w) => readActivity(e, w, run, Date.now()),
+    nextRelease: (e, w, jv, n) => nextReleaseFacts(e, w, jv, n, run),
+    supersession: (jv, w, _run, c, ok) => supersessionLook(jv, w, run, c, ok),
+    rung0: (e, w, s, n, _run, ticket) => rung0(e, w, s, n, run, ticket),
+    deliver: { telegram: async () => ({ ok: false, why: 'no telegram here' }), issue: async (...a) => { issues.push(a); return { ok: true, receipt: 'x' }; } },
+    housekeep: async () => ({ done: [], failed: [] }),
+    stepDeps: { isActive: () => false, unitResult: () => '', systemdRun: argv => { calls.push(['systemd-run', ...argv]); return { status: 1, stderr: 'the stand-in starts nothing' }; }, readJson: (file, fallback) => fallback },
+    launchAct: async (...a) => { acting.push(a); throw new Error('no acting run for a new owner'); },
+    launchHelper: async (...a) => { acting.push(a); throw new Error('no helper for a new owner'); }
+  };
+  for (const argv of [['round', '--dry-run', '--settings-dir', dir], ['round', '--settings-dir', dir]]) {
+    const lines = [];
+    const code = await runDriverCommand(argv, { output: line => lines.push(line), round: { deps } });
+    assert.equal(code, 0, `${argv.join(' ')}:\n${lines.join('\n')}`);
+  }
+  let logged = [];
+  try { logged = (await readFile(ghLog, 'utf8')).trim().split('\n').filter(Boolean); } catch { logged = []; }
+  assert.deepEqual(writesIn([...calls, ...logged]), [], 'nothing was written to GitHub');
+  assert.ok(![...calls, ...logged].map(asText).some(s => s.includes('repos/acme/app/issues') && /-X|POST|PATCH/.test(s)), 'no issue on the owner\'s project');
+  assert.deepEqual(issues, [], 'no notice issue');
+  assert.deepEqual(acting, [], 'no acting run and no helper');
+  const state = JSON.parse(await readFile(join(root, 'state', 'state.json'), 'utf8'));
+  assert.ok(state && typeof state === 'object', 'the real round ran and kept its state');
+}
+

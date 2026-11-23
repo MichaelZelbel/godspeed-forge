@@ -214,6 +214,7 @@ export async function installDriver({ source = HERE, settingsDir = defaultSettin
 // every name in them comes from the repository's variables, which are set here.
 export function installWatcher(source, loaded, D = realDeps) {
   const g = loaded.get, repo = g("notices.watch_repo"), say = [];
+  if (!repo) return ["There is no watch repository in the settings (notices.watch_repo), so no outside watcher was put anywhere."];
   const gh = (...args) => D.run("gh", args);
   const files = [["watcher/factory-watch.yml", ".github/workflows/factory-watch.yml"], ["watcher/factory-notify.yml", ".github/workflows/factory-notify.yml"], ["watcher/factory-watch.mjs", "scripts/factory-watch.mjs"]];
   for (const [from, to] of files) {

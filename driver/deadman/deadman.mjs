@@ -148,8 +148,9 @@ export async function tell(cfg, text, deps = {}) {
   const receipts = {};
   const c = tgCreds(cfg.TG_ENV);
   if (c.token && c.chat) { try { const r = await (deps.fetch || fetch)(`https://api.telegram.org/bot${c.token}/sendMessage`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chat_id: c.chat, text }), signal: AbortSignal.timeout(20000) }); const j = await r.json(); if (j.ok && j.result && j.result.message_id) receipts.telegram = String(j.result.message_id); } catch {} }
-  // transport B: the notify workflow opens an issue authored by github-actions[bot] that names the owner (his own token would notify nobody)
-  try {
+  // transport B: the notify workflow opens an issue authored by github-actions[bot] that names the owner (his own token would notify nobody);
+  // only where there is a watch repository (a new owner has none, and nothing is posted on their project's repository)
+  if (cfg.WATCH_REPO) try {
     const run = deps.run || sys, ref = deps.ref || crypto.createHash("sha1").update(`deadman|${text}|${Math.floor(Date.now() / 86400000)}`).digest("hex").slice(0, 12);
     const find = () => { try { const hit = JSON.parse(run("gh", ["api", `repos/${cfg.WATCH_REPO}/issues?state=all&per_page=100`]).stdout).find(i => i.user && i.user.login === "github-actions[bot]" && String(i.body || "").startsWith(`@${cfg.OWNER}`) && String(i.body || "").includes(`<!-- ref:${ref} -->`)); return hit ? hit.html_url : null; } catch { return null; } };
     let url = find();

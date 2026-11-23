@@ -53,7 +53,10 @@ test("a missing key is refused by name, and nothing else is said about it", () =
   assert.doesNotThrow(() => load(folder(f => { delete f.d.keys.token_script; })));
   const withTrust = message(() => loadSettings(folder(f => { delete f.d.keys.token_script; }), { steps: [...steps, { name: "trust", SETTINGS: [{ key: "keys.token_script", required: true }] }] }));
   assert.ok(withTrust.includes("keys.token_script"), withTrust);
-  miss(f => { delete f.d.notices.watch_repo; }, "notices.watch_repo");
+  // no watch repository (a new owner's settings): accepted, and nothing names one to the programs that would post there
+  const noWatch = load(folder(f => { delete f.d.notices.watch_repo; }));
+  assert.equal(noWatch.env.WATCH_REPO, undefined);
+  assert.equal(noWatch.env.WATCH_ISSUES_REPO, undefined);
   miss(f => { delete f.d.ai.act_brain_dir; }, "ai.act_brain_dir");
   miss(f => { delete f.p.apps.builder; }, "main.apps.builder");
   miss(f => { delete f.p.checkout; }, "main.checkout");
@@ -62,8 +65,8 @@ test("a missing key is refused by name, and nothing else is said about it", () =
   miss(f => { delete f.d.steps["test-machine"]; }, "steps.test-machine.holdout");
   miss(f => { delete f.d.steps.questions.hermes_home; }, "steps.questions.hermes_home");
   miss(f => { delete f.d.server.factory_user; delete f.d.server.factory_uid; }, "server.factory_user");
-  const two = message(() => load(folder(f => { delete f.d.owner.github_login; delete f.d.notices.watch_repo; })));
-  assert.ok(two.includes("owner.github_login") && two.includes("notices.watch_repo"), "every missing key is named at once");
+  const two = message(() => load(folder(f => { delete f.d.owner.github_login; delete f.d.ai.act_brain_dir; })));
+  assert.ok(two.includes("owner.github_login") && two.includes("ai.act_brain_dir"), "every missing key is named at once");
 });
 
 test("a project without a releases block needs none of the release keys; more than one project with one is refused in plain words", () => {

@@ -87,7 +87,9 @@ export function newOwnerSettings(repository, { user = os.userInfo(), godspeed = 
     budget: { act_runs_per_day: 0, reserved: 0 },
     env: { FD_MAX_HELPERS: '0' },
     server: { factory_user: user.username, factory_uid: user.uid, factory_gid: user.gid, factory_home: user.homedir },
-    notices: { watch_repo: repository, ...(notices ? { godspeed_notices_file: notices } : {}) },
+    // no watch repository: the driver posts nothing on the owner's project repository (no heartbeat issue, no notice
+    // issues); the owner hears through Godspeed
+    notices: { watch_repo: '', ...(notices ? { godspeed_notices_file: notices } : {}) },
     ai: { act_brain_dir: workspace || env.GODSPEED_WORKSPACE || path.join(user.homedir, '.godspeed', 'workspace') }
   };
 }
