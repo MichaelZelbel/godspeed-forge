@@ -31,3 +31,14 @@ repository, and confirm that installation to the command. They must also answer 
 is for and who uses it. GitHub redirects each creation step to a local address; the owner pastes
 that address back so the Forge can finish the exchange. Never ask them to paste credentials into
 chat, and never say setup is complete before both repository installations and doctor succeed.
+
+# The page where the owner watches the factory
+
+The install line also sets up the page where the owner watches the factory at work (every project, every run and each
+step of a run), or brings it up to date, and prints its address. Setup ends with the address and the sign-in, in the
+form "Watch the factory at https://<name>:<port>. Sign in as forge with the password <password>; keep both in your
+password manager." Running the install line or setup again keeps the sign-in. Never ask the owner for the password and
+never put it into the chat; when they no longer have it, they type `godspeed-forge watch` in the server's terminal, as
+root, which shows the address and the sign-in again. When the page does not open from outside although setup gave its
+address, a firewall the hosting company runs in front of the server must let that port in (48445 unless setup named
+another). When setup could not set the page up, it said why in one sentence; `godspeed-forge watch` tries again.

@@ -20,7 +20,7 @@ const shipped = () => [
 ].filter(f => !/\.(png|jpg|gif|ico|woff2?)$/.test(f));
 
 // What may not be in a shipped file: the first owner's name, repositories, server, factory user and key paths.
-// The Forge's own public address, in the installer's text, is the one allowance.
+// The Forge's own public address, in the installer's text, and the public copy of Archon it installs are the allowances.
 const BANNED = [
   [/MichaelZelbel/, "an owner's login"],
   [/\/home\/godspeed-forge/, "the first server's factory user's home"],
@@ -35,7 +35,7 @@ const BANNED = [
   [/godspeed-engine|godspeed-factory-watch|godspeed-mission-control/, "one of the first owner's repositories"],
 ];
 // The one other allowance: the complete public address of the Forge's copy of Archon (Manager decision, issue #127).
-const ALLOWED = /(?:(?:github\.com|api\.github\.com\/repos)\/MichaelZelbel\/godspeed-forge\b|github\.com\/MichaelZelbel\/Archon(?![\w.-]))/g;
+const ALLOWED = /(?:github\.com|api\.github\.com\/repos)\/MichaelZelbel\/(?:godspeed-forge\b|Archon(?![\w.-]))/g;
 
 test("no shipped file names the first owner, his repositories, his server, his factory user or his key paths", () => {
   const files = shipped();
@@ -55,6 +55,8 @@ test("the ban catches what it should, and the README and the installer may name 
   assert.ok(!caught("https://github.com/MichaelZelbel/Archon"), "the Forge's public Archon address");
   assert.ok(!caught("ARCHON_SOURCE = 'https://github.com/MichaelZelbel/Archon'"), "the address inside code");
   for (const s of ["MichaelZelbel", "github.com/MichaelZelbel/other", "github.com/MichaelZelbel/Archon-fork", "github.com/MichaelZelbel/Archon.git", "github.com/MichaelZelbel/Archon2", "https://example.com/MichaelZelbel/Archon", "github.com/OtherUser/Archon MichaelZelbel"]) assert.ok(caught(s), s);
+  assert.ok(!caught("export const ARCHON_SOURCE = 'https://github.com/MichaelZelbel/Archon';"), "the public copy of Archon the Forge installs");
+  assert.ok(caught("https://github.com/MichaelZelbel/Archon-private"), "only that copy");
   assert.ok(!caught("the file keys.env in the settings folder"), "a name is not a path");
 });
 
