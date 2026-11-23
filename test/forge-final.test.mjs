@@ -113,7 +113,7 @@ testCase('at the end of setup the project\'s facts file is written once through 
   assert.ok(said.every(l => !/facts/i.test(l)));
   const quiet = [];
   await driverAfterSetup('acme/fresh', { paths: { config: path.join(root, 'etc-quiet', 'config.json'), state }, config: { projectsRoot: path.join(root, 'projects') }, agent: 'claude', godspeed: null, githubApi: gh.url, platform: 'linux', uid: 0, systemd: () => true, install: notRoot, output: l => quiet.push(l) });
-  assert.ok(quiet.every(l => !/facts|Godspeed/i.test(l)), 'without a bridge nothing is said about it');
+  assert.ok(quiet.every(l => !/facts|Godspeed(?!-forge)/i.test(l)), 'without a bridge nothing is said about it');
 }
 
 testCase('a step that is not working is told to a new owner once, in plain words, never by its internal name; the first owner\'s own steps keep their words');

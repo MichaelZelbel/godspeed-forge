@@ -3,6 +3,7 @@
 // Godspeed that says each message once per id as the real one does (and keeps every attempt, so a test also sees
 // a repeat the bridge dropped), and the Forge's private state for a project set up with two Apps. No network, no AI.
 import crypto from 'node:crypto';
+import { MESSAGE_ID } from '../lib/godspeed.mjs';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -238,6 +239,7 @@ export function standInGh(github, dir = tmpDir('forge-gh-')) {
 // `attempts` every call, repeats included.
 export function standInBridge(workspace = tmpDir('forge-workspace-')) {
   const sent = [];
+  const bridgeState = { failNext: false };
   const attempts = [];
   return {
     workspace,
@@ -251,12 +253,17 @@ export function standInBridge(workspace = tmpDir('forge-workspace-')) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, content);
     },
+    // Like the real bridge: an id it would refuse is refused here too, each id is sent once, and the answer has the
+    // real bridge's shape. failNext makes the next send throw, as a message that could not leave.
     async sendToOwner(text, { id } = {}) {
       attempts.push({ text, id });
-      if (id && sent.some(s => s.id === id)) return 'already';
+      if (typeof id !== 'string' || !MESSAGE_ID.test(id)) throw new Error('a message to the owner needs an id');
+      if (bridgeState.failNext) { bridgeState.failNext = false; throw new Error('the message could not leave'); }
+      if (sent.some(s => s.id === id)) return { sent: false, how: 'notice', already: true };
       sent.push({ text, id });
-      return 'notice';
+      return { sent: true, how: 'notice' };
     },
+    failNextSend() { bridgeState.failNext = true; },
     json(rel) {
       try { return JSON.parse(fs.readFileSync(path.join(workspace, rel), 'utf8')); } catch { return null; }
     },

@@ -1,6 +1,6 @@
 ---
 name: forge
-description: The Forge, which builds the owner's GitHub projects with an AI software factory and makes a release public only on their go. Use when the owner asks to plan a release ("plan release my-app", "plan the next my-app release", "what should go into the next version?"); says "go", "make it public", "take it back", "release status", "where is the release?" or asks in any words how the next version of one of their projects is coming along; says "turn on automatic work", "pause the factory" or "run one lap"; replies to a Forge question (a message that starts with a Forge handle such as F7, or a bare answer when .godspeed/forge/waiting.json shows exactly one question waiting); or asks to set up the Forge.
+description: The Forge, which builds the owner's GitHub projects with an AI software factory and makes a release public only on their go. Use it first for a short message with no other context, such as "go", "yes", "take it back" or one that starts with a handle like F7, whenever .godspeed/forge/waiting.json lists something: the Forge sent the owner a message the chat may not have seen, and this is the answer. Also use when the owner asks to plan a release ("plan release my-app", "plan the next my-app release", "what should go into the next version?"); says "go", "make it public", "take it back", "release status", "where is the release?" or asks in any words how the next version of one of their projects is coming along; says "turn on automatic work", "pause the factory" or "run one lap"; replies to a Forge question (a message that starts with a Forge handle such as F7, or a bare answer when .godspeed/forge/waiting.json shows exactly one question waiting); or asks to set up the Forge.
 ---
 
 # The Forge
@@ -11,6 +11,11 @@ it, and makes it public only when they say go. It runs on the server beside Gods
 in the mission control folder, under `.godspeed/forge/`.
 
 ## First, read what the Forge knows
+
+**A short reply with nothing before it is usually for the Forge.** The Forge sends its messages (a version ready to try, a
+question) straight to the owner, so they may not be in this chat. When the owner writes only "go", "yes", "take it
+back" or a handle such as F7, read `.godspeed/forge/waiting.json` before anything else: if it lists something that
+the message answers, it is a Forge request, below.
 
 Before you answer, read these files in the mission control folder:
 

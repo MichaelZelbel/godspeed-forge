@@ -382,6 +382,9 @@ testCase('a stand-in Telegram address is honoured only in test mode, and a messa
   assert.deepEqual(await test.gs.sendToOwner('Hello.', { id: 'x2' }), { sent: true, how: 'telegram' });
   assert.equal(calls[0].url, 'http://127.0.0.1:9/bot1:a/sendMessage');
   await assert.rejects(gs.sendToOwner('Hello.', {}), /needs an id/);
+  // The ids the release and question steps make carry the project's owner/repository.
+  assert.deepEqual(await test.gs.sendToOwner('acme 0.1.0 is ready to try.', { id: 'forge-release-staged-acme/app-0.1.0' }), { sent: true, how: 'telegram' });
+  assert.deepEqual(await test.gs.sendToOwner('acme 0.1.0 is ready to try.', { id: 'forge-release-staged-acme/app-0.1.0' }), { sent: false, how: 'telegram', already: true });
   await assert.rejects(gs.sendToOwner('  ', { id: 'x3' }), /needs its words/);
 }
 

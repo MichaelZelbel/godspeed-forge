@@ -137,8 +137,12 @@ export async function driverAfterSetup(repository, { paths, config, agent, outpu
     if (!fs.existsSync(serverFile)) {
       fs.writeFileSync(serverFile, JSON.stringify(newOwnerSettings(repository, { godspeed: await openBridge() }), null, 2) + '\n');
     }
-    const code = await runDriverCommand(['install', '--settings-dir', dir], { output, install });
-    said = code === 0 ? ['The factory driver is installed.'] : [];
+    // Quiet on success: setup's own last sentence (what to say in the chat next) stays the last thing the owner sees.
+    // The install's own lines are shown only when it fails.
+    const lines = [];
+    const code = await runDriverCommand(['install', '--settings-dir', dir], { output: line => lines.push(line), install });
+    if (code === 0) said = ['The factory driver is installed.'];
+    else output(`Setup finished, but the part of the Forge that keeps the factory moving could not be installed: ${lines.at(-1) ?? 'it gave no reason'} Run godspeed-forge driver install to try again.`);
   } catch (error) {
     output(`The factory driver could not be installed (${error.message}). Run godspeed-forge driver install when that is put right.`);
   }

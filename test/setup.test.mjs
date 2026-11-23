@@ -12,7 +12,7 @@ import {
 import { files } from '../lib/files.mjs';
 import { findSignedInAgent } from '../lib/agent.mjs';
 import {
-  APP_PERMISSIONS, APP_PERMISSION_DOCUMENTATION, AppSetupStop, AppStepError, builderManifest, createApps,
+  APP_PERMISSIONS, APP_PERMISSION_DOCUMENTATION, AppSetupStop, AppStepError, builderManifest, createApps, githubAppName,
   registrationAction, releaseManifest
 } from '../lib/github-apps.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
@@ -20,7 +20,7 @@ import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 194
+// test cases: 195
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -191,6 +191,12 @@ for (const [manifest, answer, action, permissions] of [
   const encodedManifest = page.match(/name="manifest" value="([^"]+)"/)[1];
   const submittedManifest = JSON.parse(encodedManifest.replaceAll('&quot;', '"').replaceAll('&amp;', '&'));
   assert.deepEqual(submittedManifest.default_permissions, permissions);
+  // GitHub refuses a manifest with a hook address it cannot reach from the internet, even an inactive one.
+  assert.equal('hook_attributes' in submittedManifest, false);
+  // GitHub App names are unique across GitHub: the posted name carries the owner and project.
+  assert.equal(submittedManifest.name, `${manifest.name} owner repo`);
+  assert.equal('githubName' in submittedManifest, false);
+  assert.deepEqual(submittedManifest.default_events, []);
 }
 
 // The organization question takes only yes or no, in any case and with spaces around it; any other answer is
@@ -3257,4 +3263,15 @@ testCase('a pending record setup cannot read is not called a kept App');
   project.reset();
   await setupRepository(repository, project.options());
   assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
+}
+
+testCase('an App name GitHub sees stays within 34 characters and names the owner');
+assert.equal(githubAppName('Forge builder', 'owner/repo'), 'Forge builder owner repo');
+for (const repository of ['MichaelZelbel/forge-trial-recipes', 'a-very-long-organization-name/and-a-long-repository']) {
+  for (const name of ['Forge builder', 'Forge release']) {
+    const n = githubAppName(name, repository);
+    assert(n.length <= 34, n);
+    assert(n.startsWith(`${name} ${repository.split('/')[0].slice(0, 5)}`), n);
+    assert.notEqual(n, githubAppName(name, `${repository}-two`));
+  }
 }

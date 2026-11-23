@@ -83,6 +83,9 @@ testCase('setup writes these settings once, with the workspace and notice file t
   await driverAfterSetup('acme/app', { paths, config: { projectsRoot: join(root, 'projects') }, godspeed: bridge, platform: 'linux', uid: 0, systemd: () => true, output: line => said.push(line), install: notRoot });
   const written = JSON.parse(await readFile(join(root, 'etc', 'driver.json'), 'utf8'));
   assert.deepEqual([written.notices.godspeed_notices_file, written.ai.act_brain_dir, written.budget], [`${WORKSPACE}/.godspeed/notices.json`, WORKSPACE, { act_runs_per_day: 0, reserved: 0 }]);
+  // The install's own lines never follow setup's last sentence; a failed install is one plain sentence.
+  assert.equal(said.length, 1, said.join(' | '));
+  assert.match(said[0], /^Setup finished, but the part of the Forge that keeps the factory moving could not be installed: .+ Run godspeed-forge driver install to try again\.$/);
   await writeFile(join(root, 'etc', 'driver.json'), JSON.stringify({ ...written, owner: { github_login: 'kept', name: 'Kept' } }));
   await driverAfterSetup('acme/app', { paths, config: { projectsRoot: join(root, 'projects') }, godspeed: null, platform: 'linux', uid: 0, systemd: () => true, install: notRoot });
   assert.equal(JSON.parse(await readFile(join(root, 'etc', 'driver.json'), 'utf8')).owner.name, 'Kept');
