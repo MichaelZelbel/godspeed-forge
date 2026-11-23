@@ -741,7 +741,8 @@ ${BLOCKS_LINE}
   for (const s of content.sources) {
     if (s.kind === "issue") {
       const i = content.openIssues[s.issue];
-      const comments = (i.comments || []).filter((c) => isTrusted(c.author)).map((c) => `  <comment by="${xmlAttr(loginOf(c.author))}" at="${xmlAttr(c.createdAt || "")}">\n${cut(c.body, 1500)}\n  </comment>`).join("\n");
+      let comments = (i.comments || []).filter((c) => isTrusted(c.author)).map((c) => `  <comment by="${xmlAttr(loginOf(c.author))}" at="${xmlAttr(c.createdAt || "")}">\n${cut(c.body, 1500)}\n  </comment>`).join("\n");
+      if (labelsOf(i).includes("found-list")) comments = cut(comments, 12000); // a found list's text is bounded as a whole
       src.push(`<source id="${xmlAttr(s.id)}" kind="open issue" labels="${xmlAttr(labelsOf(i).join(", "))}" by="${xmlAttr(loginOf(i.author))}">\n${xmlAttr(i.title)}\n\n${cut(i.body, 4000)}${comments ? `\n${comments}` : ""}\n</source>`);
     } else if (s.kind === "diagnosis") {
       src.push(`<source id="${xmlAttr(s.id)}" kind="diagnosis" open_issue="${s.issue ? `#${s.issue}` : "none"}" note="left undone by two releases in a row; plan a diagnosis ticket, never build work">
@@ -1250,6 +1251,23 @@ export async function readOpenIssues(api, repo) {
     for (const n of data.issues.nodes) all.push({ number: n.number, title: n.title, body: n.body, createdAt: n.createdAt, author: n.author, labels: n.labels.nodes, comments: n.comments.nodes });
     if (!data.issues.pageInfo.hasNextPage) break;
     after = data.issues.pageInfo.endCursor;
+  }
+  // A found list is read whole: every comment, oldest first, not only the last three.
+  for (const issue of all) {
+    if (!(issue.labels || []).some((l) => l.name === "found-list")) continue;
+    const comments = [];
+    let cursor = null;
+    for (let page = 0; page < 20; page++) {
+      const query = `query($owner: String!, $name: String!, $number: Int!, $after: String) { repository(owner: $owner, name: $name) { issue(number: $number) { comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { author { login __typename } body createdAt } } } } }`;
+      const r = await api("POST", "/graphql", { query, variables: { owner, name, number: issue.number, after: cursor } });
+      const c = r.json && r.json.data && r.json.data.repository && r.json.data.repository.issue && r.json.data.repository.issue.comments;
+      if (!r.ok || !c) R.refuse(`GitHub could not read the comments of the found list #${issue.number} of ${repo}.`);
+      comments.push(...c.nodes);
+      if (!c.pageInfo.hasNextPage) break;
+      cursor = c.pageInfo.endCursor;
+    }
+    issue.comments = comments;
+    issue.wholeList = true;
   }
   return all;
 }
