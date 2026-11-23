@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
 import { runSetupCommand } from '../lib/cli.mjs';
 import { defaultPaths } from '../lib/config.mjs';
-import { run } from '../lib/process.mjs';
+import { run, start } from '../lib/process.mjs';
+import { signIn } from '../lib/signin.mjs';
+import { createFactorySetup } from '../lib/factory-setup.mjs';
 import { answersFrom } from '../lib/setup.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { runDriverCommand, driverAfterSetup } from '../driver/cli.mjs';
@@ -16,6 +18,7 @@ if (command === '--version') {
   process.exit(0);
 }
 if (command === 'driver') process.exit(await runDriverCommand(process.argv.slice(3)));
+if (command === 'inbox') process.exit(await (await import('../lib/inbox.mjs')).runInboxCommand());
 if (command !== 'setup' || !repository) {
   console.error('Run godspeed-forge setup owner/repository.');
   process.exit(1);
@@ -28,7 +31,10 @@ runSetupCommand(repository, async () => {
   return {
     paths: defaultPaths(), commands: { run }, github: createGithubAdapter({ input: answers }), input, answers,
     prompt: question => answers.question(`${question} `),
+    promptSecret: question => answers.secretQuestion(`${question} `),
     output: message => console.log(message),
-    afterSetup: (repo, config) => driverAfterSetup(repo, { paths: defaultPaths(), config, output: message => console.log(message) })
+    signIn: context => signIn({ ...context, start }),
+    factorySetup: createFactorySetup(),
+    afterSetup: (repo, config, result) => driverAfterSetup(repo, { paths: defaultPaths(), config, agent: result?.agent, output: message => console.log(message) })
   };
 });

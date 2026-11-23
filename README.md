@@ -2,13 +2,13 @@
 
 An add-on for [Godspeed Mission Control](https://github.com/MichaelZelbel/godspeed-mission-control).
 
-Install it on a Godspeed server with:
+Install it on a Godspeed server, as root, with:
 
 ```bash
 curl -fsSL https://github.com/MichaelZelbel/godspeed-forge/raw/main/install.sh | bash
 ```
 
-The line installs the newest Forge release, never the newest code on main; `FORGE_VERSION=v0.1.0` before `bash` picks a specific release.
+The line installs the newest Forge release, never the newest code on main; `FORGE_VERSION=v0.2.0` before `bash` picks a specific release. It works with Godspeed in Docker (the server from Godspeed's one-line installer) and with a native install, puts on the server everything the factory needs (git, GitHub's `gh`, Python, Node 22, bun, uv, Claude Code and Codex) and gives Godspeed's chat a Forge skill. Then type `godspeed-forge setup owner/repository` in the same terminal.
 
 The Forge gives anyone who has Godspeed and a GitHub project a whole development process:
 
@@ -28,11 +28,21 @@ at one pinned revision, the way his README asks a coding agent to, and everythin
 
 ## Status
 
-Ask Godspeed to “set up the Forge for `owner/repository`”. Setup uses a signed-in Claude Code or
-Codex account, installs the pinned factory, guides you through creating separate builder and release
+Type `godspeed-forge setup owner/repository` in the server's terminal, as root (asked in the chat, Godspeed gives you that line). Before it downloads anything, setup signs the
+server in to GitHub (with permission to change workflow files) and to Claude Code or Codex when either is
+missing, showing the link and code of each tool's own sign-in, and reuses sign-ins that already work. It installs
+the pinned factory, guides you through creating separate builder and release
 GitHub Apps in the repository owner's personal or organization account, then guides you to install each App only on that repository. Setup asks the two mission
-questions and reports the setup checks. It completes only after both installations are confirmed
-and the checks succeed, and it leaves the schedule off until you explicitly start it. Only one setup
+questions, then finishes the factory's own setup: it sets the factory's AI models for the coding assistant it
+found, has that assistant read the project and propose seven things it must never become (you strike the
+wrong ones by number), writes two to five journeys of what the project does today and the project's checks,
+shows you what it will add and, on your yes, pushes these files to the default branch (or, where the branch takes
+changes only through a pull request, pushes them to a new branch of their own and opens and merges one). The
+assistant may write only the journeys and the checks: every other file of the factory is put back as it was after
+it runs. It reports the setup checks. It completes only after both installations are confirmed
+and the checks succeed, and it leaves automatic work off until you say "plan release" with the project's name,
+then "run one lap" and then "turn on automatic work" in your chat; "pause the factory" stops it starting new work.
+Only one setup
 per repository runs at a time; asking again while one is running says so and changes nothing.
 Asking for setup again after it completed checks that both Apps are still on GitHub and installed on
 the repository, that their saved details are still on this server and that the project's build tools
@@ -82,7 +92,45 @@ round --dry-run` shows what the driver would do and changes nothing, and `godspe
 
 Its settings are two kinds of file in one folder (root Linux: `/etc/godspeed-forge/`): `driver.json` for the server, and
 one `projects/<owner>--<repository>.json` for each repository. `driver/settings.example.json` shows every setting with
-placeholders. The install checks them and names anything missing before it changes anything.
+placeholders. The install checks them and names anything missing before it changes anything. When a server has no
+`driver.json` yet, setup writes one for its new owner: only the steps that work for any owner are on, the driver starts
+no AI runs of its own, and its notices go to the owner's Godspeed. A `driver.json` that is already there is never
+written over.
+
+## For every owner
+
+Once a repository is set up, you talk to the Forge in your Godspeed chat. Two steps of the driver, `owner-questions`
+and `owner-releases`, run every 15 minutes for each repository set up with the Forge, and your chat hands your words to
+the Forge through files in your Godspeed workspace (`.godspeed/forge/`).
+
+- **Plan:** "plan release my-app" proposes one release in plain words, from what is wrong for the people using it
+  first, then what you found, then features. On your yes the Forge files each item as an issue through the builder App,
+  where Cole Medin's factory picks it up, and keeps the plan and which issue is which item on this server.
+- **Questions:** when the factory needs a decision only you can make, you get it once in your chat, with a short
+  handle (F1, F2, ...), an example, one sentence per choice, what happens if you do not answer, and the words to reply
+  with. Questions of how it is built stay with the factory. Your answer goes back to the factory in your own words.
+- **Staging:** when every item of the release is merged, the Forge freezes it as `candidate/<version>`, pauses the
+  factory while the project's own checks run on it, makes a GitHub pre-release to try, moves the branch `staging` to it
+  and sends you one message: the link and "Shall I make it public? Reply go.", or the checks that failed.
+- **Go:** "go" tags `v<version>` on exactly that candidate, makes it the latest GitHub release with the plan's
+  sentences as its notes, and moves the branch `live` to it. A go for a candidate that changed after it was put up to
+  try is refused.
+- **Take it back:** "take it back" makes the release before it the latest again, moves `live` back, and marks the
+  taken-back release as taken back. Nothing is ever deleted.
+- **Release status:** "release status" answers in one or two sentences: what is being built, what waits for you, what
+  is on staging and what is public.
+
+A hosting service that publishes from a branch can publish a staging copy from `staging` and your public site from
+`live`; `live` then always shows exactly the version you made public. Tags, releases and these two branches are moved
+by the release App. The one exception: GitHub lets an App move a branch over a change to the project's workflow files
+only with the Workflows permission, which neither Forge App has, so that one move is made with this server's own `gh`
+sign-in (setup signs it in with the `workflow` scope).
+
+None of this needs a setting. A project can add a profile in its driver settings file
+(`projects/<owner>--<repository>.json`): `"profile": { "staging_url": "...", "deploy": "...", "health": "..." }`, where
+`staging_url` is the link you get instead of the pre-release's page, `deploy` puts the candidate on your staging copy
+after `staging` moved, and `health` must then succeed and print the candidate's commit. The steps' other settings, all
+optional, are in `driver/settings.example.json`.
 
 ## License
 

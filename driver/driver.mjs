@@ -28,7 +28,7 @@ import { appendEvents, readJournal, view as journalView, roundEvents, prEvents, 
 import { requiredRunId, seenFromTelegram, readActivity, resendDue, deliveryRetryDue, seenCheck, sendNotice, publishHeartbeat, mirroredHead, watcherHealth, supersessionLook, nextReleaseFacts, rung0 } from "./duties.mjs";
 import { clockCheck, wentBackwards, verifyInstalled, deliver, readEnvFile } from "./facts.mjs";
 import { gateStep, gateClear, GATE } from "./gate.mjs";
-import { movingUntilFor, heldUntil, creditEvents, creditKeyById, ACTIVITY, buildInventory, advance, violationEntry, describeRow, parseStage, stageStalled, factoryWorking, CHAIN, H as HR } from "./inventory.mjs";
+import { movingUntilFor, heldUntil, creditEvents, creditKeyById, ACTIVITY, buildInventory, advance, violationEntry, describeRow, parseStage, stageStalled, factoryWorking, CHAIN, H as HR, ownerName } from "./inventory.mjs";
 import { actDefaults as onDutyDefaults, launchAct, actResult, markHandled, answeredFile } from "./onduty.mjs";
 import { aiDefaults, providers, factoryProvider, ladderCandidates, launchHelper, helperResult, refreshTokens, checkJson, helperDir, UNIT_RE } from "./ai.mjs";
 import { applyReport, applyDueDefaults, actDefaults, notify, plain } from "./act.mjs";
@@ -289,7 +289,7 @@ export async function round(env, deps = {}) {
       if (st.do === "tell-michael") {
         const text = tellText(ob, world, now);
         if (!dry) { const a = await applyReport(env, ob, { text, key: `tell:${ob.id}:${Date.parse(ob.since)}`, about: "The factory is stuck", ref: ob.id }, { kind: "tell-michael", state }); record({ kind: "told Michael", obstacle: ob.id, ...a }); }
-        else log(`  would tell Michael: ${text}`);
+        else log(`  would tell ${ownerName()}: ${text}`);
         state.toldAt[ob.id] = nowIso;
         st = nextStep(ob, state.history[ob.id] || [], ctx());
       }
@@ -452,7 +452,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       for (const r of readyRows) if (!sure.has(r.entry.id)) { delete state.gate[r.entry.id]; record({ kind: "message held", entry: r.entry.id, why: "the fresh re-read did not confirm it, or a source was unreadable: three new readings are needed" }); }
     }
     const triedN = tells.filter(r => (r.c.tries || []).some(t => t.rung === 1 || t.rung === 2)).length;
-    const groups = tells.length > 2 ? [{ rows: tells, text: plain(`${tells.length} things in the factory are stuck: Mission Control tried to fix ${triedN} of them by itself and they are still stuck. For example: ${tells.slice(0, 3).map(r => String(r.entry.title).replace(/\s+/g, " ").slice(0, 90)).join("; ")}${tells.length > 3 ? `, and ${tells.length - 3} more` : ""}. Mission Control keeps trying; nothing is needed from you unless a later message says so.`), nid: `n:bundle:${crypto.createHash("sha1").update(tells.map(r => r.entry.id).sort().join("|")).digest("hex").slice(0, 12)}:${Math.floor(now / (6 * HR))}` }]
+    const groups = tells.length > 2 ? [{ rows: tells, text: bundleTellText(tells, triedN), nid: `n:bundle:${crypto.createHash("sha1").update(tells.map(r => r.entry.id).sort().join("|")).digest("hex").slice(0, 12)}:${Math.floor(now / (6 * HR))}` }]
       : tells.map(r => ({ rows: [r], text: entryTellText(r, now), nid: `n:${r.entry.id}:${r.c.rungSince}` }));
     groups.push(...singles.map(r => ({ rows: [r], text: entryTellText(r, now), nid: `n:${r.entry.id}:${r.c.rungSince}` })));
     for (const g of groups) {
@@ -527,7 +527,9 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
         if (sc.seen) { appendEvents(journalFile, [{ t: "seen", id: nid, at: nowIso }]); continue; }
         if (sc.unreadable) continue; // an unreadable lookup: look again, never resend
         const holds = (n.entries || []).some(eid => adv.rows.some(r => r.entry.id === eid && r.rung >= 3 && !r.entry.told === false || (r.entry.id === eid && r.rung >= 3)));
-        if (holds && resendDue(n, now)) appendEvents(journalFile, [await sendNotice(env, nid, `Still open: ${n.title || "the software factory needs a look"}`, n.text, now, deps.deliver)]);
+        // a new owner hears once about a job the Forge cannot do: such a notice is not repeated
+        const toldOnce = actingRunsOff() && (n.entries || []).length > 0 && n.entries.every(eid => /^(step|halt):/.test(eid));
+        if (holds && !toldOnce && resendDue(n, now)) appendEvents(journalFile, [await sendNotice(env, nid, `Still open: ${n.title || "the software factory needs a look"}`, n.text, now, deps.deliver)]);
       } catch (e) { record({ kind: "resend failed", notice: nid, why: String(e.message).slice(0, 160) }); }
     }
     let L = adv.actions.launch;
@@ -623,7 +625,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       writeJson(ledgerFile, ledger);
       writeJson(stateFile, state);
       const anchor = out.clock && out.clock.skewMs > 5 * MIN && Number.isFinite(out.clock.ghNow) ? iso(out.clock.ghNow) : nowIso; // never a future time in a file a monitor trusts
-      const status = statusOf(out, anchor, now, state); status.guarantee = GUARANTEE; status.journalHead = (deps.readJournal || readJournal)(journalFile).head || out.journalHead; // the head after this round's lines
+      const status = statusOf(out, anchor, now, state); status.guarantee = GUARANTEE.replace("Michael", ownerName()); status.journalHead = (deps.readJournal || readJournal)(journalFile).head || out.journalHead; // the head after this round's lines
       status.clock = out.clock;
       status.rung3 = (status.rung3 || []).map(r => ({ ...r, receipts: (state.chain[r.id] || {}).receipts || {} }));
       writeJson(path.join(env.STATE_DIR, "status.json"), status);
@@ -749,7 +751,14 @@ export async function approvalTimes(env, world, run = (cmd, args, cwd) => spawnS
 // What Michael reads when an entry reached rung 3: what is stuck, what was tried, the one step only he can take.
 // What is guaranteed, said plainly (also in the architecture document): the on-server pair, and the outside net with its real latency
 export const GUARANTEE = "The driver and the dead-man on the server each restore the other and catch any single fault within minutes and restore it; if the repair fails, Michael is told after about three hours. The GitHub watcher is the net for the rare case where both die together: GitHub's scheduler on this account runs hours late, so its latency is up to about a day.";
+// A new owner's server: the driver starts no acting runs (budget.act_runs_per_day 0), so there is no Mission Control
+// trying to fix it and nothing to promise; an entry the owner can read about (a step with a plain phrase, forOwner) is
+// told once, in plain words, as only that the Forge cannot do that job right now and keeps trying.
+export const actingRunsOff = () => CHAIN.perDay === 0;
+const capital = s => String(s).charAt(0).toUpperCase() + String(s).slice(1);
+const plainFor = rows => actingRunsOff() && rows.length > 0 && rows.every(r => r.entry && r.entry.forOwner);
 export function entryTellText(r, now) {
+  if (plainFor([r])) return plain(`${capital(r.entry.forOwner)} is not working right now. The Forge keeps trying.`);
   const hours = Math.max(1, Math.floor((now - (Number.isFinite(r.entry.milestoneAt) ? r.entry.milestoneAt : now)) / HOUR));
   const tried = (r.c.tries || []).filter(t => t.rung === 1 || t.rung === 2);
   const what = String(r.entry.title).replace(/\s+/g, " ").slice(0, 160);
@@ -759,8 +768,19 @@ export function entryTellText(r, now) {
   // never homework: no "open a chat", no "say X"; a step is named only when it needs his credentials or his decision (none is known here)
   return plain(`${what} has not moved for ${hours} hours. ${did}. It keeps trying; nothing is needed from you unless a later message says so.`);
 }
+// More than two entries told at once: one message. On a new owner's server, when the owner can read about each of them,
+// only what the Forge cannot do right now (their plain phrases) and that it keeps trying.
+export function bundleTellText(tells, triedN) {
+  if (plainFor(tells)) {
+    const jobs = [...new Set(tells.map(r => r.entry.forOwner))];
+    const named = jobs.length === 1 ? jobs[0] : `${jobs.slice(0, -1).join(", ")} and ${jobs.at(-1)}`;
+    return plain(`${capital(named)} ${jobs.length === 1 ? "is" : "are"} not working right now. The Forge keeps trying.`);
+  }
+  return plain(`${tells.length} things in the factory are stuck: Mission Control tried to fix ${triedN} of them by itself and they are still stuck. For example: ${tells.slice(0, 3).map(r => String(r.entry.title).replace(/\s+/g, " ").slice(0, 90)).join("; ")}${tells.length > 3 ? `, and ${tells.length - 3} more` : ""}. Mission Control keeps trying; nothing is needed from you unless a later message says so.`);
+}
 // The title says what the message is, never "stuck" for a reminder
 export function noticeTitle(rows) {
+  if (plainFor(rows)) return rows.length === 1 ? `${capital(rows[0].entry.forOwner)} is not working right now` : "Some of the Forge's jobs are not working right now";
   const kinds = new Set(rows.map(r => r.entry.kind));
   if (rows.length === 1) {
     const r = rows[0];
@@ -852,7 +872,9 @@ export async function cli(argv = process.argv.slice(2), io = {}) {
   const env = driverDefaults(process.env, dry ? [...argv, "--dry-run"] : argv);
   // The hidden checks' tools are read in this process, by the test-machine step's own reading (toolCoverage(envFor(ctx))), not by a program started for it.
   const tm = found.steps.find(s => s.name === "test-machine" && s.module && typeof s.module.toolCoverage === "function" && typeof s.module.envFor === "function" && (loaded.settings.steps || {})["test-machine"]?.enabled !== false);
-  const worldDeps = tm ? { toolCoverage: () => tm.module.toolCoverage(tm.module.envFor({ ...base, now: Date.now() })) } : {};
+  // With the test-machine step off (a new owner has no hidden-check tools) there are no tools to look after.
+  const testMachineOff = (loaded.settings.steps || {})["test-machine"]?.enabled === false;
+  const worldDeps = tm ? { toolCoverage: () => tm.module.toolCoverage(tm.module.envFor({ ...base, now: Date.now() })) } : testMachineOff ? { toolCoverage: () => ({ ids: [], missing: [] }) } : {};
   const out = await round(env, { stepsCtx: { ...base, steps: found.steps }, worldDeps, ...(io.deps || {}) });
   if (out.busy) return 0;
   if (env.DRY) log(describe(out));

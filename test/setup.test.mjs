@@ -97,7 +97,7 @@ assert.deepEqual(messages, [
   'Using Claude Code to set up the Forge.',
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release',
-  'Setup is complete for owner/repo. Automatic work is off. A typical release costs about $5 to $40 of Claude Code use, based on Anthropic\'s published average of about $6 a day for one person using Claude Code, with most people under $12, and a release taking one to a few days of that work. On a Pro or Max plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready to start automatic work, ask me to turn it on.'
+  'Setup is complete for owner/repo. Automatic work is off. A typical release costs about $5 to $40 of Claude Code use, based on Anthropic\'s published average of about $6 a day for one person using Claude Code, with most people under $12, and a release taking one to a few days of that work. On a Pro or Max plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready, say "plan release repo" in your chat, then "run one lap" to watch the first change being made, then "turn on automatic work".'
 ]);
 
 testCase('setup with Codex says it is using Codex');
@@ -119,7 +119,7 @@ assert.deepEqual(codexMessages, [
   'Using Codex to set up the Forge.',
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release',
-  'Setup is complete for owner/codex-repo. Automatic work is off. A typical release costs about $3 to $25 of Codex use, based on OpenAI\'s published usage prices for the Codex models, which are lower than Claude Code\'s, and a release taking one to a few days of agent work. On a ChatGPT Plus or Pro plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready to start automatic work, ask me to turn it on.'
+  'Setup is complete for owner/codex-repo. Automatic work is off. A typical release costs about $3 to $25 of Codex use, based on OpenAI\'s published usage prices for the Codex models, which are lower than Claude Code\'s, and a release taking one to a few days of agent work. On a ChatGPT Plus or Pro plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready, say "plan release codex-repo" in your chat, then "run one lap" to watch the first change being made, then "turn on automatic work".'
 ]);
 testCase('setup messages carry at most one link and no internal names');
 for (const message of [...messages, ...codexMessages]) {
@@ -369,15 +369,16 @@ retryCheckPasses = true;
 const retryPassed = [];
 assert.deepEqual(
   await setupRepository('owner/retry-check', retryOptions(value => retryPassed.push(value))),
-  { completed: true, checkout: join(projectsRoot, 'owner/retry-check') }
+  { completed: true, checkout: join(projectsRoot, 'owner/retry-check'), agent: 'claude' },
+  'setup says which coding assistant it used, for the driver\'s settings'
 );
 assert.deepEqual(retryPassed, [
   'Using Claude Code to set up the Forge.',
-  'Setup is complete for owner/retry-check. Automatic work is off. A typical release costs about $5 to $40 of Claude Code use, based on Anthropic\'s published average of about $6 a day for one person using Claude Code, with most people under $12, and a release taking one to a few days of that work. On a Pro or Max plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready to start automatic work, ask me to turn it on.'
+  'Setup is complete for owner/retry-check. Automatic work is off. A typical release costs about $5 to $40 of Claude Code use, based on Anthropic\'s published average of about $6 a day for one person using Claude Code, with most people under $12, and a release taking one to a few days of that work. On a Pro or Max plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready, say "plan release retry-check" in your chat, then "run one lap" to watch the first change being made, then "turn on automatic work".'
 ]);
 assert.equal(retryBegins, 2);
 assert.equal(retryInstalls, installsBeforeRetry);
-assert.equal(JSON.parse(await readFile(join(state, 'projects/owner/retry-check/registration.json'), 'utf8')).completed, true);
+assert.deepEqual(JSON.parse(await readFile(join(state, 'projects/owner/retry-check/registration.json'), 'utf8')), { repository: 'owner/retry-check', checkout: join(projectsRoot, 'owner/retry-check'), completed: true, agent: 'claude' }, 'the record of the finished setup keeps the coding assistant it used');
 
 testCase('a stop at the final check says the Apps are kept and retrying adds none');
 // A stop at the final check tells the owner their Apps are kept; stopping again and retrying add none.

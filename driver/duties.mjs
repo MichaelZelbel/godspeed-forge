@@ -59,12 +59,14 @@ export const heartbeatBody = obj => `${HEARTBEAT_MARK}${NL}A machine record of t
 export const parseHeartbeat = body => { const m = new RegExp(BT + "json" + NL + "([\\s\\S]*?)" + NL + BT).exec(String(body || "")); try { return m ? JSON.parse(m[1]) : null; } catch { return null; } };
 // -> { ok, issue }: ok is false when the lookup itself failed (never "not found": a failed lookup must not create a second heartbeat issue)
 export function lookupHeartbeatIssue(env, run = sysRun) {
+  if (!WATCH_REPO(env)) return { ok: true, issue: null }; // no watch repository (a new owner): nothing on GitHub is read or written
   const r = run("gh", ["api", `repos/${WATCH_REPO(env)}/issues?state=all&per_page=100&sort=updated&direction=desc`]);
   if (r.status !== 0 && r.status !== undefined) return { ok: false, issue: null };
   try { return { ok: true, issue: JSON.parse(r.stdout).find(i => !i.pull_request && String(i.body || "").startsWith(HEARTBEAT_MARK)) || null }; } catch { return { ok: r.stdout === "" && r.status === 0, issue: null }; }
 }
 export const findHeartbeatIssue = (env, run = sysRun) => lookupHeartbeatIssue(env, run).issue;
 export function publishHeartbeat(env, status, run = sysRun) {
+  if (!WATCH_REPO(env)) return { ok: true, skipped: "no watch repository: no heartbeat issue" };
   const rec = { at: status.at, head: status.journalHead, rung3: (status.rung3 || []).map(r => ({ id: r.id, since: r.since, receipts: r.receipts || {} })), releases: status.releases || [] };
   const body = heartbeatBody(rec), look = lookupHeartbeatIssue(env, run), found = look.issue;
   if (!look.ok) return { ok: false, why: "the heartbeat issue could not be looked up: nothing written (never a second issue)" };
@@ -74,6 +76,7 @@ export function publishHeartbeat(env, status, run = sysRun) {
 }
 // The mirrored head, read back (9.4)
 export function mirroredHead(env, run = sysRun) {
+  if (!WATCH_REPO(env)) return "";
   const h = parseHeartbeat((findHeartbeatIssue(env, run) || {}).body);
   return (h && h.head) || "";
 }
@@ -87,6 +90,7 @@ export function mirroredHead(env, run = sysRun) {
 export const WATCHER_STALE_HOURS = 30;
 export function watcherHealth(env, now, run = sysRun, state = {}) {
   const repo = WATCH_REPO(env);
+  if (!repo) return { ok: true }; // no outside watcher without a watch repository (a new owner)
   const healthy = () => { const dd = (state.watcherDispatch ||= {}); dd.dispatched = false; dd.disabledAt = null; return { ok: true }; };
   let wf = null; try { wf = JSON.parse(run("gh", ["api", `repos/${repo}/actions/workflows/${WATCH_WORKFLOW}`]).stdout); } catch {}
   if (wf && wf.state && wf.state !== "active") {

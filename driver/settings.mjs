@@ -47,11 +47,11 @@ export const CORE = [
   { key: "owner.name", def: () => "the owner", env: [], meaning: "how the owner is named in messages and prompts" },
   { key: "server.name_in_messages", def: g => g("owner.name"), env: ["FD_OWNER_NAME"], meaning: "how messages name the owner" },
   { key: "keys.env_file", def: (g, dir) => path.join(dir, "keys.env"), env: ["FD_KEYS_FILE", "RD_KEYS_FILE"], meaning: "the file with the keys (names only are ever shown)" },
-  { key: "keys.token_script", required: true, env: ["FD_TOKEN_SCRIPT", "RD_TOKEN_SCRIPT"], meaning: "the program that mints a GitHub App token" },
+  { key: "keys.token_script", def: () => "", env: ["FD_TOKEN_SCRIPT", "RD_TOKEN_SCRIPT"], meaning: "the program that mints a GitHub App token; empty means none, and the steps that need one (trust, keep-main-green, stage) say so" },
   { key: "notices.godspeed_notices_file", def: g => `${g("ai.act_brain_dir")}/.godspeed/notices.json`, env: ["FD_NOTICES_FILE", "FD_ACT_NOTICES", "RD_NOTICES_FILE", "DM_NOTICES"], meaning: "the notice queue by which a program reaches the owner's chat" },
   { key: "notices.telegram_env_file", def: () => "", env: ["TG_ENV"], meaning: "env file with the owner's Telegram bot" },
   { key: "notices.telegram_machine_env_file", def: () => "", env: ["TG_MACHINE_ENV"], meaning: "env file with the machine's own Telegram bot" },
-  { key: "notices.watch_repo", required: true, env: ["WATCH_REPO", "DM_WATCH_REPO"], meaning: "the repository holding the outside watcher and the heartbeat issue" },
+  { key: "notices.watch_repo", def: () => "", env: ["WATCH_REPO", "DM_WATCH_REPO"], meaning: "the repository holding the outside watcher, the heartbeat issue and the notice issues; empty (a new owner) means the driver posts nothing on GitHub" },
   { key: "notices.watch_issues_repo", def: g => g("notices.watch_repo"), env: ["WATCH_ISSUES_REPO"], meaning: "where the watcher's notice issues are opened" },
   { key: "ai.bins.claude", def: g => `${g("server.factory_home")}/.local/bin/claude`, env: ["FD_CLAUDE_BIN"], fmt: json, meaning: "the Claude program (or a command as a list)" },
   { key: "ai.bins.codex", def: () => "/usr/local/bin/codex", env: ["FD_CODEX_BIN"], fmt: json, meaning: "the Codex program (or a command as a list)" },
@@ -124,7 +124,7 @@ export function loadSettings(dir = DEFAULT_DIR, { stepSettings = [], steps = [],
     if (key.startsWith("releases.")) return main && main.releases ? dig(main.releases, key.slice(9)) : undefined;
     return dig(settings, key);
   };
-  const specs = [...CORE];
+  const specs = CORE.map(s => ({ ...s })); // copies: a step marking a key required must not change CORE for the next load
   const seen = new Map(specs.map(s => [s.key, s]));
   // A step's own keys are checked, never defaulted here: a step's `default` is words for the example file, and the step
   // works out its own default from the settings (so a "none" or "<server.state_dir>/..." there is never taken for a value).
@@ -188,6 +188,8 @@ export function loadSettings(dir = DEFAULT_DIR, { stepSettings = [], steps = [],
   }
   env.FD_TRUSTED_LOGINS = [get("owner.github_login"), `${get("main.apps.builder")}[bot]`, `${get("main.apps.release")}[bot]`].join(",");
   env.FD_SETTINGS_DIR = dir;
+  // each project's checkout, by the factory's name for it: a new owner's checkouts are not <factory_home>/<project>
+  env.FD_PROJECT_CHECKOUTS = JSON.stringify(Object.fromEntries(projects.filter(p => typeof p.checkout === "string" && p.checkout).map(p => [p.project || String(p.repository || "").split("/")[1], p.checkout])));
   const passthrough = settings.env && typeof settings.env === "object" ? settings.env : {};
   Object.assign(env, Object.fromEntries(Object.entries(passthrough).map(([k, v]) => [k, String(v)])), extraEnv);
   // the settings as the steps read them: the file's own values with every default put in

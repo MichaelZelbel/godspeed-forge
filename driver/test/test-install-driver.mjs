@@ -314,15 +314,19 @@ test("when setup has finished as root where systemd runs, it writes the project'
   assert.deepEqual(await driverAfterSetup("acme/app", { paths, config, platform: "linux", uid: 1000 }), []);
   assert.equal(fs.existsSync(path.join(root, "etc")), false, "not root: nothing written");
   const said = [];
-  const lines = await driverAfterSetup("acme/app", { paths, config, platform: "linux", uid: 0, systemd: () => true, output: l => said.push(l), install: { deps: { isRoot: () => true, hasSystemd: () => true, unitsDir: path.join(root, "units"), run: () => ({ status: 0, stdout: "", stderr: "" }) } } });
+  // the install is told it is not root, so this test never writes the system's folders; what it stops on is said
+  const lines = await driverAfterSetup("acme/app", { paths, config, godspeed: null, platform: "linux", uid: 0, systemd: () => true, output: l => said.push(l), install: { deps: { isRoot: () => false, hasSystemd: () => true, unitsDir: path.join(root, "units"), run: () => ({ status: 0, stdout: "", stderr: "" }) } } });
   const project = JSON.parse(fs.readFileSync(path.join(root, "etc", "godspeed-forge", "projects", "acme--app.json"), "utf8"));
   assert.deepEqual([project.repository, project.checkout === checkout, project.apps], ["acme/app", true, { builder: "acme-builder", release: "acme-release" }]);
   const server_ = JSON.parse(fs.readFileSync(path.join(root, "etc", "godspeed-forge", "driver.json"), "utf8"));
   assert.equal(server_.owner.github_login, "acme");
-  assert.deepEqual(lines, [], "the install stopped on what this server cannot tell (the App token program): it says which, and setup still counts as finished");
-  assert.match(said.join(" "), /keys\.token_script/);
+  assert.deepEqual(lines, [], "a stopped install is said, and setup still counts as finished");
+  assert.match(said.join(" "), /installed by root/);
+  // a new owner's settings name nothing the driver lacks (the App token program is no longer required)
+  const found = await discoverSteps(path.join(source, "steps"));
+  assert.doesNotThrow(() => loadSettings(path.join(root, "etc", "godspeed-forge"), { steps: found.steps }));
   // what the owner wrote is never written over
   fs.writeFileSync(path.join(root, "etc", "godspeed-forge", "driver.json"), JSON.stringify({ ...server_, owner: { github_login: "kept" } }));
-  await driverAfterSetup("acme/app", { paths, config, platform: "linux", uid: 0, systemd: () => true, output: () => {}, install: { deps: { isRoot: () => true, hasSystemd: () => true, unitsDir: path.join(root, "units"), run: () => ({ status: 0 }) } } });
+  await driverAfterSetup("acme/app", { paths, config, godspeed: null, platform: "linux", uid: 0, systemd: () => true, output: () => {}, install: { deps: { isRoot: () => true, hasSystemd: () => true, unitsDir: path.join(root, "units"), run: () => ({ status: 0 }) } } });
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, "etc", "godspeed-forge", "driver.json"), "utf8")).owner.github_login, "kept");
 });

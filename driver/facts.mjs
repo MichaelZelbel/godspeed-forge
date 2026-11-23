@@ -102,7 +102,14 @@ export async function deliver(env, { title, text, noticeId }, deps = {}) {
   const out = { receipts: {}, failed: [] };
   const a = await (deps.telegram || ((t, id) => sendTelegram(telegramCreds(env), t, fetch, id)))(text, noticeId);
   if (a.ok) out.receipts.telegram = a.receipt; else out.failed.push(a.why);
-  const b = await (deps.issue || ((ti, bo, id) => openIssue(env.WATCH_ISSUES_REPO || env.WATCH_REPO || WATCH_REPO_DEFAULT, ti, bo, id)))(title, text, noticeId); // the workflow adds the @-mention
-  if (b.ok) out.receipts.github = b.receipt; else out.failed.push(b.why);
+  // transport B, an issue in the watch repository, only where there is one: a new owner has none, and the driver posts
+  // nothing on their project's repository (their messages go to their Godspeed)
+  // read the way the rest of the driver reads it (duties.mjs WATCH_REPO): the round's env, else the process's, which the
+  // settings fill (notices.watch_issues_repo, notices.watch_repo)
+  const repo = env.WATCH_ISSUES_REPO || env.WATCH_REPO || process.env.WATCH_ISSUES_REPO || process.env.WATCH_REPO || WATCH_REPO_DEFAULT;
+  if (repo) {
+    const b = await (deps.issue || ((ti, bo, id) => openIssue(repo, ti, bo, id)))(title, text, noticeId); // the workflow adds the @-mention
+    if (b.ok) out.receipts.github = b.receipt; else out.failed.push(b.why);
+  }
   return out;
 }
