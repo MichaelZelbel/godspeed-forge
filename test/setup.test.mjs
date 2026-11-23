@@ -191,6 +191,9 @@ for (const [manifest, answer, action, permissions] of [
   const encodedManifest = page.match(/name="manifest" value="([^"]+)"/)[1];
   const submittedManifest = JSON.parse(encodedManifest.replaceAll('&quot;', '"').replaceAll('&amp;', '&'));
   assert.deepEqual(submittedManifest.default_permissions, permissions);
+  // GitHub refuses a manifest with a hook address it cannot reach from the internet, even an inactive one.
+  assert.equal('hook_attributes' in submittedManifest, false);
+  assert.deepEqual(submittedManifest.default_events, []);
 }
 
 // The organization question takes only yes or no, in any case and with spaces around it; any other answer is
