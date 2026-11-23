@@ -1,7 +1,7 @@
 // The install line's program (lib/install/server.mjs), the server's tools (server-tools.mjs), the units that answer the
 // chat (inbox-units.mjs), the forge skill, and the step runner's bridge. apt, the official installers, systemctl and
 // Godspeed are stand-ins: nothing is installed on this machine and nothing reaches the network.
-// test cases: 16
+// test cases: 17
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -13,6 +13,7 @@ import { installServerTools, TOOLS, TOOLS_READY } from '../lib/install/server-to
 import { inboxUnits, installInboxUnits, UNITS_READY } from '../lib/install/inbox-units.mjs';
 import { installServer, SAY } from '../lib/install/server.mjs';
 import { STOP } from '../lib/godspeed.mjs';
+import { WHY } from '../lib/watch.mjs';
 import { stepContext, godspeedBridge, addonBridgeFiles } from '../driver/steps.mjs';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
@@ -104,10 +105,12 @@ testCase('installing the units writes them, reloads systemd and starts the path 
 }
 
 // A whole install as root on a Linux server with systemd, Godspeed found in Docker (a stand-in), the tools stand-in.
-async function rootInstall({ found, settings = fresh(), tools = async () => ({ ok: true }), uid = 0, systemd = true } = {}) {
+// The watching page is a stand-in too (test/watch.test.mjs tests the real one); `page` is what it answers.
+const PAGE = { ok: true, record: { host: 'srv1.example.com', port: 48445, user: 'forge', password: 'never-printed-here' } };
+async function rootInstall({ found, settings = fresh(), tools = async () => ({ ok: true }), uid = 0, systemd = true, page = PAGE } = {}) {
   const workspace = found?.workspace, units = fresh(), install = fresh(), lines = [], warnings = [], chowns = [], runs = [];
   const paths = { addon: path.join(install, 'addon'), executable: path.join(install, 'bin', 'godspeed-forge'), config: path.join(install, 'config.json'), state: path.join(install, 'state') };
-  let toolsCalled = false;
+  let toolsCalled = false, pageAsked = null;
   const run = async (command, args) => {
     runs.push([command, ...args].join(' '));
     if (command === 'bash') return { status: 0, stdout: '/usr/bin/node\n', stderr: '' };
@@ -118,8 +121,9 @@ async function rootInstall({ found, settings = fresh(), tools = async () => ({ o
     env: { FORGE_SOURCE: repo, FORGE_SETTINGS_DIR: settings, FORGE_UNITS_DIR: units }, paths, uid, platform: 'linux', systemd: () => systemd,
     fs: { ...fs, chownSync: (p, u, g) => chowns.push([p, u, g]) }, run, find: async () => found,
     installTools: async o => { toolsCalled = true; return tools(o); }, say: l => lines.push(l), warn: l => warnings.push(l),
+    watch: async o => { pageAsked = o; return page; },
   });
-  return { code, lines, warnings, chowns, runs, units, paths, workspace, toolsCalled: () => toolsCalled };
+  return { code, lines, warnings, chowns, runs, units, paths, workspace, toolsCalled: () => toolsCalled, pageAsked: () => pageAsked };
 }
 const dockerFound = () => {
   const workspace = fresh();
@@ -132,7 +136,10 @@ testCase('on Godspeed\'s Docker server the install says each step, gives the cha
 {
   const r = await rootInstall({ found: dockerFound() });
   assert.equal(r.code, 0, r.warnings.join('\n'));
-  assert.deepEqual(r.lines, ['Found Godspeed 2.0.0-beta.29, which runs in Docker on this server.', `Installing the Forge ${version}.`, "Godspeed's chat now knows the Forge.", UNITS_READY]);
+  assert.deepEqual(r.lines, ['Found Godspeed 2.0.0-beta.29, which runs in Docker on this server.', `Installing the Forge ${version}.`, "Godspeed's chat now knows the Forge.", UNITS_READY,
+    'The page where you watch the factory is at https://srv1.example.com:48445. Type godspeed-forge watch here to see how to sign in.']);
+  assert.ok(!r.lines.join('\n').includes('never-printed-here'), "the install line never prints the page's password");
+  assert.equal(r.pageAsked().node, '/usr/bin/node', "the page's hourly check runs with the Node the inbox service runs with");
   assert.equal(fs.readFileSync(path.join(r.workspace, 'skills', 'forge', 'SKILL.md'), 'utf8'), fs.readFileSync(path.join(repo, 'skills', 'forge', 'SKILL.md'), 'utf8'));
   for (const rel of ['inbox', 'inbox/done', 'outbox', 'projects']) assert.ok(fs.statSync(path.join(r.workspace, '.godspeed', 'forge', ...rel.split('/'))).isDirectory(), rel);
   const owned = r.chowns.map(([p]) => path.relative(r.workspace, p).split(path.sep).join('/'));
@@ -203,6 +210,17 @@ testCase('not as root, the install leaves the server\'s tools and services alone
   assert.equal(noSystemd.lines.at(-1), 'This server has no systemd, so requests from the chat wait until godspeed-forge inbox runs.');
 }
 
+testCase('a watching page that cannot be set up is said in one sentence and never fails the install; without root or systemd none is tried');
+{
+  const r = await rootInstall({ found: dockerFound(), page: { ok: false, why: WHY.noFront } });
+  assert.equal(r.code, 0, r.warnings.join('\n'));
+  assert.equal(r.lines.at(-1), "The page where you watch the factory could not be set up: this server has no web address from Godspeed for it to share, because Godspeed's notebook has none yet. Run this line again to try once more.");
+  const plain = await rootInstall({ found: dockerFound(), uid: 1000 });
+  assert.equal(plain.pageAsked(), null);
+  const noSystemd = await rootInstall({ found: dockerFound(), systemd: false });
+  assert.equal(noSystemd.pageAsked(), null);
+}
+
 testCase('every step a driver step runs is given the bridge to Godspeed, and a stand-in given to the runner wins');
 {
   const mod = { STEP: { name: 'alpha', everyMinutes: 5, maxMinutes: 5 } };
@@ -229,7 +247,7 @@ testCase('the forge skill is found by the chat for every request the plan names'
 {
   const front = /^---\nname: forge\ndescription: (.+)\n---\n/.exec(skill);
   assert.ok(front, 'frontmatter with name forge and a one-line description');
-  for (const phrase of ['plan release', 'plan the next', 'what should go into the next version', '"go"', 'make it public', 'take it back', 'release status', 'where is the release', 'turn on automatic work', 'pause the factory', 'run one lap', 'F7', 'waiting.json', 'set up the Forge']) assert.ok(front[1].includes(phrase), phrase);
+  for (const phrase of ['plan release', 'plan the next', 'what should go into the next version', '"go"', 'make it public', 'take it back', 'release status', 'where is the release', 'turn on automatic work', 'pause the factory', 'run one lap', 'where can I watch the factory', 'F7', 'waiting.json', 'set up the Forge']) assert.ok(front[1].includes(phrase), phrase);
   assert.ok(!fs.existsSync(path.join(repo, 'skills', 'forge-setup')), 'the old setup skill is gone, so two skills never answer the same request');
 }
 
@@ -238,7 +256,7 @@ testCase('the forge skill tells the chat how to ask the Forge, and carries the p
   for (const must of ['.godspeed/forge/waiting.json', '.godspeed/forge/projects/*.json', '.godspeed/forge/inbox/<id>.json', '.godspeed/forge/outbox/<id>.json', 'two minutes', 'exactly as they wrote it',
     'Tell the owner its `say`, and nothing more', 'godspeed-forge setup owner/repository', 'Shall I start it?', 'what is wrong for the', 'what the owner found', 'features', 'Decide every question of how yourself',
     'Nothing is sent to the Forge before the yes', '"kind": "plan"', '"version"', '"summary"', '"items"', '"outcome"', '"size"', '"why"', '"later"', '"handle": "F7"']) assert.ok(skill.includes(must), must);
-  for (const kind of ['go', 'take-back', 'status', 'work-on', 'work-off', 'lap', 'answer']) assert.ok(skill.includes(`kind \`${kind}\``), kind);
+  for (const kind of ['go', 'take-back', 'status', 'work-on', 'work-off', 'lap', 'answer', 'watch']) assert.ok(skill.includes(`kind \`${kind}\``), kind);
 }
 
 testCase('everything the owner reads from the install, the skill and the inbox is plain: no long dashes, at most one link');

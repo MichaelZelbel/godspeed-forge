@@ -53,6 +53,10 @@ Cole Medin's factory.
   putting it on staging, and sending one message: on staging, or which tests failed and why.
 - On the owner's go, making it public; on "take it back", returning the public to the version before.
 
+**Watching**
+- A page on the owner's server, at an address of its own behind a sign-in, where they watch the factory at work:
+  Archon's own pages, read-only, built from the same pinned Archon that setup installs.
+
 **Project profiles**
 - A plain profile that works for any project, and a way for a project to add its own steps (how it
   is installed, how its staging copy is updated) as settings beside it.

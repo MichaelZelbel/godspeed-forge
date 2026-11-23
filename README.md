@@ -8,7 +8,7 @@ Install it on a Godspeed server, as root, with:
 curl -fsSL https://github.com/MichaelZelbel/godspeed-forge/raw/main/install.sh | bash
 ```
 
-The line installs the newest Forge release, never the newest code on main; `FORGE_VERSION=v0.2.0` before `bash` picks a specific release. It works with Godspeed in Docker (the server from Godspeed's one-line installer) and with a native install, puts on the server everything the factory needs (git, GitHub's `gh`, Python, Node 22, bun, uv, Claude Code and Codex) and gives Godspeed's chat a Forge skill. Then type `godspeed-forge setup owner/repository` in the same terminal.
+The line installs the newest Forge release, never the newest code on main; `FORGE_VERSION=v0.2.0` before `bash` picks a specific release. It works with Godspeed in Docker (the server from Godspeed's one-line installer) and with a native install, puts on the server everything the factory needs (git, GitHub's `gh`, Python, Node 22, bun, uv, Claude Code and Codex), gives Godspeed's chat a Forge skill and sets up the page where you watch the factory at work (see [Watching the factory](#watching-the-factory)). Then type `godspeed-forge setup owner/repository` in the same terminal.
 
 The Forge gives anyone who has Godspeed and a GitHub project a whole development process:
 
@@ -96,6 +96,46 @@ placeholders. The install checks them and names anything missing before it chang
 `driver.json` yet, setup writes one for its new owner: only the steps that work for any owner are on, the driver starts
 no AI runs of its own, and its notices go to the owner's Godspeed. A `driver.json` that is already there is never
 written over.
+
+## Watching the factory
+
+Every server with the Forge gets a page where you watch the factory at work: every project set up with the Forge,
+every run (lap) of each, the steps of a run (picking the next item, building it, checking the app, the review, the
+merge) with what each one did, and which projects are working right now. It is Archon's own web page, the one Cole
+Medin's factory runs on, built from the same pinned copy of Archon that setup installs.
+
+The install line sets it up, or brings it up to date, and prints its address. Setup ends with the address and the
+sign-in, also when the repository was already set up:
+
+```text
+Watch the factory at https://<your server's name>:48445. Sign in as forge with the password <password>; keep both in your password manager.
+If the page does not open, your hosting company's firewall may be blocking it: let port 48445 in there.
+```
+
+- **The address** is HTTPS on your server's own name, on a port of its own (48445, or the next one no other site
+  uses), through the same web server that gives Godspeed's notebook its address: on a native Godspeed a site file of
+  the Forge's own in Godspeed's add-on folder (`/etc/caddy/godspeed-addons/godspeed-forge.caddy`, checked with
+  `caddy validate` before Caddy takes it and taken out again if Caddy refuses it); on Godspeed's Docker server a Caddy
+  container of the Forge's own (`godspeed-forge-https`) that shares the certificates of Godspeed's. The install lets the
+  port in through the server's own firewall when ufw or firewalld is on; a firewall your hosting company runs in front
+  of the server must let it in too.
+- **The sign-in** is the user name `forge` and a password made on your server. Running the install line or setup again
+  keeps both. The password is kept only on the server, readable by root alone (`watch.json` in the Forge's private
+  state folder); the web server holds only its bcrypt hash. `godspeed-forge watch`, typed as root, shows the address and
+  the sign-in again. Asked in the chat ("where can I watch the factory?"), Godspeed gives the address and the user name,
+  never the password.
+- **It only shows.** Nothing on the page can start, stop, answer or change a run: after the sign-in only reading
+  requests (GET and HEAD) reach Archon, never its internal or webhook paths. Archon's server behind it listens on the
+  server itself only, starts no run of its own and may reach no address but the server's own, so it cannot reach
+  GitHub or an AI either.
+- **It keeps running.** The service `godspeed-forge-watch` starts with the server and again when it stops, as the
+  account the factory runs as (`server.factory_user` in `driver.json`, root on a server the Forge set up). An hourly
+  check (`godspeed-forge-watch-keep.timer`) puts back a site, container or service that went missing. When the Forge
+  moves to a newer Archon, the next install builds the page from it beside the old one, which goes once the new one
+  answers. The page's copy of Archon lives in `/opt/godspeed-forge/watch/` (about 2 GB).
+- **When it cannot be set up** (no web address from Godspeed on the server yet, a Godspeed too old to give add-ons one,
+  a download that failed), the install and setup say why in one sentence and carry on; `godspeed-forge watch` tries
+  again.
 
 ## For every owner
 

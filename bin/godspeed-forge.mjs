@@ -22,6 +22,7 @@ if (command === '--version') {
 }
 if (command === 'driver') process.exit(await runDriverCommand(process.argv.slice(3)));
 if (command === 'inbox') process.exit(await (await import('../lib/inbox.mjs')).runInboxCommand());
+if (command === 'watch') process.exit(await (await import('../lib/watch.mjs')).runWatchCommand(process.argv.slice(3)));
 if (command !== 'setup' || !repository) {
   console.error('Run godspeed-forge setup owner/repository.');
   process.exit(1);
@@ -38,6 +39,11 @@ runSetupCommand(repository, async () => {
     output: message => console.log(message),
     signIn: context => signIn({ ...context, start }),
     factorySetup: createFactorySetup(),
-    afterSetup: (repo, config, result) => driverAfterSetup(repo, { paths: defaultPaths(), config, agent: result?.agent, output: message => console.log(message) })
+    // Setup ends with the page where the owner watches the factory: its address and sign-in are the last lines.
+    afterSetup: async (repo, config, result) => {
+      await driverAfterSetup(repo, { paths: defaultPaths(), config, agent: result?.agent, output: message => console.log(message) });
+      const { watchLines } = await import('../lib/watch.mjs');
+      for (const line of (await watchLines({ paths: defaultPaths(), say: message => console.log(message) })).lines) console.log(line);
+    }
   };
 });
