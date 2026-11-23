@@ -55,7 +55,7 @@ Cole Medin's factory.
 
 **Watching**
 - A page on the owner's server, at an address of its own behind a sign-in, where they watch the factory at work:
-  Archon's own pages, read-only, built from the same pinned Archon that setup installs.
+  Archon's own pages, read-only, built from the same Archon the factory runs there.
 
 **Project profiles**
 - A plain profile that works for any project, and a way for a project to add its own steps (how it

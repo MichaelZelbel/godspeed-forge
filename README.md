@@ -102,7 +102,9 @@ written over.
 Every server with the Forge gets a page where you watch the factory at work: every project set up with the Forge,
 every run (lap) of each, the steps of a run (picking the next item, building it, checking the app, the review, the
 merge) with what each one did, and which projects are working right now. It is Archon's own web page, the one Cole
-Medin's factory runs on, built from the same pinned copy of Archon that setup installs.
+Medin's factory runs on, built from the very Archon the factory runs on your server: the copy and revision your
+projects' factory settings name, or, before any project is set up (or while projects move to a new one), the copy and
+revision setup installs.
 
 The install line sets it up, or brings it up to date, and prints its address. Setup ends with the address and the
 sign-in, also when the repository was already set up:
@@ -125,19 +127,22 @@ If the page does not open, your hosting company's firewall may be blocking it: l
   the sign-in again. Asked in the chat ("where can I watch the factory?"), Godspeed gives the address and the user name,
   never the password.
 - **It only shows.** Nothing on the page can start, stop, answer or change a run: after the sign-in only reading
-  requests (GET and HEAD) reach Archon, never its internal or webhook paths. Archon's server behind it listens on the
-  server itself only and starts no run of its own. Archon's server also does background work of its own (it resumes a
+  requests (GET and HEAD) reach Archon, never its internal or webhook paths, and your sign-in is not passed on to it.
+  Archon's server behind it listens on the server itself only and starts no run of its own. Archon's server also does background work of its own (it resumes a
   run that waits, for example one stopped by an AI's usage limit, and tidies old work folders), so systemd makes every
   file on the server read-only to it, the factory's database too, except the database's two side files that SQLite
-  needs for reading, and lets it reach no address but the server's own: that work fails at its first write and can
-  reach neither GitHub nor an AI. Before each start, a small preparation (`lib/watch-prepare.mjs`) makes what Archon's
+  needs for reading, takes every special right from it (even running as root it can neither undo that nor make a new
+  namespace) and lets it reach no address but the server's own: that work fails at its first write and can reach
+  neither GitHub nor an AI. Before each start, a small preparation (`lib/watch-prepare.mjs`) makes what Archon's
   server would otherwise write first, only when it is missing and with Archon's own code, as the factory's account:
   the database on a server whose factory has not run yet, Archon's local key and the two side files.
 - **It keeps running.** The service `godspeed-forge-watch` starts with the server and again when it stops, as the
   account the factory runs as (`server.factory_user` in `driver.json`, root on a server the Forge set up). An hourly
-  check (`godspeed-forge-watch-keep.timer`) puts back a site, container or service that went missing. When the Forge
-  moves to a newer Archon, the next install builds the page from it beside the old one, which goes once the new one
-  answers. The page's copy of Archon lives in `/opt/godspeed-forge/watch/` (about 2 GB).
+  check (`godspeed-forge-watch-keep.timer`) puts back a site, container or service that went missing. When the factory
+  moves to another Archon, the next install, setup or hourly check builds the page from it beside the old one, which
+  goes once the new one answers; a new one that does not answer gives way to the old one, which runs again, and only
+  the install line, setup or `godspeed-forge watch` try the new one again. The page's copy of Archon lives in
+  `/opt/godspeed-forge/watch/` (about 2 GB per version).
 - **When it cannot be set up** (no web address from Godspeed on the server yet, a Godspeed too old to give add-ons one,
   a download that failed), the install and setup say why in one sentence and carry on; `godspeed-forge watch` tries
   again.

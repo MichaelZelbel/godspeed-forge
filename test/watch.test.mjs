@@ -1,7 +1,7 @@
 // The page where the owner watches the factory (lib/watch.mjs), its chat answer (lib/owner/watch.mjs) and the lines
 // setup ends with. The server is a stand-in: a folder of the test's own is its file system, and systemctl, docker, git,
 // bun, caddy and the page's answers are stand-ins, so nothing is installed and nothing reaches the network.
-// test cases: 14
+// test cases: 17
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -12,7 +12,7 @@ import { assertPlain } from './forge-owner-fakes.mjs';
 import { ARCHON_REVISION, ARCHON_SOURCE } from '../lib/constants.mjs';
 import {
   ADDON_DIR, CONTAINER, DOCKER_CADDYFILE, KEEP_UNIT, NOT_HERE, PAGES_DIR, SAY, SITE_FILE, UNIT, USER, WHY,
-  dockerCaddyfile, ensureWatchPage, pageDir, readRecord, runWatchCommand, siteText, watchLines
+  dockerCaddyfile, ensureWatchPage, factoryArchon, pageDir, readRecord, runWatchCommand, siteText, watchLines
 } from '../lib/watch.mjs';
 import { SAY as CHAT, watch as chatWatch } from '../lib/owner/watch.mjs';
 import { prepare, SIDE_FILES } from '../lib/watch-prepare.mjs';
@@ -43,7 +43,7 @@ function nativeGodspeed(root, { host = 'srv2.example.org', addons = true } = {})
 }
 
 // The stand-in server's commands and the page's answers.
-function server(root, { listening = '', validateFails = false, buildFails = false, answersOutside = true, active = [] } = {}) {
+function server(root, { listening = '', validateFails = false, buildFails = false, answersOutside = true, active = [], refuse = null, badRevision = null } = {}) {
   const calls = [];
   const state = { active: new Set(active), container: null, restarts: 0, runs: 0 };
   const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
@@ -51,6 +51,7 @@ function server(root, { listening = '', validateFails = false, buildFails = fals
     calls.push({ command, args, options });
     if (command === 'systemctl') {
       const [verb, ...rest] = args;
+      if (verb === refuse) return { status: 1, stdout: '', stderr: 'Failed to enable unit: Access denied' };
       if (verb === 'is-active') return state.active.has(rest.at(-1)) ? ok() : { status: 3, stdout: '', stderr: '' };
       if (verb === 'restart' || verb === 'start') { state.active.add(rest[0]); if (rest[0] === `${UNIT}.service`) state.restarts++; }
       return ok();
@@ -74,7 +75,8 @@ function server(root, { listening = '', validateFails = false, buildFails = fals
     if (command === 'bash' && args[1] === 'command -v runuser') return ok('/usr/sbin/runuser\n');
     if (command === '/usr/local/bin/bun' && args[0] === '-e') return ok(HASH);
     if (command === 'git' && args[0] === 'clone') { fs.mkdirSync(at(root, `${args.at(-1)}/.git`), { recursive: true }); return ok(); }
-    if (command === 'git' && args.includes('rev-parse')) return ok(`${ARCHON_REVISION}\n`);
+    if (command === 'git' && args.includes('checkout')) { state.head = args.at(-1); return ok(); }
+    if (command === 'git' && args.includes('rev-parse')) return ok(`${state.head}\n`);
     if (command === 'git') return ok();
     if (command === '/usr/local/bin/bun' && args[0] === 'install') return ok();
     if (command === '/usr/local/bin/bun' && args[1] === 'build:web') {
@@ -90,7 +92,7 @@ function server(root, { listening = '', validateFails = false, buildFails = fals
   // The page's answers: Archon on this server while its service runs; over HTTPS while a site is published, 401 without
   // the sign-in and 200 with the one the record holds.
   const ask = async ({ secure, auth }) => {
-    if (!secure) return state.active.has(`${UNIT}.service`) ? 200 : 0;
+    if (!secure) return state.active.has(`${UNIT}.service`) && !(badRevision && read(at(root, `/etc/systemd/system/${UNIT}.service`)).includes(badRevision)) ? 200 : 0;
     if (!answersOutside) return 0;
     const published = state.container || read(at(root, SITE_FILE));
     if (!published) return 0;
@@ -119,7 +121,7 @@ testCase("on Godspeed's Docker server the page is built from the pinned Archon, 
   assert.equal(r.built, true);
   assert.deepEqual(p.said, [SAY.preparing]);
   const record = readRecord(p.paths, fs);
-  assert.deepEqual({ ...record, password: '-' }, { format: 1, host: 'srv1.example.com', port: 48445, upstream: 3190, user: USER, password: '-', hash: HASH, revision: ARCHON_REVISION, front: 'docker' });
+  assert.deepEqual({ ...record, password: '-' }, { format: 1, host: 'srv1.example.com', port: 48445, upstream: 3190, user: USER, password: '-', hash: HASH, source: ARCHON_SOURCE, revision: ARCHON_REVISION, front: 'docker' });
   assert.match(record.password, /^[A-HJ-NP-Za-km-z2-9]{20}$/);
   if (posix) assert.equal(fs.statSync(path.join(p.paths.state, 'watch.json')).mode & 0o777, 0o600);
   const lines = commandLines(s);
@@ -130,7 +132,7 @@ testCase("on Godspeed's Docker server the page is built from the pinned Archon, 
   assert.equal(read(at(root, `${DIR}/.forge-built`)), `${ARCHON_REVISION}\n`);
   const unit = read(at(root, `/etc/systemd/system/${UNIT}.service`));
   for (const line of ['Environment=HOST=127.0.0.1', 'IPAddressDeny=any', 'IPAddressAllow=localhost', 'Restart=always', 'WantedBy=multi-user.target', 'Environment="HOME=/root"', 'WorkingDirectory=/root',
-    'ProtectSystem=strict', 'ProtectHome=read-only', 'ReadWritePaths="-/root/.archon/archon.db-wal" "-/root/.archon/archon.db-shm"',
+    'ProtectSystem=strict', 'ProtectHome=read-only', 'CapabilityBoundingSet=', 'AmbientCapabilities=', 'RestrictNamespaces=true', 'SystemCallFilter=~@mount', 'ReadWritePaths="-/root/.archon/archon.db-wal" "-/root/.archon/archon.db-shm"',
     `ExecStartPre=+"/usr/local/bin/bun" "/usr/local/lib/godspeed-forge/lib/watch-prepare.mjs" "${DIR}"`,
     `ExecStart="/usr/local/bin/bun" "${DIR}/packages/cli/src/cli.ts" serve --port 3190`]) assert.ok(unit.includes(`${line}\n`), line);
   assert.equal((unit.match(/^ReadWritePaths=/gm) || []).length, 1, 'the side files are the only files it may write; the database itself stays read-only');
@@ -183,7 +185,7 @@ testCase('a new pinned revision is built beside the old one, the page restarts o
   write(at(root, `${old}/.forge-built`), '1cfb8fc541580fe5edf15e9a504b572bc9bb45bb\n');
   fs.rmSync(at(root, DIR), { recursive: true, force: true });
   const record = readRecord(first.paths, fs);
-  fs.writeFileSync(path.join(first.paths.state, 'watch.json'), JSON.stringify({ ...record, revision: '1cfb8fc541580fe5edf15e9a504b572bc9bb45bb' }));
+  fs.writeFileSync(path.join(first.paths.state, 'watch.json'), JSON.stringify({ ...record, source: 'https://github.com/coleam00/Archon', revision: '1cfb8fc541580fe5edf15e9a504b572bc9bb45bb' }));
   const restarts = s.state.restarts;
   const p = page(root, s);
   const r = await p.go();
@@ -288,6 +290,7 @@ testCase('the site asks for the sign-in first, lets only GET and HEAD reach Arch
     '\trespond @inside 404',
     '\treverse_proxy 127.0.0.1:3190 {',
     '\t\theader_up -X-Archon-User',
+    '\t\theader_up -Authorization',
     '\t}',
     '}',
     '',
@@ -333,6 +336,66 @@ testCase('asked in the chat, the Forge gives the address and the user name, neve
   assert.deepEqual(here, { ok: true, say: "You can watch the factory at https://srv1.example.com:48445. Sign in as forge with the password setup showed you. If you no longer have it, type godspeed-forge watch in your server's terminal, logged in as root, and it shows it again." });
   assert.ok(!here.say.includes('Kq7dWm2xPz9bTn4hRv3s'));
   assert.deepEqual(await chatWatch({ kind: 'watch' }, { paths, run: stopped }), { ok: false, say: CHAT.stopped('https://srv1.example.com:48445') });
+}
+
+const COLE = { source: 'https://github.com/coleam00/Archon', revision: '1cfb8fc541580fe5edf15e9a504b572bc9bb45bb' };
+// A project the factory works on, with the factory settings Cole Medin's installer writes into its checkout.
+function project(root, checkout, archon, { driver = true, state = null } = {}) {
+  write(at(root, `${checkout}/.factory/consumer.json`), JSON.stringify({ source: `/root/.cache/factory/archon/${archon.revision}`, revision: archon.revision, bun: 'bun', repository: `${archon.source}.git`, kind: 'integration' }));
+  const name = path.posix.basename(checkout);
+  if (driver) write(at(root, `/etc/godspeed-forge/projects/owner--${name}.json`), JSON.stringify({ repository: `owner/${name}`, checkout }));
+  if (state) write(path.join(state, 'projects', 'owner', name, 'registration.json'), JSON.stringify({ repository: `owner/${name}`, checkout, completed: true }));
+}
+
+testCase("the page builds the Archon the factory runs on this server, and the Forge's pin when no project names one or they differ");
+{
+  const root = fresh();
+  dockerGodspeed(root);
+  project(root, '/root/projects/owner/app', COLE);
+  project(root, '/root/projects/owner/site', COLE, { driver: false, state: path.join(root, 'state') });
+  assert.deepEqual(factoryArchon({ fs, root, state: path.join(root, 'state') }), COLE);
+  const s = server(root);
+  const r = await page(root, s).go();
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual([r.record.source, r.record.revision], [COLE.source, COLE.revision]);
+  assert.ok(commandLines(s).includes(`git clone --quiet --no-checkout --no-hardlinks ${COLE.source} ${pageDir(COLE.revision)}`), 'from the copy and revision the factory runs');
+  assert.ok(read(at(root, `/etc/systemd/system/${UNIT}.service`)).includes(`${pageDir(COLE.revision)}/packages/cli/src/cli.ts`));
+  project(root, '/root/projects/owner/other', { source: ARCHON_SOURCE, revision: ARCHON_REVISION });
+  assert.deepEqual(factoryArchon({ fs, root, state: path.join(root, 'state') }), { source: ARCHON_SOURCE, revision: ARCHON_REVISION }, 'projects on different ones while they move: the pin setup installs');
+  assert.deepEqual(factoryArchon({ fs, root: fresh() }), { source: ARCHON_SOURCE, revision: ARCHON_REVISION }, 'no project yet: the pin setup installs');
+}
+
+testCase('a new version that does not answer gives way to the one before, which runs again, and the hourly check does not try it again');
+{
+  const root = fresh();
+  dockerGodspeed(root);
+  project(root, '/root/projects/owner/app', COLE);
+  const s = server(root, { badRevision: ARCHON_REVISION });
+  assert.equal((await page(root, s).go()).ok, true);
+  project(root, '/root/projects/owner/app', { source: ARCHON_SOURCE, revision: ARCHON_REVISION });
+  const p = page(root, s);
+  const r = await p.go();
+  assert.equal(r.ok, true, 'the page still answers, on the version before');
+  assert.deepEqual([r.record.revision, r.record.failedRevision], [COLE.revision, ARCHON_REVISION]);
+  assert.ok(read(at(root, `/etc/systemd/system/${UNIT}.service`)).includes(pageDir(COLE.revision)), 'the unit runs the version before again');
+  assert.ok(fs.existsSync(at(root, `${pageDir(COLE.revision)}/.forge-built`)) && fs.existsSync(at(root, `${pageDir(ARCHON_REVISION)}/.forge-built`)), 'both builds stay');
+  assert.match(read(path.join(p.paths.state, 'watch.log')), /did not answer/);
+  const restarts = s.state.restarts;
+  assert.equal((await page(root, s, { wait: false }).go()).ok, true);
+  assert.equal(s.state.restarts, restarts, 'the hourly check leaves the page running on the version before');
+  await page(root, s).go();
+  assert.equal(s.state.restarts, restarts + 2, 'setup or the install line tries the new version again, and gives way again');
+}
+
+testCase('systemd refusing to reload, enable or start what the page needs is never reported as ready');
+{
+  for (const verb of ['daemon-reload', 'enable']) {
+    const root = fresh();
+    dockerGodspeed(root);
+    const p = page(root, server(root, { refuse: verb }));
+    assert.deepEqual(await p.go(), { ok: false, why: WHY.start }, verb);
+    assert.match(read(path.join(p.paths.state, 'watch.log')), /systemd: Failed to enable unit/);
+  }
 }
 
 testCase('a failure that throws, even before the page takes its lock, never escapes: setup and the hourly run each say it in one sentence');
