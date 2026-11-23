@@ -19,7 +19,7 @@ function fakeGh({ failPr = null, prRequired = required("success") } = {}) {
     if (/commits\/sha\d+$/.test(a)) return { commit: { committer: { date: "2026-11-18T09:00:00Z" } } };
     if (/commits\/main$/.test(a)) return { sha: "mainsha" };
     if (/commits\/mainsha\/check-runs/.test(a)) return required("failure", "2026-11-18T08:00:00Z");
-    if (/issues\?state=open/.test(a)) return [{ number: 10 }, { number: 11 }, { number: 500, pull_request: {} }];
+    if (/issues\?state=open/.test(a)) return [{ number: 10 }, { number: 11 }, { number: 12, labels: [{ name: "needs-owner" }, { name: "found-list" }] }, { number: 500, pull_request: {} }];
     if ((m = /issues\/(\d+)\/comments/.exec(a))) return [{ user: { login: "MichaelZelbel" }, body: "hi", created_at: "2026-11-18T09:30:00Z" }];
     if ((m = /issues\/(\d+)$/.exec(a))) return { state: "open", labels: [{ name: "needs-owner" }], closed_at: null };
     throw new Error("unexpected " + a);
@@ -147,7 +147,7 @@ function projectDeps({ stop = null, writerArgs = "", scenarios = [], restarts = 
     },
     gh: args => {
       const a = args.join(" ");
-      if (/querino\/issues\?state=open/.test(a)) return [{ number: 7 }];
+      if (/querino\/issues\?state=open/.test(a)) return [{ number: 7 }, { number: 8, labels: [{ name: "found-list" }, { name: "needs-owner" }] }];
       if (/actions\/workflows\/scenarios\.yml\/runs/.test(a)) return { workflow_runs: scenarios };
       return base.gh(args);
     },
@@ -179,6 +179,22 @@ test("every factory project is read: its decisions, its runs (through Archon's o
   assert.ok(runs.asForge, "Archon runs as the factory user");
   assert.match(runs.cmd, /bun '\/home\/godspeed-forge\/\.cache\/factory\/archon\/1cfb\/packages\/cli\/src\/cli\.ts' workflow runs --limit 30 --cwd '\/home\/godspeed-forge\/querino' --json/);
   assert.equal(q.stop, null);
+});
+
+test("found lists are not on the board, for the main project and for a further project", async () => {
+  const w = await readWorld(TEST_ENV, projectDeps());
+  assert.deepEqual(w.board.openNeedsOwner, [10, 11]);
+  assert.deepEqual(w.factories[0].board, [10, 11]);
+  assert.deepEqual(w.factories[1].board, [7]);
+});
+
+test("a board whose only needs-owner issues are found lists is empty", async () => {
+  const d = projectDeps();
+  const gh = d.gh;
+  d.gh = args => /issues\?state=open/.test(args.join(" ")) ? [{ number: 12, labels: [{ name: "found-list" }] }] : gh(args);
+  const w = await readWorld(TEST_ENV, d);
+  assert.deepEqual(w.board.openNeedsOwner, []);
+  assert.deepEqual(w.factories.map(f => f.board), [[], []]);
 });
 
 test("a STOP file: its writer's life and the candidate's scenarios run are read", async () => {
