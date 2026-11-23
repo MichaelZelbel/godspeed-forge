@@ -191,6 +191,15 @@ async function lookAt(ctx, gs, state, project, now) {
     } else if (record.state === "checked") {
       // its checks passed and GitHub refused a step of putting it up to try: the step is tried again, nothing twice
       said.push(...(await putUp(ctx, gs, state, project, fresh(record.version), { rp, now })));
+    } else if (record.state === "staged" && record.staging && record.staging.link) {
+      // The one message is sent again on every run until it has left: the bridge sends each id once, so a message that
+      // failed to leave (as the first real staging message did) is not lost, and a sent one is never repeated.
+      const out = await gs.sendToOwner(stageWords.ready(repository, record.version, record.staging.link), { id: `forge-release-staged-${repository}-${record.version}` });
+      if (out && out.sent) said.push(`${record.version}: ready to try`);
+    } else if (record.state === "failed" && record.failed) {
+      const words = record.failed.staging ? stageWords.stagingFailed(repository, record.version) : stageWords.failedChecks(repository, record.version, record.failed.sentences || []);
+      const out = await gs.sendToOwner(words, { id: `forge-release-failed-${repository}-${record.version}` });
+      if (out && out.sent) said.push(`${record.version}: did not pass`);
     }
   }
 

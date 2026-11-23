@@ -365,6 +365,23 @@ testCase('a failing check gives one message naming it and its count, run once mo
   assert.deepEqual([rel.refs['tags/v0.1.0'], rel.refs['heads/live'], rel.latestId], [bad, bad, rel.releases.at(-1).id]);
 }
 
+testCase('a ready-to-try message that could not leave is sent on the next run, and never twice');
+{
+  const { co: c, project, issue } = await plannedProject('resend', { unit: 'echo "1 of 1 pass"' });
+  const good = c.commit({ unit: 'echo "1 of 1 pass"' }, 'works');
+  gh.merge('acme/resend', issue, good);
+  const n = bridge.sent.length;
+  bridge.failNextSend();
+  await releasesStep.run(ctxFor([project])).catch(() => null);
+  assert.equal(releaseRecord(state, 'acme/resend', '0.1.0').state, 'staged', 'it is put up to try even though the message did not leave');
+  assert.deepEqual(sentSince(n), [], 'nothing reached the owner yet');
+  await releasesStep.run(ctxFor([project]));
+  const pre = gh.repo('acme/resend').releases.find(x => x.tag_name === 'candidate/0.1.0');
+  assert.deepEqual(sentSince(n).map(s => s.text), [`resend 0.1.0 is ready to try: ${pre.html_url}. Shall I make it public? Reply go.`]);
+  await releasesStep.run(ctxFor([project]));
+  assert.equal(sentSince(n).length, 1, 'and never twice');
+}
+
 testCase('when GitHub refuses a step of putting a checked release up to try, the next run finishes it without running the checks again or saying anything twice');
 {
   const { co: c, project, issue } = await plannedProject('refused', { unit: 'true' });
