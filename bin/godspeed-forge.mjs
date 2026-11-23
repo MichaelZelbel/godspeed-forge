@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// Node marks its built-in SQLite as experimental and says so on every run; the owner never needs that line.
+const emitWarning = process.emitWarning.bind(process);
+process.emitWarning = (warning, ...rest) => (/SQLite is an experimental feature/.test(String(warning?.message ?? warning)) ? undefined : emitWarning(warning, ...rest));
 import { createInterface } from 'node:readline/promises';
 import { readFileSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
