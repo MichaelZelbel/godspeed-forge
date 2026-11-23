@@ -57,7 +57,7 @@ testCase('a fresh server gets every tool from its maker, each said in one line')
   ]);
   assert.equal(s.scripts.filter(x => /^apt-get -o DPkg::Lock::Timeout=600 update -qq$/.test(x)).length, 1, 'the package lists are read once before the first plain package');
   const all = s.scripts.join('\n');
-  for (const source of ['https://cli.github.com/packages', 'https://deb.nodesource.com/node_22.x', 'https://bun.sh/install', 'https://astral.sh/uv/install.sh', 'https://claude.ai/install.sh', 'npm install -g --no-fund --no-audit @openai/codex', 'python3 python3-venv']) assert.ok(all.includes(source), source);
+  for (const source of ['https://cli.github.com/packages', 'https://deb.nodesource.com/node_22.x', 'https://bun.sh/install', 'https://astral.sh/uv/install.sh', 'https://claude.ai/install.sh', 'npm install -g --no-fund --no-audit @openai/codex', 'python3 python3-venv python-is-python3']) assert.ok(all.includes(source), source);
   assert.ok(all.includes('ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude'), 'Claude Code is put where every shell finds it');
 }
 
