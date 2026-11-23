@@ -831,14 +831,15 @@ export async function scenarios(env, ownerRepo, version) {
   return { result: "failed", conclusion: newest.conclusion, ...found, ...(failedJobs ? { failedJobs } : {}) };
 }
 
-// The names of the jobs of one run that did not pass (anything but success, a skipped job included), or null
-// when GitHub's list of the jobs cannot be read.
+// The names of the jobs of one run that did not pass (anything but success or skipped: a candidate run
+// skips the jobs that do not hold up a release on purpose, so a skipped job is not a failure; a cancelled
+// one is), or null when GitHub's list of the jobs cannot be read.
 export async function failedJobNames(api, ownerRepo, runId) {
   try {
     const r = await api("GET", `/repos/${ownerRepo}/actions/runs/${runId}/jobs?per_page=100`);
     if (!r.ok || !r.json || !Array.isArray(r.json.jobs)) return null;
     if (r.json.total_count > r.json.jobs.length) return null;
-    return r.json.jobs.filter((j) => j.conclusion !== "success").map((j) => j.name);
+    return r.json.jobs.filter((j) => j.conclusion !== "success" && j.conclusion !== "skipped").map((j) => j.name);
   } catch {
     return null;
   }

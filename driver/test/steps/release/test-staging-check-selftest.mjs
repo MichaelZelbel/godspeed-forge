@@ -101,7 +101,7 @@ async function selfTest() {
       `a failed scenario run: not ready, and the install is not held against it (exit ${failedSc.r.code}: ${failedSc.r.stderr.trim()})`,
     );
     const jobsFailed = await run({ scenarios: [{ result: "failure", jobs: [{ name: "the Charm Challenge, start to finish", status: "completed", conclusion: "failure" }, { name: "the Wingman, start to finish", status: "completed", conclusion: "success" }, { name: "a later job", status: "completed", conclusion: "skipped" }] }] });
-    t.ok(jobsFailed.staging.scenarios.result === "failed" && JSON.stringify(jobsFailed.staging.scenarios.failedJobs) === JSON.stringify(["the Charm Challenge, start to finish", "a later job"]), "a failed run records the jobs that did not pass (failedJobs), for a maintainer's waiver");
+    t.ok(jobsFailed.staging.scenarios.result === "failed" && JSON.stringify(jobsFailed.staging.scenarios.failedJobs) === JSON.stringify(["the Charm Challenge, start to finish"]), "a failed run records the jobs that failed, not the ones skipped (failedJobs), for a maintainer's waiver");
     t.ok(!("failedJobs" in failedSc.staging.scenarios), "a failed run whose jobs cannot be read records no failedJobs, so nothing can be waived");
     // the standing waiver (8 November 2026): failures outside the plan's blocking scenarios do not stop "ready"
     const BLOCK_PLAN = ["---", `release: ${RELEASE}`, `repository: ${G.PRODUCT_REPO}`, "---", "", "# Godspeed 2.0.0-beta.7: the test release", "", "Blocking scenarios: workouts-from-hevy", ""].join("\n");
