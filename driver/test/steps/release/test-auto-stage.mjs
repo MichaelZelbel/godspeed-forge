@@ -1,4 +1,4 @@
-// test cases: 99
+// test cases: 100
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -1394,6 +1394,12 @@ test("without the plan's rule an item at a dead end is a halt and nothing is mov
   assert.equal((await A.autoStage(b.ctx)).outcome, "waiting");
   assert.equal(b.w.files.has(`releases/${b.w.id}/scope-amendment.json`), false, "auto-stage never cuts; a release is never cut down to nothing (freeze's reader refuses it)");
   assert.equal(b.w.notices.length, 0);
+});
+
+test("a failed run's failed jobs leave out the jobs that were skipped on purpose", async () => {
+  const jobs = [["a", "failure"], ["b", "cancelled"], ["c", "skipped"], ["d", "skipped"], ["e", "success"]].map(([name, conclusion]) => ({ name, conclusion }));
+  const api = async () => ({ ok: true, json: { total_count: 5, jobs } });
+  assert.deepEqual(await G.failedJobNames(api, REPO, 1), ["a", "b"]);
 });
 
 await runCases();
