@@ -104,10 +104,16 @@ async function godspeedBridge() {
 }
 
 // What setup does when it has finished, as root on a Linux server with systemd: it writes this project's settings file (and the
-// server's, for a new owner, when there is none) and installs the driver. Whatever stops it is said plainly and never fails
+// server's, for a new owner, when there is none), with the coding assistant setup used (agent: claude or codex, when
+// known), installs the driver, and writes the project's facts file once into Godspeed's workspace, so the owner's first
+// "plan release" finds the project before the driver's first round. Whatever stops it is said plainly and never fails
 // setup. Returns the lines it said. godspeed: the bridge to Godspeed; when it is not given, it is opened here.
-export async function driverAfterSetup(repository, { paths, config, output = () => {}, install, godspeed, platform = process.platform, uid = process.getuid?.(), systemd = () => fs.existsSync('/run/systemd/system') } = {}) {
+// githubApi and fetch point a test at a stand-in GitHub.
+export async function driverAfterSetup(repository, { paths, config, agent, output = () => {}, install, godspeed, githubApi, fetch: fetchImpl, platform = process.platform, uid = process.getuid?.(), systemd = () => fs.existsSync('/run/systemd/system') } = {}) {
   if (platform !== 'linux' || uid !== 0 || !systemd()) return [];
+  let bridge = godspeed;
+  const openBridge = async () => (bridge === undefined ? (bridge = await godspeedBridge()) : bridge);
+  let said = [];
   try {
     const dir = path.dirname(paths.config);
     const [owner, name] = repository.split('/');
@@ -116,18 +122,41 @@ export async function driverAfterSetup(repository, { paths, config, output = () 
     try { apps = JSON.parse(fs.readFileSync(path.join(checkout, '.git', 'godspeed-forge-apps.json'), 'utf8')); } catch { /* no list: the install names what is missing */ }
     fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
     const projectFile = path.join(dir, 'projects', `${owner}--${name}.json`);
+    const known = agent === 'claude' || agent === 'codex' ? agent : null;
     if (!fs.existsSync(projectFile)) {
-      fs.writeFileSync(projectFile, JSON.stringify({ repository, project: name, checkout, apps: { builder: apps.builder?.slug ?? '', release: apps.release?.slug ?? '' }, trust: true }, null, 2) + '\n');
+      fs.writeFileSync(projectFile, JSON.stringify({ repository, project: name, checkout, apps: { builder: apps.builder?.slug ?? '', release: apps.release?.slug ?? '' }, trust: true, ...(known ? { agent: known } : {}) }, null, 2) + '\n');
+    } else if (known) {
+      // a project file from before the agent was recorded gets the one setup just used; nothing else in it changes
+      let existing = null;
+      try { existing = JSON.parse(fs.readFileSync(projectFile, 'utf8')); } catch { existing = null; } // a file it cannot read is left as it is
+      if (existing && typeof existing === 'object' && !existing.agent) fs.writeFileSync(projectFile, JSON.stringify({ ...existing, agent: known }, null, 2) + '\n');
     }
     const serverFile = path.join(dir, 'driver.json');
     if (!fs.existsSync(serverFile)) {
-      const bridge = godspeed === undefined ? await godspeedBridge() : godspeed;
-      fs.writeFileSync(serverFile, JSON.stringify(newOwnerSettings(repository, { godspeed: bridge }), null, 2) + '\n');
+      fs.writeFileSync(serverFile, JSON.stringify(newOwnerSettings(repository, { godspeed: await openBridge() }), null, 2) + '\n');
     }
     const code = await runDriverCommand(['install', '--settings-dir', dir], { output, install });
-    return code === 0 ? ['The factory driver is installed.'] : [];
+    said = code === 0 ? ['The factory driver is installed.'] : [];
   } catch (error) {
     output(`The factory driver could not be installed (${error.message}). Run godspeed-forge driver install when that is put right.`);
-    return [];
   }
+  await writeFirstFacts(repository, { paths, openBridge, githubApi, fetch: fetchImpl });
+  return said;
+}
+
+// The project's facts file, written once at the end of setup with the same refresh the owner-releases step makes. When
+// the bridge cannot be opened or anything fails, nothing is said: the driver's next round writes it.
+async function writeFirstFacts(repository, { paths, openBridge, githubApi, fetch: fetchImpl }) {
+  try {
+    if (!paths?.state || !paths?.config) return;
+    const gs = await openBridge();
+    if (!gs || typeof gs.writeWorkspaceFile !== 'function' || typeof gs.readWorkspaceFile !== 'function') return;
+    const dir = path.dirname(paths.config);
+    const [owner, name] = repository.split('/');
+    const project = JSON.parse(fs.readFileSync(path.join(dir, 'projects', `${owner}--${name}.json`), 'utf8'));
+    let settings = {};
+    try { settings = JSON.parse(fs.readFileSync(path.join(dir, 'driver.json'), 'utf8')); } catch { /* the facts need no server settings */ }
+    const { refreshFacts } = await import(driverFile('steps/owner-releases.mjs'));
+    await refreshFacts({ settings, githubApi, fetch: fetchImpl }, gs, paths.state, { ...project, repository });
+  } catch { /* the driver writes it on its next round */ }
 }

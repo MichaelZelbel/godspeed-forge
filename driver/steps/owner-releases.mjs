@@ -32,10 +32,11 @@ import {
 import { stageWords, releaseNotes } from "./owner/words.mjs";
 import { ownerBranchMove } from "./owner/owner-gh.mjs";
 import { runAs, shellAs } from "./owner/run.mjs";
-import { tokenFor, missingRecords, forgeState } from "./owner/access.mjs";
+import { tokenFor, missingRecords, forgeState, forgeCommand } from "./owner/access.mjs";
 import { TITLE as QUESTIONS_TITLE } from "./owner/questions.mjs";
 
-export const STEP = { name: "owner-releases", everyMinutes: 15, maxMinutes: 120, inRound: false };
+// forOwner: what the owner reads when this step is not working (never its internal name)
+export const STEP = { name: "owner-releases", everyMinutes: 15, maxMinutes: 120, inRound: false, forOwner: "the watch on your releases" };
 export const SETTINGS = [
   { key: "forge.state_dir", required: false, default: DEFAULT_STATE, meaning: "the Forge's private state: setup's records, the App details and the release records" },
   { key: "forge.config", required: false, default: "/etc/godspeed-forge/config.json", meaning: "the Forge's own config, whose commands.python runs the factory's pause and unpause" },
@@ -57,15 +58,8 @@ const DAY = 24 * 3600 * 1000;
 export const olderStepStages = (settings, project) => !!(project && project.releases && dig(settings, "steps.stage.enabled") !== false);
 const profileOf = project => ({ ...(project || {}), ...((project && project.profile) || {}) });
 
-// A command the Forge's own config names (commands.python, commands.gh), unless this step's settings name it.
-const forgeCommand = (settings, name, fallback) => {
-  const own = dig(settings, `steps.owner-releases.${name}`);
-  if (own) return String(own);
-  const config = readJson(dig(settings, "forge.config") || "/etc/godspeed-forge/config.json", null);
-  return (config && config.commands && config.commands[name]) || fallback;
-};
-export const forgePython = settings => forgeCommand(settings, "python", "python3");
-export const forgeGh = settings => forgeCommand(settings, "gh", "gh");
+export const forgePython = settings => forgeCommand(settings, "owner-releases", "python", "python3");
+export const forgeGh = settings => forgeCommand(settings, "owner-releases", "gh", "gh");
 
 function authorKind(item, repository, settings) {
   const user = item.user || {};
@@ -144,11 +138,10 @@ export async function runChecks(ctx, project, record, save) {
 }
 
 // ---------------------------------------------------------------- one project
-async function lookAt(ctx, gs, state, project, now) {
-  const settings = ctx.settings || {};
+// What the facts are made from, read from GitHub through the project's builder App.
+async function readProject(ctx, state, project) {
   const repository = project.repository;
   const rp = repoPath(repository);
-  const said = [];
   const reader = githubClient({ token: await tokenFor(ctx, state, repository, "builder"), api: ctx.githubApi, fetch: ctx.fetch });
   const info = await reader.get(rp);
   const branch = (info && info.default_branch) || "main";
@@ -158,6 +151,21 @@ async function lookAt(ctx, gs, state, project, now) {
   const closedPulls = await reader.list(`${rp}/pulls?state=closed&base=${encodeURIComponent(branch)}&sort=updated&direction=desc`, 2);
   let runs = [];
   try { runs = await reader.list(`${rp}/commits/${encodeURIComponent(branch)}/check-runs`, 1); } catch { runs = []; }
+  return { reader, rp, branch, latest, openAll, openPulls, closedPulls, runs };
+}
+
+// The project's facts file, refreshed once, without moving any release: what setup writes at its end, so the
+// owner's first "plan release" finds the project before the driver's first round. ctx: { settings, githubApi, fetch }.
+export async function refreshFacts(ctx, gs, state, project, now = Date.now()) {
+  await writeFacts(ctx, gs, state, project, nowMs(now), await readProject(ctx, state, project));
+}
+
+async function lookAt(ctx, gs, state, project, now) {
+  const settings = ctx.settings || {};
+  const repository = project.repository;
+  const said = [];
+  const read = await readProject(ctx, state, project);
+  const { reader, rp, branch, closedPulls } = read;
   const P = forgePaths(state);
   const lock = fn => withLock(P.releaseLock(repository), fn);
   const fresh = version => releaseRecord(state, repository, version);
@@ -186,7 +194,13 @@ async function lookAt(ctx, gs, state, project, now) {
     }
   }
 
-  // the facts file
+  await writeFacts(ctx, gs, state, project, now, read);
+  return said;
+}
+
+async function writeFacts(ctx, gs, state, project, now, { branch, latest, openAll, openPulls, closedPulls, runs }) {
+  const settings = ctx.settings || {};
+  const repository = project.repository;
   const records = releaseRecords(state, repository);
   const newest = records.at(-1) || null;
   const active = activeRelease(records);
@@ -211,7 +225,6 @@ async function lookAt(ctx, gs, state, project, now) {
     public: pub ? { version: pub.version, at: pub.public && pub.public.at, url: pub.public && pub.public.url } : latest ? { version: latestVersion, at: latest.published_at || null, url: latest.html_url || null } : null,
     waitingForOwner: { questions, staged: !!(active && active.state === "staged") },
   }));
-  return said;
 }
 
 // A building release: what each item's issue says now; one sentence for an item closed without a change; and,
