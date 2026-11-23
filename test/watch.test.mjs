@@ -1,7 +1,7 @@
 // The page where the owner watches the factory (lib/watch.mjs), its chat answer (lib/owner/watch.mjs) and the lines
 // setup ends with. The server is a stand-in: a folder of the test's own is its file system, and systemctl, docker, git,
 // bun, caddy and the page's answers are stand-ins, so nothing is installed and nothing reaches the network.
-// test cases: 19
+// test cases: 20
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -350,11 +350,14 @@ function project(root, checkout, archon, { driver = true, state = null } = {}) {
   if (driver) write(at(root, `/etc/godspeed-forge/projects/owner--${name}.json`), JSON.stringify({ repository: `owner/${name}`, checkout }));
   if (state) write(path.join(state, 'projects', 'owner', name, 'registration.json'), JSON.stringify({ repository: `owner/${name}`, checkout, completed: true }));
 }
+// The factory download setup keeps in the Forge's private state: Cole Medin's installer, whose manifest names his pin.
+const factoryDownload = root => write(path.join(root, 'state', 'factory', 'template', 'factory', 'pack.json'), JSON.stringify({ repository: COLE.source, integration_revision_required: COLE.revision }));
 
 testCase("the page builds the Archon the factory runs on this server, and the Forge's pin when no project names one or they differ");
 {
   const root = fresh();
   dockerGodspeed(root);
+  factoryDownload(root);
   project(root, '/root/projects/owner/app', COLE);
   project(root, '/root/projects/owner/site', COLE, { driver: false, state: path.join(root, 'state') });
   assert.deepEqual(factoryArchon({ fs, root, state: path.join(root, 'state') }), COLE);
@@ -369,10 +372,31 @@ testCase("the page builds the Archon the factory runs on this server, and the Fo
   assert.deepEqual(factoryArchon({ fs, root: fresh() }), { source: ARCHON_SOURCE, revision: ARCHON_REVISION }, 'no project yet: the pin setup installs');
 }
 
+testCase("a project's own settings never make the page download and build an Archon the Forge does not vouch for");
+{
+  const root = fresh();
+  dockerGodspeed(root);
+  factoryDownload(root);
+  const state = path.join(root, 'state');
+  project(root, '/home/factory/app', { source: 'https://github.com/someone/Archon', revision: COLE.revision });
+  assert.deepEqual(factoryArchon({ fs, root, state }), { source: ARCHON_SOURCE, revision: ARCHON_REVISION }, 'another repository');
+  project(root, '/home/factory/app', { source: COLE.source, revision: 'f'.repeat(40) });
+  assert.deepEqual(factoryArchon({ fs, root, state }), { source: ARCHON_SOURCE, revision: ARCHON_REVISION }, 'another revision of a trusted repository');
+  assert.deepEqual(factoryArchon({ fs, root }), { source: ARCHON_SOURCE, revision: ARCHON_REVISION }, "without the Forge's own factory download, only its own pin");
+  project(root, '/home/factory/app', COLE);
+  assert.deepEqual(factoryArchon({ fs, root }), { source: ARCHON_SOURCE, revision: ARCHON_REVISION }, "Cole Medin's pin counts only as the Forge's download names it");
+  assert.deepEqual(factoryArchon({ fs, root, state }), COLE);
+  const s = server(root);
+  project(root, '/home/factory/app', { source: 'https://github.com/someone/Archon', revision: COLE.revision });
+  assert.equal((await page(root, s).go()).ok, true);
+  assert.ok(!commandLines(s).some(l => l.includes('someone')), 'never cloned');
+}
+
 testCase('a new version that does not answer gives way to the one before, which runs again, and the hourly check does not try it again');
 {
   const root = fresh();
   dockerGodspeed(root);
+  factoryDownload(root);
   project(root, '/root/projects/owner/app', COLE);
   const s = server(root, { badRevision: ARCHON_REVISION });
   assert.equal((await page(root, s).go()).ok, true);

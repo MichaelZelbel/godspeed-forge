@@ -103,8 +103,9 @@ Every server with the Forge gets a page where you watch the factory at work: eve
 every run (lap) of each, the steps of a run (picking the next item, building it, checking the app, the review, the
 merge) with what each one did, and which projects are working right now. It is Archon's own web page, the one Cole
 Medin's factory runs on, built from the very Archon the factory runs on your server: the copy and revision your
-projects' factory settings name, or, before any project is set up (or while projects move to a new one), the copy and
-revision setup installs.
+projects' factory settings name, when it is one the Forge vouches for (its own pin, or the one Cole Medin's installer
+names); otherwise, and before any project is set up or while projects move to a new one, the copy and revision setup
+installs. A project's settings never make the Forge download anything else.
 
 The install line sets it up, or brings it up to date, and prints its address. Setup ends with the address and the
 sign-in, also when the repository was already set up:
