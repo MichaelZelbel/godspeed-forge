@@ -93,18 +93,16 @@ function server(root, { listening = '', validateFails = false, buildFails = fals
     if (command === '/usr/local/bin/caddy') return validateFails ? { status: 1, stdout: '', stderr: 'Error: adapting config: unrecognized directive: basic_auth' } : ok();
     return { status: 127, stdout: '', stderr: 'not found' };
   };
-  // The page's answers: Archon on this server while its service runs; over HTTPS while a site is published, 401 without
-  // the sign-in and 200 with the one the record holds.
-  const ask = async ({ secure, auth }) => {
-    if (!secure) return state.active.has(`${UNIT}.service`) && !(badRevision && read(at(root, `/etc/systemd/system/${UNIT}.service`)).includes(badRevision)) ? 200 : 0;
+  // The page's answers: Archon on this server while its service runs; over HTTPS, while a site is published, the request
+  // for the sign-in. Every question is kept, to show none carries the password.
+  const asked = [];
+  const ask = async question => {
+    asked.push(question);
+    if (!question.secure) return state.active.has(`${UNIT}.service`) && !(badRevision && read(at(root, `/etc/systemd/system/${UNIT}.service`)).includes(badRevision)) ? 200 : 0;
     if (!answersOutside) return 0;
-    const published = state.container || read(at(root, SITE_FILE));
-    if (!published) return 0;
-    if (!auth) return 401;
-    const record = JSON.parse(read(path.join(root, 'state', 'watch.json')));
-    return auth === `${record.user}:${record.password}` ? 200 : 401;
+    return state.container || read(at(root, SITE_FILE)) ? 401 : 0;
   };
-  return { run, ask, calls, state };
+  return { run, ask, calls, state, asked };
 }
 
 function page(root, s, more = {}) {
@@ -152,6 +150,8 @@ testCase("on Godspeed's Docker server the page is built from the pinned Archon, 
   assert.equal(hashing.options.input, record.password, 'the password reaches the hash on standard input');
   for (const c of s.calls.filter(c => c !== hashing)) assert.ok(!JSON.stringify(c).includes(record.password), 'no other command sees the password');
   assert.ok(!String(read(path.join(p.paths.state, 'watch.log'))).includes(record.password), 'the log never holds the password');
+  assert.ok(s.asked.some(q => q.secure && q.port === 48445 && q.host === 'srv1.example.com') && s.asked.some(q => !q.secure && q.port === 3190), 'the address and Archon behind it were both asked');
+  for (const q of s.asked) assert.ok(!('auth' in q) && !JSON.stringify(q).includes(record.password), 'no check sends the sign-in, whatever answers on the port');
   const keep = read(at(root, `/etc/systemd/system/${KEEP_UNIT}.timer`));
   assert.ok(keep.includes('OnUnitActiveSec=1h\n') && read(at(root, `/etc/systemd/system/${KEEP_UNIT}.service`)).includes('ExecStart="/usr/bin/node" "/usr/local/lib/godspeed-forge/bin/godspeed-forge.mjs" watch keep\n'));
   assert.ok(lines.includes(`systemctl enable ${UNIT}.service ${KEEP_UNIT}.timer`));
@@ -333,15 +333,17 @@ testCase('asked in the chat, the Forge gives the address and the user name, neve
   const state = fresh();
   const paths = { state };
   const asked = [];
-  const answering = async q => { asked.push(q); return q.auth === 'forge:Kq7dWm2xPz9bTn4hRv3s' ? 200 : 401; };
+  const answering = async q => { asked.push(q); return q.secure ? 401 : 200; };
+  const archonDown = async q => (q.secure ? 401 : 0);
   const silent = async () => 0;
   assert.deepEqual(await chatWatch({ kind: 'watch' }, { paths, ask: answering }), { ok: false, say: CHAT.none });
   fs.writeFileSync(path.join(state, 'watch.json'), JSON.stringify({ format: 1, host: 'srv1.example.com', port: 48445, upstream: 3190, user: 'forge', password: 'Kq7dWm2xPz9bTn4hRv3s', hash: HASH, revision: ARCHON_REVISION }));
   const here = await chatWatch({ kind: 'watch' }, { paths, ask: answering });
   assert.deepEqual(here, { ok: true, say: "You can watch the factory at https://srv1.example.com:48445. Sign in as forge with the password setup showed you. If you no longer have it, type godspeed-forge watch in your server's terminal, logged in as root, and it shows it again." });
   assert.ok(!here.say.includes('Kq7dWm2xPz9bTn4hRv3s'));
-  assert.deepEqual(asked.at(-1), { secure: true, port: 48445, host: 'srv1.example.com', pathname: '/api/health', auth: 'forge:Kq7dWm2xPz9bTn4hRv3s' }, 'the address itself, signed in');
+  assert.deepEqual(asked, [{ secure: true, port: 48445, host: 'srv1.example.com', pathname: '/api/health' }, { port: 3190, pathname: '/api/health' }], 'the address asks for the sign-in and Archon answers; the password is never sent');
   assert.deepEqual(await chatWatch({ kind: 'watch' }, { paths, ask: silent }), { ok: false, say: CHAT.stopped('https://srv1.example.com:48445') });
+  assert.deepEqual(await chatWatch({ kind: 'watch' }, { paths, ask: archonDown }), { ok: false, say: CHAT.stopped('https://srv1.example.com:48445') });
 }
 
 const COLE = { source: 'https://github.com/coleam00/Archon', revision: '1cfb8fc541580fe5edf15e9a504b572bc9bb45bb' };
