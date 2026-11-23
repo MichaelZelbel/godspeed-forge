@@ -80,6 +80,7 @@ function server(root, { listening = '', validateFails = false, buildFails = fals
       write(at(root, `${options.cwd}/packages/web/dist/index.html`), '<html></html>');
       return ok();
     }
+    if (command === 'chmod') return ok();
     if (command === 'ss') return ok(listening);
     if (command === '/usr/local/bin/caddy') return validateFails ? { status: 1, stdout: '', stderr: 'Error: adapting config: unrecognized directive: basic_auth' } : ok();
     return { status: 127, stdout: '', stderr: 'not found' };
@@ -123,6 +124,7 @@ testCase("on Godspeed's Docker server the page is built from the pinned Archon, 
   assert.ok(lines.includes(`git clone --quiet --no-checkout --no-hardlinks ${ARCHON_SOURCE} ${DIR}`), 'Archon from the copy the Forge installs');
   assert.ok(lines.includes(`git -C ${DIR} checkout --quiet --detach ${ARCHON_REVISION}`), 'at the revision the Forge installs');
   assert.ok(lines.includes('/usr/local/bin/bun install --frozen-lockfile') && lines.includes('/usr/local/bin/bun run build:web'));
+  assert.ok(lines.includes(`chmod -R a+rX ${DIR}`), "the build is readable for the factory's account");
   assert.equal(read(at(root, `${DIR}/.forge-built`)), `${ARCHON_REVISION}\n`);
   const unit = read(at(root, `/etc/systemd/system/${UNIT}.service`));
   for (const line of ['Environment=HOST=127.0.0.1', 'IPAddressDeny=any', 'IPAddressAllow=localhost', 'Restart=always', 'WantedBy=multi-user.target', 'Environment="HOME=/root"', 'WorkingDirectory=/root',
