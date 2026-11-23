@@ -2,7 +2,7 @@
 // GitHub on 127.0.0.1, a stand-in bridge to Godspeed, a stand-in coding agent, project checkouts with an origin on
 // this machine and a stand-in factory/consumer.py. The acceptance of tickets 03 (questions reach the chat) and 04
 // (a finished release stages itself) of the Forge 0.1.0 plan, and ticket 02's facts. No network, no AI.
-// test cases: 16
+// test cases: 17
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';

@@ -1,7 +1,7 @@
 // The chat's "run one lap", "turn on automatic work" and "pause the factory" (lib/factory-control.mjs), with a
 // stand-in factory/consumer.py in the project's checkout that records how it was called: each handler runs Cole
 // Medin's own command for the project the request names and answers in plain words.
-// test cases: 13
+// test cases: 14
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -109,7 +109,7 @@ testCase('on Linux the timer\'s user gets lingering first, which root must have 
   assert.equal((await workOn(request('work-on'), s.ctx, { ...plainServer, systemd: async () => true, run: recording(true) })).ok, true, 'a user refused lingering keeps the timer while logged in');
 }
 
-testCase('turning on automatic work keeps each lap the factory's timer starts alive after the trigger ends, beside its own unit');
+testCase("turning on automatic work keeps each lap the factory's timer starts alive after the trigger ends, beside its own unit");
 {
   const s = await server();
   const home = await mkdtemp(join(tmpdir(), 'forge-home-'));
@@ -118,6 +118,7 @@ testCase('turning on automatic work keeps each lap the factory's timer starts al
   const mine = 'archonfactory-app.service', other = 'archonfactory-other.service';
   await writeFile(join(units, mine), `[Service]\nType=oneshot\nWorkingDirectory=${s.checkouts['owner/app']}\nExecStart=/usr/bin/python3 factory/consumer.py schedule fire\n`);
   await writeFile(join(units, other), '[Service]\nType=oneshot\nWorkingDirectory=/somewhere/else\n');
+  await writeFile(join(units, 'archonfactory-app-manager.service'), `[Service]\nWorkingDirectory=${s.checkouts['owner/app']}\nExecStart=/usr/bin/python3 factory/consumer.py run archon-manager\n`);
   const ran = [];
   const run = async (command, args, options) => {
     ran.push([command, ...args].join(' '));
@@ -128,6 +129,7 @@ testCase('turning on automatic work keeps each lap the factory's timer starts al
   assert.equal((await workOn(request('work-on'), s.ctx, root)).ok, true);
   assert.equal(await readFile(join(units, `${mine}.d`, KEEP_RUNS_DROPIN), 'utf8'), '[Service]\n# The Forge: the lap this trigger starts keeps running after the trigger ends.\nKillMode=process\n');
   await assert.rejects(readFile(join(units, `${other}.d`, KEEP_RUNS_DROPIN), 'utf8'), 'another project\'s unit is left alone');
+  await assert.rejects(readFile(join(units, 'archonfactory-app-manager.service.d', KEEP_RUNS_DROPIN), 'utf8'), 'a unit of the same project that is not the timer\'s trigger is left alone');
   assert.equal(await readFile(join(units, mine), 'utf8').then(t => t.includes('KillMode')), false, 'the factory\'s own unit is never changed');
   assert.deepEqual(ran, ['loginctl enable-linger root', 'python3 factory/consumer.py schedule install --apply', 'systemctl --user daemon-reload', 'python3 factory/consumer.py unpause']);
 }

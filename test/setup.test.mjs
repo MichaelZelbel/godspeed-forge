@@ -20,7 +20,7 @@ import { run as runProcess } from '../lib/process.mjs';
 import { FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 194
+// test cases: 195
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
