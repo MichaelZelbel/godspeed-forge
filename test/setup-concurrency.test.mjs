@@ -38,7 +38,7 @@ function standIn(root, { manifests = [], beforeAgent = async () => {}, page = as
           return { stdout: `https://github.com/${relative(options.config.projectsRoot, runOptions.cwd)}.git\n` };
         }
         if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-        if (command === 'python3' && args.at(-1) === 'init') {
+        if (command === 'python3' && args[1] === 'init') {
           await mkdir(join(runOptions.cwd, 'factory'), { recursive: true });
           await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
           await mkdir(join(runOptions.cwd, '.factory'), { recursive: true });

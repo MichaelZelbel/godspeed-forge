@@ -34,7 +34,8 @@ const BANNED = [
   [/\bAX41\b|\bmc-vps\b/, "the first server's name"],
   [/godspeed-engine|godspeed-factory-watch|godspeed-mission-control/, "one of the first owner's repositories"],
 ];
-const ALLOWED = /(?:github\.com|api\.github\.com\/repos)\/MichaelZelbel\/(?:godspeed-forge|Archon)\b(?!-)/g;
+// The one other allowance: the complete public address of the Forge's copy of Archon (Manager decision, issue #127).
+const ALLOWED = /(?:github\.com|api\.github\.com\/repos)\/MichaelZelbel\/(?:godspeed-forge\b|Archon(?![\w.-]))/g;
 
 test("no shipped file names the first owner, his repositories, his server, his factory user or his key paths", () => {
   const files = shipped();
@@ -51,6 +52,9 @@ test("the ban catches what it should, and the README and the installer may name 
   const caught = s => BANNED.some(([re]) => re.test(s.replace(ALLOWED, "")));
   for (const s of ["MichaelZelbel/x", "/home/godspeed-forge/.local/bin/claude", "factory-driver@godspeed-archon.invalid", "EnvironmentFile=/etc/godspeed-forge/keys.env", "/usr/local/lib/godspeed-forge/godspeed-dev/releases"]) assert.ok(caught(s), s);
   assert.ok(!caught("https://github.com/MichaelZelbel/godspeed-forge/archive/refs/heads/main.tar.gz"), "the Forge's own public address");
+  assert.ok(!caught("https://github.com/MichaelZelbel/Archon"), "the Forge's public Archon address");
+  assert.ok(!caught("ARCHON_SOURCE = 'https://github.com/MichaelZelbel/Archon'"), "the address inside code");
+  for (const s of ["MichaelZelbel", "github.com/MichaelZelbel/other", "github.com/MichaelZelbel/Archon-fork", "github.com/MichaelZelbel/Archon.git", "github.com/MichaelZelbel/Archon2", "https://example.com/MichaelZelbel/Archon", "github.com/OtherUser/Archon MichaelZelbel"]) assert.ok(caught(s), s);
   assert.ok(!caught("export const ARCHON_SOURCE = 'https://github.com/MichaelZelbel/Archon';"), "the public copy of Archon the Forge installs");
   assert.ok(caught("https://github.com/MichaelZelbel/Archon-private"), "only that copy");
   assert.ok(!caught("the file keys.env in the settings folder"), "a name is not a path");

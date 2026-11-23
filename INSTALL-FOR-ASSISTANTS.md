@@ -14,6 +14,13 @@ or newer, Node 22, bun, uv, Claude Code and Codex), installs the add-on, gives G
 `forge` skill and starts the service that answers the chat's requests. It does not start a factory
 schedule.
 
+The Forge installs Cole Medin's AI software factory with his installer. The Archon code it runs comes from
+[a public copy of his](https://github.com/MichaelZelbel/Archon), under his MIT license with his name: his
+version `1cfb8fc5` plus three changes. Building runs on the medium tier. A comment headed `Manager decision
+(Mission Control, not Michael)` carries the owner's authority for technical matters only. What the loop finds
+beyond its own job goes as one `Found:` comment onto a `found-list` issue instead of a new issue each. See the
+[difference](https://github.com/MichaelZelbel/Archon/compare/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb...6ebb22b66803cf0fca1f185e65e49afe792e4075).
+
 # Set up a repository
 
 Setup runs in the server's terminal, as root: `godspeed-forge setup owner/repository`. When the owner

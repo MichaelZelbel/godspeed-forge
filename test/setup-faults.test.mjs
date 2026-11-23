@@ -17,7 +17,7 @@ import { InputClosed, setupCommand } from '../lib/setup.mjs';
 import { signIn, AGENT_QUESTION, CODE_QUESTION } from '../lib/signin.mjs';
 import { createFactorySetup, CONFIRM_QUESTION, STRIKE_QUESTION } from '../lib/factory-setup.mjs';
 import { defaults } from '../lib/config.mjs';
-import { FACTORY_REVISION } from '../lib/constants.mjs';
+import { ARCHON_REVISION, FACTORY_REVISION } from '../lib/constants.mjs';
 import { testCase } from './cases.mjs';
 
 Error.stackTraceLimit = 100;
@@ -28,7 +28,7 @@ const paths = { state: join(root, 'state'), config: join(root, 'config.json') };
 const projectsRoot = join(root, 'projects');
 const projectState = join(paths.state, 'projects', repository);
 const credentialFolder = join(paths.state, 'credentials', repository);
-const buildToolsSource = join(root, 'build-tools', FACTORY_REVISION);
+const buildToolsSource = join(root, 'build-tools', ARCHON_REVISION);
 const KEPT_BOTH = 'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.';
 const keptOne = name => `Setup kept the details of your GitHub App "${name}" for this repository on this server. Trying setup again checks whether it is still on your GitHub account and uses it if it is, instead of creating a new one.`;
 const credentialsFor = code => ({ id: 1, pem: 'PRIVATE KEY', slug: code });
@@ -255,7 +255,7 @@ function standInCommands(behaviour, world = {}) {
     if (command === 'git' && args[0] === 'clone') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
     if (command === 'git' && args[0] === 'remote') return { stdout: `git@github.com:${repository}.git\n` };
     if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-    if (command === 'python3' && args.at(-1) === 'init') {
+    if (command === 'python3' && args[1] === 'init') {
       await mkdir(join(options.cwd, 'factory'), { recursive: true });
       await mkdir(join(options.cwd, '.factory'), { recursive: true });
       await mkdir(buildToolsSource, { recursive: true });

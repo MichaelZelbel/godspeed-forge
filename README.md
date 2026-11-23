@@ -26,6 +26,13 @@ license, so his code is not ours to hand out. The Forge installs his factory fro
 at one pinned revision, the way his README asks a coding agent to, and everything the Forge adds
 (planning, the questions, staging, the go and take-back) sits beside it.
 
+The Forge installs Cole Medin's AI software factory with his installer. The Archon code it runs comes from
+[a public copy of his](https://github.com/MichaelZelbel/Archon), under his MIT license with his name: his
+version `1cfb8fc5` plus three changes. Building runs on the medium tier. A comment headed `Manager decision
+(Mission Control, not Michael)` carries the owner's authority for technical matters only. What the loop finds
+beyond its own job goes as one `Found:` comment onto a `found-list` issue instead of a new issue each. See the
+[difference](https://github.com/MichaelZelbel/Archon/compare/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb...6ebb22b66803cf0fca1f185e65e49afe792e4075).
+
 ## Status
 
 Type `godspeed-forge setup owner/repository` in the server's terminal, as root (asked in the chat, Godspeed gives you that line). Before it downloads anything, setup signs the
@@ -188,4 +195,4 @@ optional, are in `driver/settings.example.json`.
 ## License
 
 MIT, see [LICENSE](LICENSE). This covers the Forge's own files only, not Cole Medin's factory or
-Archon, which the Forge downloads from their own repositories.
+Archon, which the Forge downloads from their own repository and from the public copy of Archon linked above.

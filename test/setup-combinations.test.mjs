@@ -72,7 +72,7 @@ async function attempt(repository, folder, github) {
     }
     if (command === 'git' && args[0] === 'remote') return { stdout: `https://github.com/${repository}.git\n` };
     if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-    if (command === 'python3' && args.at(-1) === 'init') {
+    if (command === 'python3' && args[1] === 'init') {
       await mkdir(join(options.cwd, 'factory'), { recursive: true });
       await mkdir(join(options.cwd, '.factory'), { recursive: true });
       await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
