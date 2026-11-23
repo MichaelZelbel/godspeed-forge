@@ -45,6 +45,23 @@ test("it waits while the staged record is not installed or its last check is not
   assert.match(P.judgeTrigger({ releases: [rel("2.0.0-beta.26", {}, unchecked)], repo: REPO }).why, /did not find 2\.0\.0-beta\.26 ready/);
 });
 
+test("a go over failures counts as finished only when his words are there and every failed job is waived", () => {
+  const V = "2.0.0-beta.26";
+  const failedCheck = {
+    version: V, status: "installed", installedAt: "2026-11-16T07:00:00Z", healthAfter: { ok: true, version: V },
+    lastCheck: { result: "scenariosFailed", failures: [] },
+    scenarios: { result: "failed", run: 1, failedJobs: ["job a", "job b"] },
+  };
+  const go = (over = {}) => ({ version: V, at: "2026-11-16T10:00:00Z", words: "go", waived: ["job a", "job b"], ...over });
+  const state = (staging, g) => { const r = rel(V, {}, staging); r.go = g; return P.judgeTrigger({ releases: [r], repo: REPO }); };
+  assert.equal(state(ready(V), null).start, true, "check ready");
+  assert.equal(state(failedCheck, go()).start, true, "every failure waived by the go");
+  assert.equal(state(failedCheck, go({ waived: ["job a"] })).start, false, "one failure not waived");
+  assert.equal(state(failedCheck, null).start, false, "no go");
+  assert.equal(state(failedCheck, go({ words: "" })).start, false, "no words of his");
+  assert.match(state(failedCheck, go({ waived: ["job a"] })).why, /still in flight/);
+});
+
 test("it starts once the newest approved release is installed and ready, and finds the proposed plan of the next version", () => {
   const releases = [
     rel("2.0.0-beta.25", {}, ready("2.0.0-beta.25")),

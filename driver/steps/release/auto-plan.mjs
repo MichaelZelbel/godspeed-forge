@@ -158,6 +158,18 @@ export function stagedReady(staging, version) {
   return !!staging && staging.version === version && staging.status === "installed" && !!staging.lastCheck && staging.lastCheck.result === "ready";
 }
 
+// The owner gave his go over failures the last check reported: the go record holds his words, it stands
+// for this install (G.goHolds), and its waived list covers every failed job of the scenarios record.
+// A health failure of the server is never his to waive here: the record would say "failed", not "installed".
+export function waivedByGo(staging, go, version) {
+  if (!go || typeof go.words !== "string" || !go.words.trim()) return false;
+  if (!staging || staging.status !== "installed" || !staging.lastCheck || (staging.lastCheck.failures || []).length) return false;
+  return G.goHolds(go, staging, version) && G.scenariosWaived(staging, go, version);
+}
+
+// Finished for the plan step: the last check said ready, or the owner's go waived every failure.
+export const finished = (r) => stagedReady(r.staging, r.version) || waivedByGo(r.staging, r.go, r.version);
+
 // Why a staging record is not ready yet, in words.
 function notStagedWords(staging, version) {
   if (!staging) return `${version} is not on the server yet (it has no staging record)`;
@@ -179,7 +191,7 @@ export function judgeTrigger({ releases, repo = RELEASE.productRepo }) {
   const approved = ours.filter((r) => planApproved(r.plan)).sort((a, b) => G.compareVersions(b.version, a.version));
   if (!approved.length) return { start: false, why: "no approved release plan of the product exists" };
   const newest = approved[0];
-  if (!stagedReady(newest.staging, newest.version)) {
+  if (!finished(newest)) {
     return { start: false, why: `the newest approved release, ${newest.version} (${newest.id}), is still in flight: ${notStagedWords(newest.staging, newest.version)}`, staged: null };
   }
   const next = nextVersion(newest.version);
@@ -825,7 +837,7 @@ async function lookPlan(ctx) {
   }
 
   const releases = records.releases().map((id) => ({ id, plan: records.read(`releases/${id}/plan.md`) || "" }));
-  for (const r of releases) if (releaseVersion(r.id) && String(planRepository(r.plan) || "").toLowerCase() === cfg.repo.toLowerCase()) r.staging = records.json(G.stagingPath(r.id));
+  for (const r of releases) if (releaseVersion(r.id) && String(planRepository(r.plan) || "").toLowerCase() === cfg.repo.toLowerCase()) { r.staging = records.json(G.stagingPath(r.id)); r.go = records.json(G.goPath(r.id)); }
   const trig = judgeTrigger({ releases, repo: cfg.repo });
   if (!trig.start) {
     log(`Waiting: ${trig.why}.`);
@@ -1086,7 +1098,7 @@ async function file(ctx, key, t) {
 export async function explain(ctx) {
   const { cfg, records, log } = ctx;
   const releases = records.releases().map((id) => ({ id, plan: records.read(`releases/${id}/plan.md`) || "" }));
-  for (const r of releases) if (releaseVersion(r.id) && String(planRepository(r.plan) || "").toLowerCase() === cfg.repo.toLowerCase()) r.staging = records.json(G.stagingPath(r.id));
+  for (const r of releases) if (releaseVersion(r.id) && String(planRepository(r.plan) || "").toLowerCase() === cfg.repo.toLowerCase()) { r.staging = records.json(G.stagingPath(r.id)); r.go = records.json(G.goPath(r.id)); }
   const trig = judgeTrigger({ releases, repo: cfg.repo });
   log(trig.start ? `Trigger: yes, ${trig.why}.` : `Trigger: not yet, ${trig.why}.`);
   // Without a trigger, explain against the newest approved plan as if it were staged.
