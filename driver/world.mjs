@@ -291,7 +291,7 @@ function readFactory(env, deps, project, primary, world, unreadable) {
   }
   if (primary) f.board = world.board.openNeedsOwner;
   else if (f.repo) {
-    try { f.board = (deps.gh([`repos/${f.repo}/issues?state=open&labels=needs-owner&per_page=100`]) || []).filter(x => !x.pull_request).map(x => x.number); }
+    try { f.board = (deps.gh([`repos/${f.repo}/issues?state=open&labels=needs-owner&per_page=100`]) || []).filter(x => !x.pull_request && !labelNames(x).includes("found-list")).map(x => x.number); }
     catch (e) { unreadable.push({ part: `board/${project}`, error: e.message }); }
   }
   for (const name of ["STOP", "PAUSE"]) {
@@ -357,7 +357,7 @@ export async function readWorld(env0 = {}, deps0 = {}) {
 
   try {
     const rows = deps.gh([`repos/${env.REPO}/issues?state=open&labels=needs-owner&per_page=100`]) || [];
-    world.board.openNeedsOwner = rows.filter(x => !x.pull_request).map(x => x.number);
+    world.board.openNeedsOwner = rows.filter(x => !x.pull_request && !labelNames(x).includes("found-list")).map(x => x.number);
   } catch (e) { unreadable.push({ part: "board", error: e.message }); }
   world.main = readMain(env, deps, unreadable);
 
