@@ -221,6 +221,10 @@ do_start() {
   say "Running the driver's first round ..."
   systemctl start factory-driver.service || stop "the driver's first round failed: journalctl -u factory-driver.service"
   systemctl enable --now forge-drill-stage.timer >/dev/null
+  # minute 0 right after a round on the driver's own timer: the worst moment for a change, as the next round is the furthest away
+  say "Waiting for the driver's next round on its timer ..."
+  local before; before="$(stat -c %Y "$STATE/heartbeat" 2>/dev/null || echo 0)"
+  until [ "$(stat -c %Y "$STATE/heartbeat" 2>/dev/null || echo 0)" -gt "$before" ]; do sleep 2; done
   # minute 0: the release step starts saying beta.31's waiting sentence, and nothing about the release changes after it
   date -u +%s >"$DRILL/started-at"
   "$DRILL/bin/stage-look"

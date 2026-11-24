@@ -27,6 +27,7 @@ export const STANDSTILL = Object.freeze({
   namedHoldMinutes: 60, // what an acting run's "in-progress" names holds the clock at most this long after the answer
   restartHours: 24, // after the repair step the ladder starts again when the release still has not moved
   firstSightMaxMinutes: 10, // a new state is counted from the last round that saw the old one, never from further back than this
+  toleranceMinutes: 1, // rounds start a few seconds early or late: a step within a minute of its mark is taken in that round, never a round late
   runHours: 6, // a GitHub run on the version pull request: its own timeout
   scenariosHours: 3, // a run on the candidate or release branch, and a release program, are bounded by their own start
   stopHours: 2, // auto-stage's STOP file
@@ -121,7 +122,7 @@ export function tick(prev, { fp, work, now, lastRoundAt, journal = null }) {
   c.held = held.map(w => w.what);
   const cycle = () => (c.stillMs - (c.cycleFrom || 0)) / MIN;
   if (c.done.repair && cycle() >= STANDSTILL.repairMinutes + STANDSTILL.restartHours * 60) { c.cycleFrom = c.stillMs; c.done = {}; c.tries = []; } // the ladder starts again
-  const m = cycle(), due = [];
+  const m = cycle() + STANDSTILL.toleranceMinutes, due = [];
   if (m >= STANDSTILL.helperMinutes && !c.done.helper) due.push("helper");
   if (m >= STANDSTILL.otherAiMinutes && !c.done.other) due.push("other-ai");
   if (m >= STANDSTILL.repairMinutes && !c.done.repair) due.push("repair");

@@ -126,3 +126,11 @@ test("auto-stage's STOP counts only from the main project, which is the only one
   assert.deepEqual(readActivity({ REPO: "o/r" }, { factories: [{ primary: true, stop: { writer: "auto-stage", at } }] }, run, now).stop, { at });
 });
 
+test("a round that starts a few seconds early still takes its step: never a round late", () => {
+  const fp = releaseState({ look: LOOK }).fp;
+  let c = null; const due = [];
+  // rounds on the five-minute grid, each starting up to two seconds early or late
+  for (const [m, jitter] of [[0, 1500], [5, -2000], [10, 800], [15, -1900], [20, -2000], [25, 0]]) { const r = tick(c, { fp, work: [], now: T0 + m * MIN + jitter, lastRoundAt: T0 - 5 * MIN + 1000 }); c = r.clock; if (r.due.length) { due.push([m, ...r.due]); for (const d of r.due) c.done[{ helper: "helper" }[d]] = true; } }
+  assert.deepEqual(due[0], [15, "helper"], "the change came after the round at -5: the round at 15 is 20 minutes after it and takes the step");
+});
+
