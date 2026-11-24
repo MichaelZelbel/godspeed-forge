@@ -266,7 +266,8 @@ export const KNOWN_OBSTACLES = new Set(["parked", "check-failed", "no-progress",
 
 // ---------------------------------------------------------------- the chain
 // chain[id] = { rung, rungSince (ms), milestone (ms), launched (bool: the acting run of this rung started), told (bool), toldAt, tries: [{rung, at, result, summary}] }
-// opts: { forceRung1: Set of entry ids (a helper said "external" or a cause nobody knows), actRuns, runsToday, runsPerDay, slotFree }
+// opts: { forceRung1: Set of entry ids (a helper said "external" or a cause nobody knows), actRuns, runsToday, runsPerDay, slotFree,
+//         owned: Set of entry ids the release clock drives (standstill.mjs): never launched or told from here }
 // -> { chain (new), rows: [{entry, rung, deadline, action}], actions: {launch: row|null, tell: [row]} , violations: [row] }
 // how old an entry is for the order: its own time and the time the driver first saw it, whichever is earlier
 const ageKey = r => Math.min(Number.isFinite(r.entry.milestoneAt) ? r.entry.milestoneAt : Infinity, Number.isFinite(r.c.firstSeenAt) ? r.c.firstSeenAt : Infinity, Number.isFinite(r.c.milestone) ? r.c.milestone : Infinity);
@@ -341,11 +342,12 @@ export function advance(entries, chain0, now, opts = {}) {
   // budget leaves an entry on its acting rung until the earliest current run leaves the window.
   const actions = { launch: null, tell: [] };
   const backlogAllowed = runsToday < CHAIN.perDay - CHAIN.reservedForRelease; // 4 of the 8 daily runs are reserved for releases and machinery
-  const awaitingCapacity = rows.filter(r => !r.moving && (r.rung === 1 || r.rung === 2) && !r.c.launched && !r.entry.told && !r.entry.remindOnly && !(r.entry.backlog && now < (r.c.cooldownUntil || 0)));
+  const owned = opts.owned || new Set();
+  const awaitingCapacity = rows.filter(r => !r.moving && (r.rung === 1 || r.rung === 2) && !r.c.launched && !r.entry.told && !r.entry.remindOnly && !(r.entry.backlog && now < (r.c.cooldownUntil || 0)) && !owned.has(r.entry.id));
   const wanting = awaitingCapacity.filter(r => !(r.entry.backlog && !backlogAllowed)).sort((a, b) => (a.entry.backlog ? 1 : 0) - (b.entry.backlog ? 1 : 0) || ageKey(a) - ageKey(b)); // releases and machinery first, then the backlog oldest first
   if (budget <= 0) for (const r of awaitingCapacity) { r.c.budgetRetryAt = budgetRetryAt; r.deadline = budgetRetryAt; }
   else if (wanting.length && opts.slotFree !== false) { actions.launch = wanting[0]; }
-  for (const r of rows) if (r.rung === 3 && !r.c.told && !r.entry.told && !r.moving) actions.tell.push(r);
+  for (const r of rows) if (r.rung === 3 && !r.c.told && !r.entry.told && !r.moving && !owned.has(r.entry.id)) actions.tell.push(r);
   // the invariant, checked here and not trusted: every entry has an owner and a future deadline, or moved this round
   const violations = [];
   for (const r of rows) {
@@ -362,5 +364,5 @@ export const violationEntry = r => ({ id: `invariant:${r.entry.id}`, kind: "obst
 
 export const describeRow = (r, now) => {
   const d = r.deadline === Infinity ? `with ${ownerName()}` : `deadline ${new Date(r.deadline).toISOString().slice(0, 16).replace("T", " ")}Z${r.deadline <= now ? " (passed)" : ""}`;
-  return `${r.entry.kind} ${r.entry.title}: owner ${r.rung === 0 ? (r.entry.owner || "none") : rungName(r.rung)}, rung ${r.rung}, ${d}${r.moving ? ", MOVING: visibly working, not escalated" : ""}${r.action ? `, THIS ROUND: ${r.action}` : ""}`;
+  return `${r.entry.kind} ${r.entry.title}: owner ${r.rung === 0 ? (r.entry.owner || "none") : rungName(r.rung)}, rung ${r.rung}, ${d}${r.moving ? ", MOVING: visibly working, not escalated" : ""}${r.byClock ? ", driven by the release clock (20, 40, 60 minutes)" : ""}${r.action ? `, THIS ROUND: ${r.action}` : ""}`;
 };
