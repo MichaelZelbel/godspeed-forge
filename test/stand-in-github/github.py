@@ -6,6 +6,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 
 def die(message, status=64):
@@ -158,6 +159,9 @@ def pull_request(argv):
             run("git", "checkout", item["baseRefName"])
             run("git", "merge", "--no-ff", f"origin/{item['headRefName']}", "-m", f"Merge PR #{item['number']}")
             run("git", "push", "origin", item["baseRefName"])
+            item["mergeCommit"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=directory, check=True,
+                                                 capture_output=True, text=True).stdout.strip()
+        item["mergedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         item["merged"] = True
         item["state"] = "MERGED"
         write_state(root, state)
@@ -244,6 +248,9 @@ def main():
         pull_request(argv[1:])
     elif argv and argv[0] == "release":
         release(argv[1:])
+    elif argv == ["serve"]:
+        import rest
+        rest.serve(state_root())
     else:
         die("unsupported command")
 
