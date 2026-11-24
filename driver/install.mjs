@@ -159,6 +159,16 @@ export async function installDriver({ source = HERE, settingsDir = defaultSettin
       for (const u of disabled) { const x = D.run("systemctl", ["enable", u]); (x.status === 0 ? reenabled : notReenabled).push(u); }
       if (reenabled.length) back.push(`the old units turned off are on again (${reenabled.join(", ")})`);
       if (notReenabled.length) notBack.push(`these old units could not be turned on again: ${notReenabled.join(", ")}`);
+      // step units the failed round launched (forge-step-*) must not run on beside an old timer: stop them before the old timers start
+      const ls = D.run("systemctl", ["list-units", "--all", "--plain", "--no-legend", "--no-pager", "forge-step-*"]);
+      if (ls.status !== 0) notBack.push(`the round's step units could not be listed, so they may still be running (${firstError(ls)})`);
+      else {
+        const steps = [...new Set(String(ls.stdout || "").split("\n").map(l => l.trim().split(/\s+/)[0]).filter(n => /^forge-step-[^\s]*\.(service|scope)$/.test(n || "")))];
+        const stoppedSteps = [], notStoppedSteps = [];
+        for (const u of steps) { const x = D.run("systemctl", ["stop", u]); (x.status === 0 ? stoppedSteps : notStoppedSteps).push(u); }
+        if (stoppedSteps.length) back.push(`the round's step units are stopped (${stoppedSteps.join(", ")})`);
+        if (notStoppedSteps.length) notBack.push(`these step units could not be stopped: ${notStoppedSteps.join(", ")}`);
+      }
       const started = [], notStarted = [];
       for (const u of stopped) { const x = D.run("systemctl", ["start", u]); (x.status === 0 ? started : notStarted).push(u); }
       if (started.length) back.push(`the old timers run again (${started.join(", ")})`);
