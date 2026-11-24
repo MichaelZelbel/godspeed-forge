@@ -4,7 +4,8 @@
 //                    the factory user's
 //   failed units     restarted only when allowlisted (ALLOWED_RESTART) or one of the factory user's own
 //                    units (archonfactory-*, its rootless docker); nothing else, ever
-//   login            the factory's GitHub login is renewed by its own unit
+//   login            the factory's GitHub login is renewed by its own unit; an acting run that could not sign in gets its
+//                    sign-in links put back (onduty.mjs linkLogins) and one tiny sign-in check on the smallest model
 //   disk > 85 %      Archon's own cleanup of worktrees idle for a day (it skips any a live run holds),
 //                    then `docker system prune -f` in the factory user's rootless Docker
 //   memory < 15 %    fewer laps: MAX_LAPS in the factory's .factory-env goes down one (and back to what
@@ -20,6 +21,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { ANONYMOUS_UNIT, isLegacy } from "./world.mjs";
 import { forgeArgv } from "./release-driver/release-driver-owner-steps.mjs";
+import { linkLogins, signinCheck, actDefaults } from "./onduty.mjs";
 
 export const RELEASE_PROGRAMS = /^(auto-stage|freeze|stage-server)$/, STOP_MAX_HOURS = 2;
 export const ALLOWED_RESTART = String(process.env.FD_RESTART_UNITS || "").split(",").map(x => x.trim()).filter(Boolean);
@@ -139,6 +141,21 @@ export async function housekeep(env0, world, deps = {}) {
       if (r.status === 0) out.done.push(`renewed the factory's GitHub login (${env.LOGIN_UNIT})`);
       else out.failed.push(`the factory's GitHub login was not renewed: ${lastLine(r.stderr).slice(0, 200) || `exit ${r.status}`}`);
     } catch (e) { out.failed.push(`login: ${lastLine(e.message).slice(0, 200)}`); }
+  }
+
+  // ---- the acting runs' AI sign-in (the Forge 0.3.1, ticket 04): the links back to the factory user's files, then one tiny check.
+  // A provider that answers is marked repaired (world.actLoginsRepaired), so its login obstacle clears and its runs start again.
+  const act = (env0 && env0.ACT) || actDefaults(process.env);
+  for (const provider of Object.keys((world && world.actLogins) || {})) {
+    if (!["claude", "codex"].includes(provider)) continue;
+    try {
+      const links = (deps.linkLogins || linkLogins)(act.FACTORY_HOME, act.ACT_DIR, provider);
+      const moved = links.filter(l => l.did !== "kept");
+      const check = (deps.signinCheck || signinCheck)(act, provider);
+      const what = moved.length ? `linked ${moved.map(l => `${l.file}${l.aside ? ` (the file there kept as ${path.basename(l.aside)})` : ""}`).join(", ")} again` : "its links were in place";
+      if (check.ok) { out.done.push(`the acting runs sign in to ${provider} again: ${what}, and a sign-in check (${check.why}) worked`); ((world.actLoginsRepaired ||= [])).push(provider); }
+      else out.failed.push(`the acting runs still cannot sign in to ${provider}: ${what}, but the sign-in check failed (${check.why})`);
+    } catch (e) { out.failed.push(`the acting runs' ${provider} sign-in: ${lastLine(e.message).slice(0, 200)}`); }
   }
 
   // ---- disk: Archon's own cleanup (worktrees idle a day; it skips any a live run holds), then Docker

@@ -114,3 +114,66 @@ test("a repair request whose spool is not set, is not the dead-man's, or whose d
   const p = prompt(entry, [], "/x/onduty.mjs");
   assert.match(p, /--repair-request "<what is wrong>" and the dead-man starts a repair; if that command fails, the request did not reach the dead-man, so say so and answer RESULT: unresolved/);
 });
+
+// Ticket 04 of the Forge 0.3.1 (#141): from 2026-11-22 21:55 UTC every Claude acting run failed to sign in, because a plain file
+// had taken the place of the link claude-home/.credentials.json, and runJob linked it only when it was missing.
+import { linkLogins, loginFailure, signinCheck, loginHome } from "../onduty.mjs";
+function factoryHomeWithLogins(root) {
+  const home = path.join(root, "factory");
+  for (const [f, text] of [[".claude/.credentials.json", '{"claudeAiOauth":{"accessToken":"x"}}'], [".claude.json", "{}"], [".codex/auth.json", '{"tokens":{}}']]) { fs.mkdirSync(path.dirname(path.join(home, f)), { recursive: true }); fs.writeFileSync(path.join(home, f), text); }
+  return home;
+}
+const linkTo = (p, target) => fs.lstatSync(p).isSymbolicLink() && path.resolve(fs.readlinkSync(p)) === path.resolve(target);
+
+test("a plain file where a sign-in link should be is a link again after runJob's preparation, Claude's two and Codex's one, and the plain file is kept beside it with the date", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "act-login-"));
+  const factory = factoryHomeWithLogins(root);
+  const a = { ...actDefaults(TEST_ENV), ACT_DIR: path.join(root, "acts"), FACTORY_HOME: factory };
+  // what the AX41 had: a plain file holding no login in the link's place
+  for (const [prov, file] of [["claude", ".credentials.json"], ["claude", ".claude.json"], ["codex", "auth.json"]]) { fs.mkdirSync(loginHome(a.ACT_DIR, prov), { recursive: true }); fs.writeFileSync(path.join(loginHome(a.ACT_DIR, prov), file), "{}"); }
+  for (const [unit, provider] of [["factory-act-login-1", "claude"], ["factory-act-login-2", "codex"]]) {
+    launchAct({}, a, { unit, entry, provider, tried: [], settings: {} }, () => ({ status: 0 }));
+    runJob(path.join(a.ACT_DIR, unit), () => ({ status: 0, stdout: "RESULT: resolved" }), {});
+  }
+  const claude = loginHome(a.ACT_DIR, "claude"), codex = loginHome(a.ACT_DIR, "codex");
+  assert.ok(linkTo(path.join(claude, ".credentials.json"), path.posix.join(factory, ".claude/.credentials.json")), "the Claude credentials are the factory user's again");
+  assert.ok(linkTo(path.join(claude, ".claude.json"), path.posix.join(factory, ".claude.json")));
+  assert.ok(linkTo(path.join(codex, "auth.json"), path.posix.join(factory, ".codex/auth.json")), "and Codex's");
+  for (const [dir, file] of [[claude, ".credentials.json"], [claude, ".claude.json"], [codex, "auth.json"]]) {
+    const kept = fs.readdirSync(dir).filter(n => n.startsWith(`${file}.replaced-`));
+    assert.equal(kept.length, 1, `${file}: the plain file is kept beside the link`);
+    assert.match(kept[0].slice(`${file}.replaced-`.length), /^\d{8}T\d{6}Z$/, "with the date in its name");
+    assert.equal(fs.readFileSync(path.join(dir, kept[0]), "utf8"), "{}");
+  }
+  // a link that is right is left alone; a link to another file is moved aside too
+  assert.deepEqual(linkLogins(factory, a.ACT_DIR, "codex").map(l => l.did), ["kept"]);
+  fs.rmSync(path.join(codex, "auth.json")); fs.symlinkSync(path.join(root, "elsewhere.json"), path.join(codex, "auth.json"));
+  assert.deepEqual(linkLogins(factory, a.ACT_DIR, "codex", Date.parse("2026-11-24T10:00:00Z")).map(l => l.did), ["moved aside"]);
+  assert.ok(linkTo(path.join(codex, "auth.json"), path.posix.join(factory, ".codex/auth.json")));
+});
+
+test("the beta.31 answer is a sign-in failure: runJob marks it login and the driver reads it so; an answer with its RESULT line never is", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "act-login-"));
+  const a = { ...actDefaults(TEST_ENV), ACT_DIR: path.join(root, "acts"), FACTORY_HOME: factoryHomeWithLogins(root) };
+  const said = "Failed to authenticate: OAuth session expired and could not be refreshed";
+  launchAct({}, a, { unit: "factory-act-login-3", entry, provider: "claude", tried: [], settings: {} }, () => ({ status: 0 }));
+  runJob(path.join(a.ACT_DIR, "factory-act-login-3"), () => ({ status: 1, stdout: said, stderr: "" }), {});
+  const r = actResult({}, a, "factory-act-login-3");
+  assert.deepEqual([r.state, r.login, r.result], ["done", true, "unresolved"]);
+  for (const t of [said, "Error: not logged in. Run claude /login", "API Error: 401 {\"type\":\"error\"}", "the codex run failed: OAuth token refresh failed"]) assert.ok(loginFailure(t), t);
+  for (const t of ["I checked the OAuth settings of the product and fixed them.\nRESULT: resolved", "the run timed out", "RESULT: unresolved"]) assert.ok(!loginFailure(t), t);
+  launchAct({}, a, { unit: "factory-act-login-4", entry, provider: "codex", tried: [], settings: {} }, () => ({ status: 0 }));
+  runJob(path.join(a.ACT_DIR, "factory-act-login-4"), () => ({ status: 0, stdout: "The 401 was the product's own.\nRESULT: resolved" }), {});
+  assert.equal(actResult({}, a, "factory-act-login-4").login, false);
+});
+
+test("the sign-in check asks the smallest model once, in the acting runs' own home, and counts only an answer", () => {
+  const a = { ...actDefaults(TEST_ENV), ACT_DIR: "/acts" };
+  const calls = [];
+  const ok = signinCheck(a, "claude", (cmd, args, o) => { calls.push({ cmd, args, o }); return { status: 0, stdout: "OK\n", stderr: "" }; });
+  assert.deepEqual([ok.ok, calls[0].args.slice(0, 3)], [true, ["-p", "--model", "haiku"]]);
+  assert.equal(calls[0].o.env.CLAUDE_CONFIG_DIR, loginHome("/acts", "claude"));
+  assert.equal(signinCheck(a, "claude", () => ({ status: 1, stdout: "Failed to authenticate: OAuth session expired", stderr: "" })).ok, false);
+  const cx = signinCheck({ ...a, LOGIN_CODEX_MODEL: "small" }, "codex", (cmd, args, o) => { calls.push({ cmd, args, o }); return { status: 0, stdout: "OK", stderr: "" }; });
+  assert.ok(cx.ok); assert.ok(calls[1].args.includes("small") && calls[1].args.includes("read-only")); assert.equal(calls[1].o.env.CODEX_HOME, loginHome("/acts", "codex"));
+});
