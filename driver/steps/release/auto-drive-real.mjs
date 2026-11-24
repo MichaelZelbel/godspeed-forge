@@ -9,6 +9,17 @@ const MINUTE = 60 * 1000;
 const VERSION_FILE = "notebook/package.json"; // where the product keeps its version (the release step edits only this and the README)
 export const GUIDE_LINE = "Guide-Reviewed: none-needed (only the version number changed)";
 
+// One issue in the product repository, filed with the builder App's token (as keep-main-green files its tickets),
+// minted when the first one is filed: never root's own gh login, which is the owner's. -> ({title, body, labels}) => {number, url}
+export function realIssueFiler({ cfg, env }) {
+  const kcfg = K.loadConfig({ ...env, KEEP_MAIN_GREEN_REPO: cfg.repo, KEEP_MAIN_GREEN_STATE_DIR: cfg.stateDir });
+  let hub = null;
+  return async ({ title, body, labels }) => {
+    hub ||= K.realHub({ cfg: kcfg, api: R.githubApi(K.mintToken(kcfg, env), env) });
+    return hub.createIssue({ title, body, labels });
+  };
+}
+
 // itemIssues and readIssues come from auto-stage.mjs (passed in: that module imports this one).
 export function realDrive({ cfg, env, api, log, itemIssues, readIssues }) {
   const kcfg = K.loadConfig({ ...env, KEEP_MAIN_GREEN_REPO: cfg.repo, KEEP_MAIN_GREEN_STATE_DIR: cfg.stateDir });

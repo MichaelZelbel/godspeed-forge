@@ -108,6 +108,37 @@ export function githubApi(token, env = process.env) {
   return (method, p, body, opts = {}) => request(method, /^https?:/.test(p) ? p : api + p, { token, body, ...opts });
 }
 
+// A GitHub that answers a read with 500 to 599, or not at all, is asked again after a pause: on 2026-11-24 the
+// stage step's read of a run's jobs got 502 and the look ended there, while the same read answered at once
+// minutes later. Only reads are asked again (GET, HEAD, a GraphQL query); a write is never sent twice.
+// budgetMs bounds the pauses of one caller altogether, so a GitHub that stays down costs a look minutes, not hours.
+export const RETRY_DELAYS_MS = [5000, 20000, 60000];
+export const RETRY_BUDGET_MS = 10 * 60000;
+const isRead = (method, p, body) =>
+  method === "GET" || method === "HEAD" || (method === "POST" && /\/graphql$/.test(String(p)) && !!body && /^\s*(query\b|\{)/.test(String(body.query || "")));
+export function retrying(api, { sleep = (ms) => new Promise((r) => setTimeout(r, ms)), delays = RETRY_DELAYS_MS, budgetMs = RETRY_BUDGET_MS, log = null } = {}) {
+  let spent = 0;
+  return async (method, p, body, opts = {}) => {
+    for (let i = 0; ; i++) {
+      let r = null;
+      let err = null;
+      try {
+        r = await api(method, p, body, opts);
+      } catch (e) {
+        err = e;
+      }
+      const again = isRead(method, p, body) && (err || (r.status >= 500 && r.status <= 599)) && i < delays.length && spent + delays[i] <= budgetMs;
+      if (!again) {
+        if (err) throw err;
+        return r;
+      }
+      if (log) log(`GitHub answered ${err ? `nothing (${err.message})` : r.status} to ${p}; asking again in ${Math.round(delays[i] / 1000)} seconds.`);
+      spent += delays[i];
+      await sleep(delays[i]);
+    }
+  };
+}
+
 const said = (r) => (r.json && r.json.message ? ` (${r.json.message})` : "");
 
 export async function refSha(api, ownerRepo, ref) {

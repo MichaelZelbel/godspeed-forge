@@ -764,9 +764,9 @@ export async function scenarioRunState(env, ownerRepo, runId) {
 }
 
 // The scenarios, never throwing: a GitHub that cannot be read, for whatever reason, is an answer.
-export async function scenariosOrUnread(env, ownerRepo, version) {
+export async function scenariosOrUnread(env, ownerRepo, version, api = null) {
   try {
-    return await scenarios(env, ownerRepo, version);
+    return await scenarios(env, ownerRepo, version, api);
   } catch (e) {
     return { result: "unreadable", problem: e instanceof R.Refused ? e.message : `GitHub could not be read for the scenarios of ${version} (${e.message}).` };
   }
@@ -805,9 +805,10 @@ export const readToken = (env) => (env && env.STAGING_READ_TOKEN) || null;
 // "scenarios candidate/<version>" counts. One on the tag that was left at the workflow's default
 // stage (beta) proved another stage; one from before the workflow named its stage (titled just
 // "scenarios") cannot be told apart; neither counts, and "none" then says so ("ignored").
-export async function scenarios(env, ownerRepo, version) {
+// api: a caller of its own (the stage step's asks GitHub again on 5xx); default the read token's.
+export async function scenarios(env, ownerRepo, version, api = null) {
   const tag = `candidate/${version}`;
-  const api = R.githubApi(readToken(env), env);
+  api ||= R.githubApi(readToken(env), env);
   const tagCommit = await R.refSha(api, ownerRepo, `tags/${tag}`);
   if (!tagCommit) R.refuse(`${ownerRepo} has no tag ${tag}, so its scenarios cannot be looked up.`);
   const r = await api("GET", `/repos/${ownerRepo}/actions/workflows/${SCENARIOS_WORKFLOW}/runs?event=workflow_dispatch&branch=${encodeURIComponent(tag)}&per_page=30`);
@@ -840,6 +841,22 @@ export async function failedJobNames(api, ownerRepo, runId) {
     if (!r.ok || !r.json || !Array.isArray(r.json.jobs)) return null;
     if (r.json.total_count > r.json.jobs.length) return null;
     return r.json.jobs.filter((j) => j.conclusion !== "success" && j.conclusion !== "skipped").map((j) => j.name);
+  } catch {
+    return null;
+  }
+}
+
+// The same names from the run's check runs (each job of a run is a check run of the same name in its check
+// suite): a second way in when GitHub's list of the jobs does not answer (2026-11-24: 502 for twenty minutes
+// on one run's jobs). Null when that cannot be read either.
+export async function failedCheckNames(api, ownerRepo, runId) {
+  try {
+    const run = await api("GET", `/repos/${ownerRepo}/actions/runs/${runId}`);
+    if (!run.ok || !run.json || !run.json.check_suite_id) return null;
+    const r = await api("GET", `/repos/${ownerRepo}/check-suites/${run.json.check_suite_id}/check-runs?filter=latest&per_page=100`);
+    if (!r.ok || !r.json || !Array.isArray(r.json.check_runs)) return null;
+    if (r.json.total_count > r.json.check_runs.length) return null;
+    return r.json.check_runs.filter((c) => c.status === "completed" && c.conclusion !== "success" && c.conclusion !== "skipped").map((c) => c.name);
   } catch {
     return null;
   }
@@ -996,10 +1013,10 @@ export function underProcess(ownerRepo) {
 
 // The version on beta and the newest candidate tag newer than it that was not taken back, read the
 // way a stranger reads them: with no token at all.
-export async function publicState(env, ownerRepo) {
+export async function publicState(env, ownerRepo, api = null) {
   const out = R.outside({ env, ownerRepo, isPrivate: false });
   const beta = await out.stageAt(R.PUBLIC_STAGE);
-  const api = R.githubApi(readToken(env), env);
+  api ||= R.githubApi(readToken(env), env);
   const r = await api("GET", `/repos/${ownerRepo}/git/matching-refs/tags/candidate/`);
   if (!r.ok || !Array.isArray(r.json)) R.refuse(`GitHub said ${r.status} to listing the candidate tags of ${ownerRepo}, so whether a candidate is open cannot be told.`);
   const versions = r.json.map((x) => String(x.ref).replace(/^refs\/tags\/candidate\//, "")).filter((v) => R.VERSION_PATTERN.test(v));
