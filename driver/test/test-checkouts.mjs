@@ -174,9 +174,9 @@ function checkoutFixture(rootOwned = []) {
     run: argv => {
       calls.push(argv);
       if (argv[0] === "find") {
-        const user = argv[argv.indexOf("-user") + 1];
+        const user = argv[argv.indexOf("-user") + 1], skip = argv.includes("-path") ? argv[argv.indexOf("-path") + 1] : null;
         if (argv[1] !== checkout) return { status: 1, stdout: "", stderr: `find: '${argv[1]}': No such file or directory` };
-        return { status: 0, stdout: [...owner].filter(([, u]) => u !== user).map(([r, u]) => `${u}\t${r}\n`).join(""), stderr: "" };
+        return { status: 0, stdout: [...owner].filter(([r, u]) => u !== user && `${checkout}/${r}` !== skip).map(([r, u]) => `${u}\t${r}\n`).join(""), stderr: "" };
       }
       if (argv[0] === "chown") { const to = argv.at(-2).replace(/:$/, ""); if (argv.at(-1) === checkout) for (const r of owner.keys()) owner.set(r, to); return { status: 0, stdout: "", stderr: "" }; }
       const g = argv.indexOf("git");
@@ -249,7 +249,19 @@ test("ticket 08 (#157): housekeeping changes owners only inside a checkout in th
     assert.deepEqual(await look({ ...f.env, PROJECT_CHECKOUTS: { x: bad } }, { ...f.deps, exists: () => true }), [], `${bad}: not a checkout in the factory user's home, never looked at or changed`);
   }
   assert.deepEqual(await look({ ...f.env, PROJECT_CHECKOUTS: { x: `${f.home}/not-cloned-yet` } }), [], "a checkout not made yet");
+  // a link the factory user could have put there: a chown through it could reach anywhere, so nothing is changed and it is said
+  fs.symlinkSync(f.checkout, `${f.home}/linked`, "junction");
+  const linked = await housekeep({ ...f.env, PROJECT_CHECKOUTS: { x: `${f.home}/linked` } }, hkWorld(), f.deps);
+  assert.ok(!f.calls.some(c => c[0] === "chown" || c[0] === "find"), "never looked at or changed through the link");
+  assert.match(linked.failed[0], new RegExp(`^the factory's checkout ${escape(f.home)}/linked is reached through a link \\(it is .*godspeed-mission-control\\), so its owners were not checked$`));
   assert.deepEqual(await look(f.env, { ...f.deps, root: false }), [], "not root: it could not give anything back, and nothing of root's can be there");
   assert.deepEqual(await look({ ...f.env, FORGE_USER: "root" }), [], "a factory that runs as root");
   assert.deepEqual(chowns(await look({ ...f.env, PROJECT_CHECKOUTS: {}, FACTORY_CHECKOUT: f.checkout })), [["chown", "-R", "-P", "-h", "--", `${FORGE_USER}:`, f.checkout]], "the main checkout counts when only main.checkout names it");
+  // the stage step writes the factory's STOP as root on purpose and removes it itself: that one file is no repair
+  const s = checkoutFixture();
+  fs.mkdirSync(`${s.checkout}/.factory`); fs.writeFileSync(`${s.checkout}/.factory/STOP`, "auto-stage 4242 2026-11-24T13:00:00Z\n");
+  s.owner.set(".factory", FORGE_USER); s.owner.set(".factory/STOP", "root");
+  const staged = await housekeep(s.env, hkWorld(), s.deps);
+  assert.deepEqual([chowns(s.calls), staged.repairs, staged.done, staged.failed], [[], [], [], []]);
+  assert.equal(s.owner.get(".factory/STOP"), "root");
 });

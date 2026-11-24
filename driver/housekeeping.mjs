@@ -177,12 +177,17 @@ export async function housekeep(env0, world, deps = {}) {
   if (root && user && user !== "root" && home.length > 1 && absolute(home)) {
     const named = [...Object.values(env.PROJECT_CHECKOUTS || {}), env.FACTORY_CHECKOUT].filter(c => typeof c === "string" && c);
     const exists = deps.exists || (p => fs.existsSync(p));
+    const real = deps.realpath || (p => fs.realpathSync(p));
     const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
     for (const c of [...new Set(named)]) {
       // only a folder strictly inside the factory user's home, named plainly, holding a git checkout, and none of the owner's own
       if (!absolute(c) || path.posix.normalize(c) !== c || c.endsWith("/") || c === home || !inside(c, home) || FORBIDDEN.test(c) || !exists(path.posix.join(c, ".git"))) continue;
+      // and reached through no link: the factory's laps run as that user and could point a link elsewhere, where a chown must never go
+      let through = ""; try { through = String(real(c)).replace(/\\/g, "/"); } catch { continue; }
+      if (through !== c) { out.failed.push(`the factory's checkout ${c} is reached through a link (it is ${through.slice(0, 200)}), so its owners were not checked`); continue; }
+      // the stage step's own STOP is the one file root writes there on purpose (and removes itself): it is not a repair
       const foreign = () => {
-        const r = exec(["find", c, "-xdev", "!", "-user", user, "-printf", "%u\\t%P\\n"], { maxBuffer: 256 * 1024 * 1024 });
+        const r = exec(["find", c, "-xdev", "!", "-path", `${c}/.factory/STOP`, "!", "-user", user, "-printf", "%u\\t%P\\n"], { maxBuffer: 256 * 1024 * 1024 });
         if (r.status !== 0) return { error: lastLine(r.stderr) || `exit ${r.status}` };
         const files = String(r.stdout || "").split("\n").filter(Boolean).map(l => { const i = l.indexOf("\t"); return { owner: l.slice(0, i), rel: l.slice(i + 1) }; });
         return { files };
