@@ -172,3 +172,16 @@ test("the release's files are read each on its own: a corrupt auto-stage state n
   assert.deepEqual([r.autoStage, r.staging, !!(r.unread && r.unread.stage), !!(r.unread && r.unread.staging)], [null, { status: "staged" }, true, false]);
 });
 
+test("a vanished release folder makes the staging record unknown and the plan still approved; only a readable plan that is not approved says no", async () => {
+  const { readReleaseFiles, planStillApproved } = await import("../driver.mjs");
+  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clock-gone-"));
+  const env = { RELEASES_DIR: path.join(dir, "releases") };
+  assert.ok(readReleaseFiles(env, ID).unread.staging, "no folder: unknown");
+  assert.equal(planStillApproved(env, ID), true, "no plan to read: unknown, still approved");
+  fs.mkdirSync(path.join(dir, "releases", ID), { recursive: true });
+  assert.deepEqual([readReleaseFiles(env, ID).staging, readReleaseFiles(env, ID).unread], [null, undefined], "the folder there without a staging record: none");
+  fs.writeFileSync(path.join(dir, "releases", ID, "plan.md"), "Status: withdrawn\n");
+  assert.equal(planStillApproved(env, ID), false, "a readable plan that is not approved");
+});
+

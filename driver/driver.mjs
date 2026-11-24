@@ -1019,19 +1019,26 @@ export async function stageLookReal(env) {
 
 // The release's own files for its clock, read now: its auto-stage state (the stage step's state.json) and its staging record.
 // A file that is not there is null; one that cannot be read throws (the clock concludes nothing from it this round).
-// Each file on its own: one that cannot be read is named in `unread` ({stage, staging}) and the other still counts.
+// Each file on its own: one that cannot be read is named in `unread` ({stage, staging}) and the other still counts. A staging
+// record is "not there" only when the release's own folder is there: with the folder gone (the records checkout missing or
+// being replaced), it is unknown, never a change.
 export function readReleaseFiles(env, id) {
   const unread = {};
   const read = (f, part) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { if (e && e.code === "ENOENT") return null; unread[part] = `${f} cannot be read: ${e.message}`; return null; } };
   const st = env.AUTO_STAGE_STATE ? read(env.AUTO_STAGE_STATE, "stage") : null;
-  const staging = env.RELEASES_DIR ? read(path.join(env.RELEASES_DIR, id, "staging.json"), "staging") : null;
+  let staging = null;
+  if (env.RELEASES_DIR) {
+    if (fs.existsSync(path.join(env.RELEASES_DIR, id))) staging = read(path.join(env.RELEASES_DIR, id, "staging.json"), "staging");
+    else unread.staging = `${path.join(env.RELEASES_DIR, id)} is not there (the records checkout is missing)`;
+  }
   return { autoStage: ((st && st.releases) || {})[id] || null, staging, ...(Object.keys(unread).length ? { unread } : {}) };
 }
 
-// Is the release's plan still approved? A plan that cannot be read counts as still approved (unknown is not a change).
+// Is the release's plan still approved? Only a plan that can be read and is not approved says no: a plan that cannot be read
+// (its folder or the records checkout missing) is unknown, and unknown is not a change.
 export function planStillApproved(env, id) {
   if (!env.RELEASES_DIR) return true;
-  let text; try { text = fs.readFileSync(path.join(env.RELEASES_DIR, id, "plan.md"), "utf8"); } catch (e) { return !(e && e.code === "ENOENT"); }
+  let text; try { text = fs.readFileSync(path.join(env.RELEASES_DIR, id, "plan.md"), "utf8"); } catch { return true; }
   return /^\s*status:\s*approved\b/im.test(text);
 }
 

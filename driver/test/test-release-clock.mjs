@@ -278,10 +278,18 @@ test("ticket 01: a notice that reached nobody is not counted as told: it is sent
 });
 
 test("ticket 01: a records checkout that vanishes (an empty release list, nothing called unreadable) never takes the clock away while the journal holds the release open", async () => {
+  // the real readers on a real records checkout, with a staging record, which disappears at minute 30
   const s = server({ answers: { 1: LIE } });
+  const records = path.join(s.root, "records", "releases");
+  fs.mkdirSync(path.join(records, ID), { recursive: true });
+  fs.writeFileSync(path.join(records, ID, "plan.md"), PLAN);
+  fs.writeFileSync(path.join(records, ID, "staging.json"), JSON.stringify({ status: "frozen", tag: "candidate/2.0.0-beta.31" }));
+  s.env = { ...s.env, RELEASES_DIR: records, AUTO_STAGE_STATE: path.join(s.root, "no-stage-state.json") };
+  delete s.deps.releaseFiles; delete s.deps.planApproved;
   const read = s.deps.readWorld;
   s.deps.readWorld = async () => { const x = await read(); if (s.at() >= 30) x.releases = []; return x; };
-  for (let m = 0; m <= 60; m += 5) await s.round(m);
-  assert.deepEqual(byClock(s).map(l => l.minute), [20, 40]); assert.deepEqual(s.requests.map(r => r.minute), [60]);
-  assert.ok(s.told.some(t => t.minute === 60));
+  for (let m = 0; m <= 60; m += 5) { if (m === 30) fs.rmSync(path.join(s.root, "records"), { recursive: true }); await s.round(m); }
+  assert.deepEqual(byClock(s).map(l => l.minute), [20, 40], "the vanished staging record is unknown, not a change");
+  assert.deepEqual(s.requests.map(r => r.minute), [60]);
+  assert.ok(s.told.some(t => t.minute === 60), "and the plan that cannot be read does not hold the notice");
 });
