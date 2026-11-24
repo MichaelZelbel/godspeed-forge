@@ -42,7 +42,7 @@ printf '%s\n' "$scenario_root" >>"$FAKE_DOCKER_LOG"
 case "$script" in
   forge-setup.sh) echo "Forge setup cannot run offline yet: creating its GitHub Apps calls https://api.github.com directly (lib/github-adapter.mjs)" ;;
   forge-one-release.sh) echo "The owner's go did not publish the release" ;;
-  forge-questions.sh) echo "A build question reached the owner" ;;
+  forge-questions.sh) echo "A build question reached the owner" >&2 ;;
   *) exit 64 ;;
 esac
 exit 1

@@ -68,4 +68,9 @@ function notices() {
 }
 
 const [command, ...args] = process.argv.slice(2);
-await ({ seed, say, notices, 'factory-issue': factoryIssue })[command](...args);
+try {
+  await ({ seed, say, notices, 'factory-issue': factoryIssue })[command](...args);
+} catch (error) {
+  console.log(error.message);
+  process.exit(1);
+}
