@@ -235,7 +235,10 @@ async function postDecision(env, obstacle, text, report, deps, out, now, flagged
   // (a helper's own `what` only counts when the words are not the machinery's: a test or a judge is never Michael's)
   // an item whose decision the check already refused once is a technical item by definition: it never turns into a question for Michael on the retry
   const refusals = deps.state ? (deps.state.refusals ||= {}) : {};
-  const only = technicalWords(deps.title) || refusals[obstacle.id] || (deps.state && deps.state.technical && deps.state.technical[obstacle.id]) ? "" : (flagged && !technicalWords(text) ? flagged : "") || ownerOnlyReason(text);
+  // a factory question handed to the driver is Mission Control's to decide, product questions included (the owner's
+  // standing instruction of 2026-11-24): it never becomes a question for him here
+  const question = obstacle.kind === "question" && obstacle.question ? obstacle.question : null;
+  const only = question || technicalWords(deps.title) || refusals[obstacle.id] || (deps.state && deps.state.technical && deps.state.technical[obstacle.id]) ? "" : (flagged && !technicalWords(text) ? flagged : "") || ownerOnlyReason(text);
   if (only) { toMichael(env, obstacle, targets, only, text, report, deps, out, now); return; }
   if (!short(text)) { out.skipped.push("the decide helper posted nothing to decide"); return; }
   const check = (deps.check || (a => secondCheck(env, a, { codex: deps.codex || ((p, s) => codexJson(env, p, s)) })))({
@@ -253,11 +256,16 @@ async function postDecision(env, obstacle, text, report, deps, out, now, flagged
     // refused twice: the option that keeps every existing check exactly as it is, and move on (no question to Michael, no other model)
     out.fallback = true; posted = KEEP_CHECKS_DECISION; why = `refused twice by the second check (${short(check.reason).slice(0, 150)}); every existing check stays as it is`;
   }
-  const body = `${posted}\n${actMarker(deps.id || obstacle.id)}`;
+  // a factory question's decision names it, by title and by the marker the questions step and the question accountant
+  // look for (questions/factory-owner-questions.mjs idOf); its needs-owner is the questions step's to lift, once no
+  // other open question holds the item
+  const naming = question ? `\nThis decides the factory question "${short(question.heading).slice(0, 200)}"${question.link ? ` (${question.link})` : ""}.\n<!-- factory-question:factory-question-${crypto.createHash("sha1").update(String(question.key)).digest("hex").slice(0, 10)} -->` : "";
+  const body = `${posted}${naming}\n${actMarker(deps.id || obstacle.id)}`;
   for (const n of targets) {
     deps.gh(["-X", "POST", `repos/${env.REPO}/issues/${n}/comments`, "--input", "-"], JSON.stringify({ body }));
-    removeLabel(deps.gh, env.REPO, n, "needs-owner");
+    if (!question) removeLabel(deps.gh, env.REPO, n, "needs-owner");
   }
+  if (question) out.question = { key: question.key, heading: question.heading, choice: short(posted).slice(0, 400), targets };
   if (deps.state && deps.state.technical) delete deps.state.technical[obstacle.id];
   delete refusals[obstacle.id]; // only after every post and label change went through: a failure leaves the count, so the next attempt posts again
   out.done.push(`posted a manager decision on ${targets.map(n => `#${n}`).join(" and ")} and took needs-owner off there (${why})`);

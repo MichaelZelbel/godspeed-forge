@@ -28,7 +28,7 @@ const side = { repository: "acme/side", checkout: "/srv/builder/side", questions
 const ctx = (extra = {}) => ({ settings, main, projects: [main, side], env: {}, settingsDir: "/etc/driver", ...extra });
 
 testCase("every step exports its cadence, its settings and run");
-for (const [mod, name, every, max] of [[trust, "trust", 2, 9], [questions, "questions", 15, 15], [tm, "test-machine", 30, 120]]) {
+for (const [mod, name, every, max] of [[trust, "trust", 2, 9], [questions, "questions", 5, 15], [tm, "test-machine", 30, 120]]) {
   assert.equal(mod.STEP.name, name); assert.equal(mod.STEP.everyMinutes, every); assert.equal(mod.STEP.maxMinutes, max); assert.equal(mod.STEP.inRound, false);
   assert.equal(typeof mod.run, "function");
   assert.ok(mod.SETTINGS.length && mod.SETTINGS.every(s => typeof s.key === "string" && s.meaning && typeof s.required === "boolean"), `${name}: every setting says what it is and whether it is needed`);
@@ -42,7 +42,10 @@ testCase("the questions step builds the old configuration from the settings, the
   assert.equal(env.PROJECTS[1].label, "Side", "a project's own words come from its file");
   assert.equal(env.PROJECTS[0].label, "app", "plain words when the file brings none");
   assert.equal(env.STATE.replace(/\\/g, "/"), settings.server.questions_dir.replace(/\\/g, "/") + "/state.json");
-  assert.equal(env.FORGE_HOME, "/srv/builder"); assert.equal(env.OWNER_NAME, "Alex"); assert.equal(env.NOTICES_FILE, settings.notices.godspeed_notices_file);
+  assert.equal(env.FORGE_HOME, "/srv/builder"); assert.equal(env.OWNER_NAME, "Alex");
+  assert.equal(env.JOURNAL.replace(/\\/g, "/"), settings.server.state_dir.replace(/\\/g, "/") + "/journal.jsonl", "decisions and pages go into the driver's journal");
+  assert.equal(env.URGENT_LABEL, "alex-urgent", "the urgent label is named after the owner");
+  assert.equal(questions.urgentLabelFor(""), "owner-urgent");
   const bad = await questions.run({ ...ctx(), settings: { ...settings, steps: { questions: {} } } });
   assert.equal(bad.ok, false); assert.match(bad.error, /steps\.questions\.godspeed_dir/, "a missing setting is named");
 }

@@ -2,7 +2,7 @@
 // reads the command line and says plain sentences.
 //   driver install [--settings-dir <dir>] [--switch] [--watcher]
 //   driver round [--dry-run] [--settings-dir <dir>]      (a dry run reads only: it starts nothing and writes nothing)
-//   driver status [--settings-dir <dir>]
+//   driver status [--settings-dir <dir>] [--decisions [--days N]]
 //   driver step <name> [--clear-halt] [--settings-dir <dir>]
 //   driver pause set <target> "<why>" --telegram-user <id> --message-id <id> [--until <iso>] | clear <target>
 import fs from 'node:fs';
@@ -32,7 +32,7 @@ export async function runDriverCommand(args, io = {}) {
       const argv = sub === 'step' ? ['--step', rest[0] ?? '', ...rest.slice(1)] : rest;
       return await cli(argv, { log: say, err: say, ...(io.round || {}) }); // io.round: a test's stand-ins for the round (deps, found)
     }
-    if (sub === 'status') return await status(option(rest, '--settings-dir'), say);
+    if (sub === 'status') return rest.includes('--decisions') ? await decisions(option(rest, '--settings-dir'), Number(option(rest, '--days') || 7), say, io.now) : await status(option(rest, '--settings-dir'), say);
     if (sub === 'pause') {
       const { loadSettings, defaultSettingsDir } = await import(driverFile('settings.mjs'));
       const { discoverSteps } = await import(driverFile('steps.mjs'));
@@ -59,6 +59,36 @@ async function status(settingsDir, say) {
   say(`The driver's last round was ${Number.isFinite(age) ? `${age} minutes ago` : 'at a time it did not say'}; ${s.entries ?? 0} open entries (by rung: ${(s.byRung || []).join(', ')}).`);
   for (const [name, st] of Object.entries(s.steps || {})) say(`step ${name}: ${st.enabled === false ? 'off' : st.running ? 'running' : st.lastOk === null ? 'never ran' : st.lastOk ? 'last run fine' : `failing (${st.failuresInRow} in a row)`}${st.halt && st.halt.length ? `, stopped itself: ${st.halt.join(', ')}` : ''}`);
   for (const r of s.rung3 || []) say(`told the owner: ${r.title}`);
+  for (const line of questionCounts(loaded.get('server.state_dir'))) say(line);
+  return 0;
+}
+
+// The question accountant's counts (steps/question-check.mjs): one line per project with a question.
+export function questionCounts(stateDir) {
+  let st;
+  try { st = JSON.parse(fs.readFileSync(path.join(stateDir, 'steps', 'question-check', 'state.json'), 'utf8')); } catch { return []; }
+  return Object.entries(st.counts || {}).filter(([, c]) => c && c.total).map(([repo, c]) =>
+    `factory questions of ${repo}: ${c.total} open, ${c.decided} decided, ${c.delivered} with the owner (delivered), ${c.young} new, ${c.nobody} reached nobody`);
+}
+
+// `driver status --decisions [--days N]`: what Mission Control decided for the owner, from the driver's journal, so it can
+// answer "what did you decide for me?". Nothing here is sent anywhere.
+export function decisionLines(journalFile, days = 7, now = Date.now()) {
+  let text = '';
+  try { text = fs.readFileSync(journalFile, 'utf8'); } catch { return ['No decisions are recorded yet.']; }
+  const since = now - Math.max(0, Number.isFinite(days) ? days : 7) * 24 * 3600 * 1000;
+  const rows = text.split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } })
+    .filter(e => e && e.t === 'decision' && Date.parse(e.at) >= since);
+  if (!rows.length) return [`No decisions in the last ${days} day${days === 1 ? '' : 's'}.`];
+  return [`${rows.length} decision${rows.length === 1 ? '' : 's'} in the last ${days} day${days === 1 ? '' : 's'}:`,
+    ...rows.map(e => `${String(e.at).slice(0, 16).replace('T', ' ')} UTC, ${e.repo}: "${String(e.question || '').replace(/\s+/g, ' ').slice(0, 140)}" -> ${String(e.choice || '').replace(/\s+/g, ' ').slice(0, 200)} (${e.how || 'decided'}${(e.targets || []).length ? `, on ${e.targets.map(n => `#${n}`).join(', ')}` : ''})`)];
+}
+async function decisions(settingsDir, days, say, now) {
+  const { loadSettings, defaultSettingsDir } = await import(driverFile('settings.mjs'));
+  const { discoverSteps } = await import(driverFile('steps.mjs'));
+  const found = await discoverSteps();
+  const loaded = loadSettings(settingsDir || defaultSettingsDir(), { steps: found.steps });
+  for (const line of decisionLines(path.join(loaded.get('server.state_dir'), 'journal.jsonl'), days, now || Date.now())) say(line);
   return 0;
 }
 
@@ -67,7 +97,8 @@ async function status(settingsDir, say) {
 // release-records repository and hidden-check tools; questions needs the first owner's chat program; trust and
 // keep-main-green need an App-token program and keys file the Forge does not make, and keep-main-green reverts commits
 // on main by a check named "required" that a new owner's project does not have.
-export const NEW_OWNER_OFF = ['plan', 'stage', 'questions', 'test-machine', 'trust', 'keep-main-green'];
+// question-check checks what the questions step does, so it is off with it.
+export const NEW_OWNER_OFF = ['plan', 'stage', 'questions', 'question-check', 'test-machine', 'trust', 'keep-main-green'];
 // The general steps for any owner (part of the same release): on from the start.
 export const NEW_OWNER_ON = ['owner-releases', 'owner-questions'];
 

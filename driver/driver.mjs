@@ -224,6 +224,12 @@ export async function round(env, deps = {}) {
       if (r.state === "done") {
         const a = await applyReport(env, h.obstacle, rep, { gh, kind: h.kind, id: h.unit, startedAt: h.startedAt, state, codex: check, title: h.title || "", records: h.kind === "cut" ? await recordsOf() : undefined });
         record({ kind: "acted on a report", unit: h.unit, obstacle: id, ...a });
+        // a factory question it decided: the ladder waits for the questions step to take it off, and the decision goes into
+        // the journal, where `godspeed-forge driver status --decisions` lists what was decided for the owner
+        if (a.question) {
+          push(id, { at: nowIso, helper: "decided", outcome: "ok", summary: `posted on ${a.question.targets.map(n => `#${n}`).join(", ")}` });
+          try { appendEvents(journalFile, [{ t: "decision", at: nowIso, repo: h.obstacle.repo, question: a.question.heading, key: a.question.key, how: "the driver's decide helper", choice: a.question.choice, targets: a.question.targets, by: h.unit }]); } catch (e) { record({ kind: "decision not journaled", why: String(e.message).slice(0, 200) }); }
+        }
         // the independent check refused a technical decision: the next attempt's brief carries why (the ladder's note
         // quotes the previous attempt), so it decides again; refused a second time, act.mjs has already settled it
         if (a.refusal) { const last = (state.history[id] || []).at(-1); if (last) { if (last.helper === "michael") last.helper = "decide"; /* the ladder reads a cause from decide, never from michael */ last.outcome = "refused"; last.cause = "how"; last.summary = `Your last answer was refused: ${a.refusal} Decide it yourself as a technical matter, so that every existing check stays exactly as it is and whatever was objected to no longer applies.`; } }
