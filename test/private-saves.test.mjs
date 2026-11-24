@@ -1,12 +1,13 @@
 // The sweep of temporaries left beside private saves, and the removal of a failed save's own temporary (#100):
 // the sweep must take only the temporaries of saves whose process is gone and that it can read, and never the
 // saved file itself, a temporary of a live save, or a file it cannot look up or read.
-// test cases: 4
+// test cases: 5
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { files } from '../lib/files.mjs';
+import { createApps } from '../lib/github-apps.mjs';
 import { abandonSaves, removeStaleTemporaries, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
 
@@ -106,6 +107,35 @@ testCase('a stopped run abandons its saves except those marked keepOnStop');
   } finally {
     files.rename = rename;
     await rm(folder, { recursive: true, force: true });
+  }
+}
+testCase('a stop landing on any save of an App\'s pending record still lets that save finish, for both roles');
+{
+  const root = await mkdtemp(join(tmpdir(), 'forge-private-saves-'));
+  const [stateDirectory, credentialDirectory, checkout] = ['state', 'credentials', 'checkout'].map(name => join(root, name));
+  for (const folder of [stateDirectory, credentialDirectory, join(checkout, '.git')]) await mkdir(folder, { recursive: true });
+  const rename = files.rename;
+  const finished = [];
+  // The stop arrives while each pending-record save is in flight; a save dropped by it fails its rename.
+  files.rename = async (from, to) => {
+    const pending = to.endsWith('-app-pending.json');
+    if (pending) await abandonSaves();
+    await rename(from, to);
+    if (pending) finished.push(JSON.parse(await readFile(to, 'utf8')));
+  };
+  const keys = { id: 7, slug: 'forge-app', pem: 'PRIVATE KEY' };
+  const github = {
+    begin: async () => ({ url: 'https://github.test/page' }),
+    callback: async () => 'code-1',
+    exchange: async () => keys,
+    install: async () => true
+  };
+  try {
+    await createApps({ repository: 'owner/repo', stateDirectory, credentialDirectory, checkout, github, output: () => {} });
+    assert.deepEqual(finished, ['builder', 'release'].flatMap(() => [{ code: null }, { code: 'code-1' }, { code: 'code-1', credentials: keys }]));
+  } finally {
+    files.rename = rename;
+    await rm(root, { recursive: true, force: true });
   }
 }
 console.log('private save tests pass');
