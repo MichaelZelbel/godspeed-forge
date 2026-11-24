@@ -1013,8 +1013,9 @@ export function underProcess(ownerRepo) {
 
 // The version on beta and the newest candidate tag newer than it that was not taken back, read the
 // way a stranger reads them: with no token at all.
-export async function publicState(env, ownerRepo, api = null) {
-  const out = R.outside({ env, ownerRepo, isPrivate: false });
+// api, wrap: the stage step's own caller and its retrying() for the outside read; default as they are.
+export async function publicState(env, ownerRepo, api = null, wrap = undefined) {
+  const out = R.outside({ env, ownerRepo, isPrivate: false, wrap });
   const beta = await out.stageAt(R.PUBLIC_STAGE);
   api ||= R.githubApi(readToken(env), env);
   const r = await api("GET", `/repos/${ownerRepo}/git/matching-refs/tags/candidate/`);

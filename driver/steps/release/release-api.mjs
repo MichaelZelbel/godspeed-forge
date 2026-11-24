@@ -479,10 +479,12 @@ export function readTokenFor(env, ownerRepo, isPrivate, log) {
 
 // How a stranger reads this repository: with no token at all where it is public, through the API
 // with the read token of readTokenFor() where it is private.
-export function outside({ env, ownerRepo, isPrivate, token }) {
+// wrap: what every read goes through (the stage step passes retrying(), so a 5xx is asked again); default as it is.
+export function outside({ env, ownerRepo, isPrivate, token, wrap = (f) => f }) {
   const { raw } = bases(env);
   if (isPrivate && !token) refuse(`${ownerRepo} is private, and the reads from outside were given no read token, so they cannot be made.`);
-  const api = githubApi(isPrivate ? token : null, env);
+  const api = wrap(githubApi(isPrivate ? token : null, env));
+  const get = wrap((method, url, body, opts) => request(method, url, opts));
   return {
     how: isPrivate ? `the API with a read token (${ownerRepo} is private)` : "no token at all",
     where: (ref, file) => (isPrivate ? `${file} at ${ref} of ${ownerRepo} through the API` : `${raw}/${ownerRepo}/${ref}/${file}`),
@@ -491,7 +493,7 @@ export function outside({ env, ownerRepo, isPrivate, token }) {
         const f = await readFileAt(api, ownerRepo, file, ref);
         return f ? f.bytes : null;
       }
-      const r = await request("GET", `${raw}/${ownerRepo}/${ref}/${file}`, { raw: true, accept: "*/*" });
+      const r = await get("GET", `${raw}/${ownerRepo}/${ref}/${file}`, undefined, { raw: true, accept: "*/*" });
       return r.ok ? r.bytes : null;
     },
     async stageAt(ref) {
@@ -513,7 +515,7 @@ export function outside({ env, ownerRepo, isPrivate, token }) {
       const asset = (release.assets || []).find((a) => a.name === name);
       if (!asset) return null;
       if (!isPrivate && asset.browser_download_url) {
-        const r = await request("GET", asset.browser_download_url, { raw: true, accept: "*/*" });
+        const r = await get("GET", asset.browser_download_url, undefined, { raw: true, accept: "*/*" });
         return r.ok ? r.bytes : null;
       }
       return assetBytesWithToken(api, ownerRepo, asset.id);

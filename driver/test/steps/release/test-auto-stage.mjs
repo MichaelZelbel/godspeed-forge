@@ -1,4 +1,4 @@
-// test cases: 110
+// test cases: 112
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -1582,12 +1582,12 @@ test("issue #155: when GitHub can name the failed jobs neither from the jobs nor
   assert.deepEqual([w.filed.length, w.notices.length], [1, 1], "nothing filed or said twice");
 });
 
-test("issue #155: a filing GitHub refuses is made by the next look, which says nothing twice", async () => {
+test("issue #155: a filing GitHub refuses is made by the next look, before anything is said, and nothing twice", async () => {
   const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, failed] });
   const fileIssue = ctx.fileIssue;
   ctx.fileIssue = async () => { throw new R.Refused("GitHub said 502 to POST /repos/x/issues."); };
   await assert.rejects(() => A.autoStage(ctx), /502/);
-  assert.equal(w.notices.length, 1, "he is told at once");
+  assert.equal(w.notices.length, 0, "filed first");
   assert.equal(A.loadState(ctx.stateFile).releases[w.id].finished, undefined, "not finished while unfiled");
   assert.equal(fs.existsSync(w.stop), false);
   const r = await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile), fileIssue });
@@ -1595,6 +1595,27 @@ test("issue #155: a filing GitHub refuses is made by the next look, which says n
   assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`]);
   assert.match(w.filed[0].body, /What went wrong, as its log says: GitHub limited how many requests/);
   assert.equal(w.notices.length, 1);
+});
+
+test("issue #155: a failed candidate is filed before the install's record or a rebuild can end the look", async () => {
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, failed], extra: { stageServerThrows: true } });
+  assert.equal((await A.autoStage(ctx)).outcome, "waiting");
+  assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`], "filed on the first look, though the install left no record");
+  await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  const r3 = await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  assert.equal(r3.halt.key, "not-staged");
+  assert.equal(w.filed.length, 1, "once");
+  const d = driven({ over: { itemPulls: async () => { throw new R.Refused("GitHub said 502 to /graphql."); } } });
+  await assert.rejects(() => A.autoStage(d.ctx), /502/);
+  assert.deepEqual(d.w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`], "filed before the rebuild reads anything");
+});
+
+test("issue #155: the stage's read of the public stage file goes through the same retries", async () => {
+  const wrapped = [];
+  const o2 = R.outside({ env: {}, ownerRepo: "o/r", isPrivate: false, wrap: (f) => { wrapped.push(f); return async () => ({ ok: true, status: 200, bytes: Buffer.from(JSON.stringify({ version: "2.0.0-beta.30" })) }); } });
+  const st = await o2.stageAt("beta");
+  assert.equal(st.stage.version, "2.0.0-beta.30");
+  assert.equal(wrapped.length, 2, "both the API and the raw reads are wrapped");
 });
 
 test("issue #155: a STOP of the step relabelled \"stage\" is still the step's own: taken over with this look's process number and removed when the scenarios end", async () => {

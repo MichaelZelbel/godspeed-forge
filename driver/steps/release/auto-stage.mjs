@@ -1179,6 +1179,8 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
   if (!needStop && removeStop(cfg.stopFile)) log("A STOP file an earlier look of this step left behind was removed: no scenarios run now.");
   log(paused ? "The factory is paused while the scenarios run (STOP file made)." : needStop ? "A STOP file was there already, not made here; it is left as it is." : "Nothing is running, so the factory is not paused.");
   let decided = null;
+  let named = null; // a failed run's jobs: {jobs, aggregate, from}
+  const causes = {}; // job -> its cause, read from its log
   try {
     // ---- the scenarios: one candidate run, never a second dispatch
     if (sc.result === "none") {
@@ -1242,6 +1244,23 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
     rs.scenarioResult = sc.result;
     decided = sc;
 
+    // ---- a failed candidate is named job by job and filed for the factory before anything else of the release step can
+    // end the look (the install, its record, a rebuild). When GitHub cannot name its jobs at all, the look ends here
+    // unfinished and the next one asks again: never a failure left unfiled.
+    if (sc.result === "failed") {
+      named = await failedOf(ctx, sc);
+      if (!named) {
+        log(`GitHub could not say which jobs of scenario run ${sc.run} failed (neither its jobs nor its check runs could be read); the next look asks again.`);
+        return { outcome: "waiting", why: "failed jobs unknown" };
+      }
+      if (named.from !== "jobs") log(`The failed jobs of run ${sc.run} were read from its ${named.from}, because GitHub's list of its jobs did not answer.`);
+      for (const job of named.jobs) {
+        const logText = await ctx.jobLog(sc.run, job);
+        causes[job] = logText === null ? UNREAD_CAUSE : classifyFailure(logText, job); // a log GitHub would not give is said so, never a reason to stop
+      }
+      await fileFailures({ ctx, rs, version, staged: sc, failures: named.jobs.map((job) => ({ job, cause: causes[job] })), save });
+    }
+
     // ---- no record of the install: the install costs nothing, so a few looks may try it again
     records.fetch();
     if (!stagingIsFor(records, id, version)) {
@@ -1265,20 +1284,8 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
   log(`staging-check: exit ${check.code}${check.stderr.trim() ? ` (${check.stderr.trim().split("\n").pop()})` : ""}.`);
   records.fetch();
   const staging = records.json(G.stagingPath(id));
-  // A failed candidate is named job by job before anything else, and filed whatever else is wrong with it. When GitHub
-  // cannot name its jobs at all, the look ends here unfinished and the next one asks again: never a failure left unfiled.
-  let named = null;
-  if (staged.result === "failed") {
-    named = await failedOf(ctx, staged);
-    if (!named) {
-      log(`GitHub could not say which jobs of scenario run ${staged.run} failed (neither its jobs nor its check runs could be read); the next look asks again.`);
-      return { outcome: "waiting", why: "failed jobs unknown" };
-    }
-    if (named.from !== "jobs") log(`The failed jobs of run ${staged.run} were read from its ${named.from}, because GitHub's list of its jobs did not answer.`);
-  }
   if (staging && staging.status === "failed") {
     // staging-check --tell has sent the "not healthy" message by itself; nothing more is said here.
-    if (named) await fileFailures({ ctx, rs, version, staged, failures: named.jobs.map((job) => ({ job, cause: null })), save });
     rs.finished = new Date(now()).toISOString();
     save();
     log(`${version} is recorded as not healthy on the server; staging-check told him once.`);
@@ -1296,11 +1303,7 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
   const blockingList = G.blockingScenarios(plan);
   const main = await ctx.mainFailures();
   const failures = [];
-  for (const job of jobs) {
-    const logText = await ctx.jobLog(staged.run, job);
-    const cause = logText === null ? UNREAD_CAUSE : classifyFailure(logText, job); // a log GitHub would not give is said so, never a reason to stop
-    failures.push({ job, cause, mainDates: main[job] || [], blocking: !!blockingList && blockingList.some((b) => job.toLowerCase().includes(b)) });
-  }
+  for (const job of jobs) failures.push({ job, cause: causes[job], mainDates: main[job] || [], blocking: !!blockingList && blockingList.some((b) => job.toLowerCase().includes(b)) });
   // ---- what the plan allows on its own (auto-drive.mjs)
   const judged = D.judgeFailures({ failures, nowMs: now(), listed: !!blockingList });
   const driving = !!D.planRuleWords(plan) && planApproved(plan) && !!ctx.drive;
@@ -1310,10 +1313,8 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
   const text = failureMessage({ version, title: planTitle(plan), failures: said, installHealthy: G.installedHealthy(staging, version), aggregate });
   const key = rs.candidate ? `scenarios-failed-${version}` : "scenarios-failed";
   const about = `Godspeed ${version} is on your server, some tests failed`;
-  // Said first, then filed: a filing GitHub refuses leaves the release unfinished, so the next look files it (and says nothing twice).
-  const finishWith = async (extra, outcome) => {
+  const finishWith = (extra, outcome) => {
     sayOnce(key, extra ? `${text} ${extra}` : text, about);
-    await fileFailures({ ctx, rs, version, staged, failures: judged, save });
     rs.finished = new Date(now()).toISOString();
     rs.failedJobs = judged.map((f) => ({ job: f.job, cause: f.cause.plain, environment: f.cause.environment, alsoOnMain: f.mainDates.length > 0, ...(f.waive ? { doesNotBlock: f.waive } : {}) }));
     save();
@@ -1347,9 +1348,6 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
   if (!traced.ok) return finishWith(D.stoppedWords(traced.why), "drive-untraced");
   if (!tickets.some((t) => !already.includes(t) && !traced.tickets.includes(t))) return finishWith(D.stoppedWords("taking that change out would leave nothing in the release"), "drive-untraced");
   const first = holding[0];
-  // Filed before the rebuild starts: whatever the rebuild later does (a new candidate, or a stop), the failures of this
-  // candidate are with the factory. A filing GitHub refuses starts nothing; the next look files and then rebuilds.
-  await fileFailures({ ctx, rs, version, staged, failures: judged, save });
   rs.drive = {
     phase: "revert-start",
     n: n + 1,
@@ -1428,7 +1426,7 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
     notify: ({ id, text, about }) => {
       queueNotice(cfg.noticesFile, { id, text, about, facts: [text] });
     },
-    publicVersion: async () => (await G.publicState(readEnv, cfg.repo, api)).publicVersion,
+    publicVersion: async () => (await G.publicState(readEnv, cfg.repo, api, (f) => R.retrying(f, { log }))).publicVersion,
     tagCommit: async (version) => R.refSha(api, cfg.repo, `tags/candidate/${version}`),
     mainHead: async () => {
       const list = await J(`/repos/${cfg.repo}/commits?sha=main&per_page=1`);
