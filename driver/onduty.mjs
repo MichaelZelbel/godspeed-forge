@@ -205,7 +205,8 @@ export function linkLogins(factoryHome, actDir, provider, now = Date.now()) {
 // A run that could not sign in says so instead of answering: no RESULT line, and the sign-in words of Claude Code or Codex
 // (2026-11-22: "Failed to authenticate: OAuth session expired and could not be refreshed").
 export const LOGIN_WORDS = /Failed to authenticate|\bOAuth\b|not logged in|\b401\b/i;
-export const loginFailure = text => !/RESULT:\s*(resolved|notice|unresolved|in-progress)\s*$/i.test(String(text || "").trim()) && LOGIN_WORDS.test(String(text || ""));
+// text: the answer; extra: what else the CLI said (its last error line). Only the answer's own last line can be its RESULT.
+export const loginFailure = (text, extra = "") => !/RESULT:\s*(resolved|notice|unresolved|in-progress)\s*$/i.test(String(text || "").trim()) && LOGIN_WORDS.test(`${text || ""}\n${extra || ""}`);
 // One tiny sign-in check on the smallest model, in the acting runs' own home, after the links were put back. -> { ok, why }
 export function signinCheck(a, provider, spawn = spawnSync) {
   const ask = "Answer with the single word OK.";
@@ -240,7 +241,7 @@ export function runJob(dir, spawn = spawnSync, own = process.env) {
   }
   let said = ""; try { said = fs.readFileSync(last, "utf8"); } catch {}
   if (!said && r.status !== 0) said = `the ${job.provider} run failed: ${String(r.stderr || "").trim().split("\n").pop()}`;
-  const login = loginFailure(`${said}\n${String(r.stderr || "").trim().split("\n").pop() || ""}`); // it could not sign in: a fault the driver fixes, never a try
+  const login = loginFailure(said, String(r.stderr || "").trim().split("\n").pop() || ""); // it could not sign in: a fault the driver fixes, never a try
   writeJson(path.join(dir, "result.json"), { at: new Date().toISOString(), provider: job.provider, model: job.model, result: resultOf(said), said: said.slice(-4000), ...(login ? { login: true } : {}) });
 }
 

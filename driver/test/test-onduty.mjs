@@ -163,8 +163,9 @@ test("the beta.31 answer is a sign-in failure: runJob marks it login and the dri
   for (const t of [said, "Error: not logged in. Run claude /login", "API Error: 401 {\"type\":\"error\"}", "the codex run failed: OAuth token refresh failed"]) assert.ok(loginFailure(t), t);
   for (const t of ["I checked the OAuth settings of the product and fixed them.\nRESULT: resolved", "the run timed out", "RESULT: unresolved"]) assert.ok(!loginFailure(t), t);
   launchAct({}, a, { unit: "factory-act-login-4", entry, provider: "codex", tried: [], settings: {} }, () => ({ status: 0 }));
-  runJob(path.join(a.ACT_DIR, "factory-act-login-4"), () => ({ status: 0, stdout: "The 401 was the product's own.\nRESULT: resolved" }), {});
-  assert.equal(actResult({}, a, "factory-act-login-4").login, false);
+  runJob(path.join(a.ACT_DIR, "factory-act-login-4"), () => ({ status: 0, stdout: "The 401 was the product's own.\nRESULT: resolved", stderr: "warning: an update is available\n" }), {});
+  assert.equal(actResult({}, a, "factory-act-login-4").login, false, "an answer with its RESULT line is never a sign-in failure, whatever else the CLI printed");
+  assert.ok(loginFailure("", "Error: Failed to authenticate"), "the CLI's own error line counts when there is no answer");
 });
 
 test("the sign-in check asks the smallest model once, in the acting runs' own home, and counts only an answer", () => {

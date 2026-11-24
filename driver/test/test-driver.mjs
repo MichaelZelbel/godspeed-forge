@@ -762,7 +762,7 @@ test("ticket 04: the beta.31 answer 'Failed to authenticate' is a login obstacle
   realLaunch({}, env.ACT, { unit: "factory-act-beta31-1", entry: { id: "clock", kind: "obstacle", title: "clock", evidence: [] }, provider: "claude", settings: {} }, () => ({ status: 0 }));
   runJob(path.join(env.ACT.ACT_DIR, "factory-act-beta31-1"), () => ({ status: 1, stdout: "Failed to authenticate: OAuth session expired and could not be refreshed", stderr: "" }), {});
   fs.mkdirSync(env.STATE_DIR, { recursive: true });
-  fs.writeFileSync(path.join(env.STATE_DIR, "state.json"), JSON.stringify({ chain: { clock: { rung: 1, rungSince: NOW - 10 * 60000, milestone: NOW - 30 * 60000, firstSeenAt: NOW - 30 * 60000, launched: true, launchedAt: NOW - 10 * 60000, told: false, tries: [] } }, acts: { clock: { unit: "factory-act-beta31-1", provider: "claude", rung: 1, startedAt: new Date(NOW - 10 * 60000).toISOString() } }, actRuns: [] }));
+  fs.writeFileSync(path.join(env.STATE_DIR, "state.json"), JSON.stringify({ chain: { clock: { rung: 1, rungSince: NOW - 10 * 60000, milestone: NOW + 24 * 3600000, firstSeenAt: NOW - 30 * 60000, launched: true, launchedAt: NOW - 10 * 60000, told: false, tries: [] } }, acts: { clock: { unit: "factory-act-beta31-1", provider: "claude", rung: 1, startedAt: new Date(NOW - 10 * 60000).toISOString() } }, actRuns: [] }));
   const acts = []; fx.deps.launchAct = (e, a, o) => acts.push(o);
   const repaired = [];
   fx.deps.hkDeps = { ...fx.deps.hkDeps, linkLogins: (home, dir, provider) => { repaired.push(provider); return [{ file: ".credentials.json", did: "moved aside", aside: `${dir}/claude-home/.credentials.json.replaced-20261124T100000Z` }]; }, signinCheck: (a, provider) => ({ ok: true, why: `${a.LOGIN_CLAUDE_MODEL} answered` }) };
@@ -780,3 +780,22 @@ test("ticket 04: the beta.31 answer 'Failed to authenticate' is a login obstacle
   assert.equal(acts.length, 1, "the rung went on at once");
   assert.equal(acts[0].provider, "codex", "with the AI that could sign in at the time, never the one that could not");
 });
+
+test("ticket 04: a rung that needs the AI that cannot sign in waits, also when that AI is off the provider list for its limit, and counts no try", async () => {
+  const fx = fixture();
+  fx.deps.stageLook = async () => null; fx.deps.pauses = () => []; fx.deps.expireLocks = () => []; fx.deps.fallbacks = async () => [];
+  fx.deps.clockCheck = () => ({ ok: false, ghNow: NOW - 20 * 60000, skewMs: 20 * 60000 });
+  fx.deps.providers = async () => [{ name: "codex", model: "gpt-5.6-terra", strong: "gpt-5.6-sol" }]; // Claude reported its limit: not on the list
+  fx.deps.hkDeps = { ...fx.deps.hkDeps, linkLogins: () => [], signinCheck: () => ({ ok: false, why: "Failed to authenticate" }) };
+  fs.mkdirSync(fx.env.STATE_DIR, { recursive: true });
+  // rung 2 of the clock entry: rung 1 ran on Codex, so rung 2 needs Claude, which could not sign in
+  fs.writeFileSync(path.join(fx.env.STATE_DIR, "state.json"), JSON.stringify({ actLogin: { claude: { at: new Date(NOW - 5 * 60000).toISOString(), said: "Failed to authenticate" } }, chain: { clock: { rung: 2, rungSince: NOW - 70 * 60000, milestone: NOW + 24 * 3600000, firstSeenAt: NOW - 3 * 3600000, launched: false, told: false, tries: [{ rung: 1, at: "x", provider: "codex", result: "unresolved" }] } }, acts: {}, actRuns: [] }));
+  const acts = []; fx.deps.launchAct = (e, a, o) => acts.push(o);
+  await round(fx.env, fx.deps);
+  const st = JSON.parse(fs.readFileSync(path.join(fx.env.STATE_DIR, "state.json"), "utf8"));
+  assert.equal(acts.length, 0, `nothing launched: ${JSON.stringify(acts.map(a => [a.entry.id, a.provider]))}`);
+  assert.deepEqual(st.chain.clock.tries.map(t => t.rung), [1], "and no try for rung 2: a sign-in is the driver's to fix");
+  const log = fs.readFileSync(path.join(fx.env.STATE_DIR, "decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  assert.ok(log.some(e => e.kind === "acting run waits" && /cannot sign in/.test(e.why)));
+});
+

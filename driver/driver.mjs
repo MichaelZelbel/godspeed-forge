@@ -560,7 +560,8 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       provider = L.rung === 2
         ? (() => { const w = (first && first.provider) === "claude" ? "codex" : "claude"; return names.includes(w) ? w : null; })() // never the provider rung 1 used
         : names.includes("codex") ? "codex" : names.includes("claude") ? "claude" : null;
-      if (!provider && list.some(p => signedOut(p.name))) { record({ kind: "acting run waits", entry: L.entry.id, rung: L.rung, why: `its AI cannot sign in right now (${Object.keys(state.actLogin).join(", ")}); housekeeping links the sign-in again first` }); L = null; }
+      // a sign-in fault is part of why no provider is left (even one the provider list dropped for its limit): wait, count nothing
+      if (!provider && ["codex", "claude"].some(signedOut)) { record({ kind: "acting run waits", entry: L.entry.id, rung: L.rung, why: `its AI cannot sign in right now (${Object.keys(state.actLogin).join(", ")}); housekeeping links the sign-in again first` }); L = null; }
     }
     if (L && !dry) {
       L.c.launched = true; L.c.launchedAt = now; // one launch per rung, whatever happens
