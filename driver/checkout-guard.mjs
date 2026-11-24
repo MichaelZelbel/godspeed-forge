@@ -12,10 +12,13 @@
 //     in a shell command line, is refused unless it is wrapped (runuser -u <factory user> --): enforceCheckoutGuard() puts that
 //     check in front of child_process, the one runner every step's git goes through, and gitAs() / gitInDir() are the ways to
 //     run git there as the factory user;
+//   - in the same processes, a file root makes in the factory user's home (the stage step's STOP in a checkout's .factory folder)
+//     is given at once to the owner of the folder it is in, so nothing the driver writes there stays root's;
 //   - an acting run and a dead-man's repair run (an AI with a root shell) have the factory's checkouts read-only in their unit
 //     (onduty.mjs controlPlane, deadman.mjs launchRepair), and their briefs say where they work instead;
 //   - housekeeping gives every checkout back to the factory user each round and proves its `git fetch` works (housekeeping.mjs).
 // A guard that only applies to root: anything else cannot make a file root's.
+import fs from "node:fs";
 import path from "node:path";
 import cp from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
@@ -100,11 +103,14 @@ function unwrapEnv(cmd, args) {
 
 // A shell command line (bash -c, sh -c, shell: true, execSync): it runs git as root in the factory user's home when it calls git
 // and names a folder there or starts in one. A reading of the script, not a parse: a script that does both is refused, which only
-// ever makes a careful caller run it as the factory user.
+// ever makes a careful caller run it as the factory user. Its $NAME, ${NAME} and a leading ~ are read with the environment it
+// runs with, so "$FD_FORGE_HOME/..." names the home as plainly as the folder itself.
 const GIT_WORD = /(^|[\s;&|(`'"])(\S*\/)?git(\s|$)/m;
 const PATHS = /(?:^|[\s'"=:(])(\/[^\s'"`;|&()<>:]*)/g;
-export function scriptRefusal(script, cwd, account) {
-  const s = String(script || "");
+const expand = (s, env) => s.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (all, a, b) => String((env || {})[a || b] ?? ""))
+  .replace(/(^|[\s'"=:(])~(?=\/|\s|$)/g, (all, pre) => `${pre}${(env || {}).HOME || ""}`);
+export function scriptRefusal(script, cwd, account, env = process.env) {
+  const s = expand(String(script || ""), env);
   if (!GIT_WORD.test(s)) return "";
   const hit = [...s.matchAll(PATHS)].map(m => P.normalize(m[1])).find(p => inside(p, account.home)) || (cwd && inside(abs("/", cwd), account.home) ? abs("/", cwd) : "");
   if (!hit) return "";
@@ -129,13 +135,17 @@ export function rootGitRefusal(file, args, opts = {}, { account = factoryAccount
   if (!root || !guarded(account)) return "";
   const o = opts && typeof opts === "object" ? opts : {};
   const list = Array.isArray(args) ? args.map(String) : [];
-  if (o.shell) return scriptRefusal([file, ...list].join(" "), o.cwd, account);
+  if (o.shell) return scriptRefusal([file, ...list].join(" "), o.cwd, account, o.env || process.env);
   const u = unwrapEnv(String(file || ""), list);
-  const script = shellScript(u.cmd, u.args);
-  if (script !== null) return scriptRefusal(script, o.cwd, account);
-  if (!/(^|\/)git$/.test(u.cmd)) return "";
   const env = { ...(o.env || process.env), ...u.vars };
-  const hit = gitFolders(u.args, o.cwd, env).find(d => inside(d, account.home));
+  const script = shellScript(u.cmd, u.args);
+  if (script !== null) return scriptRefusal(script, o.cwd, account, env);
+  if (!/(^|\/)git$/.test(u.cmd)) return "";
+  const folders = gitFolders(u.args, o.cwd, env);
+  // and any argument that names a path there (git config --file, worktree add, a clone's source or target, -o, --output=...):
+  // root's git names nothing in the factory user's home, not even to read it
+  const named = u.args.map(a => (a.startsWith("-") && a.includes("=") ? a.slice(a.indexOf("=") + 1) : a)).filter(a => a.includes("/")).map(a => abs(folders[0], a));
+  const hit = [...folders, ...named].find(d => inside(d, account.home));
   if (!hit) return "";
   return `refused: git ${u.args.slice(0, 6).join(" ")} as root in ${hit}, which is inside the factory user's home (${account.home}); there it runs as ${account.user} (runuser -u ${account.user} --), never as root, so no file of the factory's becomes root's`;
 }
@@ -158,9 +168,10 @@ export const refusedGit = [];
 let restore = null;
 // Puts rootGitRefusal in front of child_process for the whole process (a round, a step), the way readonly.mjs puts the dry run's
 // lock there. spawnSync answers a refused command the way it answers one that could not start (status null, error set), so a
-// caller that checks the answer fails closed and a round goes on; execFileSync, spawn, execFile, execSync and exec throw. Only
-// for root: for anyone else it installs nothing. -> the function that takes it away again
-export function enforceCheckoutGuard(account = factoryAccount(), { root = isRoot(), log = m => console.error(m) } = {}) {
+// caller that checks the answer fails closed and a round goes on; execFileSync, spawn, execFile, execSync and exec throw. It also
+// gives each file the process makes in the factory user's home to the owner of its folder (givesFilesBack). Only for root: for
+// anyone else it installs nothing. fsOps {lstat, stat, lchown} are for the tests. -> the function that takes it away again
+export function enforceCheckoutGuard(account = factoryAccount(), { root = isRoot(), log = m => console.error(m), fsOps = null } = {}) {
   if (restore) restore();
   if (!root || !guarded(account)) { restore = null; return () => {}; }
   const saved = [];
@@ -171,11 +182,11 @@ export function enforceCheckoutGuard(account = factoryAccount(), { root = isRoot
     return said(rootGitRefusal(file, list, o && typeof o === "object" ? o : {}, { account, root }));
   };
   // execSync and exec take one shell command line and its options
-  const whyLine = (line, opts) => said(scriptRefusal(line, opts && typeof opts === "object" ? opts.cwd : undefined, account));
+  const whyLine = (line, opts) => said(scriptRefusal(line, opts && typeof opts === "object" ? opts.cwd : undefined, account, (opts && typeof opts === "object" && opts.env) || process.env));
   const wrap = (name, refuse, check = why) => {
     const orig = cp[name];
     if (typeof orig !== "function") return;
-    saved.push([name, orig]);
+    saved.push([cp, name, orig]);
     cp[name] = function (...a) { const w = check(a[0], a[1], a[2]); return w ? refuse(w, a[1], a[2]) : orig.apply(this, a); };
   };
   const thrown = w => { const e = new Error(w); e.code = "EROOTGIT"; throw e; };
@@ -188,7 +199,47 @@ export function enforceCheckoutGuard(account = factoryAccount(), { root = isRoot
   });
   for (const n of ["execFileSync", "spawn", "execFile"]) wrap(n, thrown);
   for (const n of ["execSync", "exec"]) wrap(n, thrown, whyLine);
+  givesFilesBack(account, saved, fsOps);
   syncBuiltinESMExports();
-  restore = () => { for (const [name, orig] of saved.reverse()) cp[name] = orig; syncBuiltinESMExports(); restore = null; };
+  restore = () => { for (const [obj, name, orig] of saved.reverse()) obj[name] = orig; syncBuiltinESMExports(); restore = null; };
   return restore;
+}
+
+// ---------------------------------------------------------------- the files root makes there
+// A file or folder the process makes in the factory user's home (writeFileSync, appendFileSync, copyFileSync, renameSync,
+// symlinkSync, openSync that creates, mkdirSync) is given at once to the owner of the folder it is in, when it came out root's:
+// the stage step's STOP in a checkout's .factory folder (also when it is written again through a renamed temporary file), a
+// helper's file in its work folder. A folder of root's keeps root's files (someone made it so on purpose). Never through a link:
+// lchown changes a link itself. If giving it back fails, the file stays as it is and housekeeping gives it back in its round.
+const MAKERS = [["writeFileSync", 0], ["appendFileSync", 0], ["copyFileSync", 1], ["renameSync", 1], ["symlinkSync", 1], ["openSync", 0], ["mkdirSync", 0]];
+function givesFilesBack(account, saved, fsOps) {
+  const real = { lstat: fs.lstatSync, stat: fs.statSync, lchown: fs.lchownSync };
+  const ops = { ...real, ...(fsOps || {}) };
+  const there = p => (typeof p === "string" || p instanceof URL) && inside(abs(process.cwd(), String(p instanceof URL ? p.pathname : p)), account.home);
+  const giveBack = target => {
+    const st = ops.lstat(target);
+    if (st.uid !== 0) return;
+    const dir = ops.stat(path.dirname(target));
+    if (dir.uid === 0) return;
+    ops.lchown(target, dir.uid, dir.gid);
+  };
+  const creates = flags => (typeof flags === "string" ? /[wa]/.test(flags) : typeof flags === "number" && (flags & fs.constants.O_CREAT) !== 0);
+  for (const [name, at] of MAKERS) {
+    const orig = fs[name];
+    if (typeof orig !== "function") continue;
+    saved.push([fs, name, orig]);
+    fs[name] = function (...a) {
+      const r = orig.apply(this, a);
+      const target = a[at];
+      if (!there(target) || (name === "openSync" && !creates(a[1]))) return r;
+      try {
+        const t = String(target instanceof URL ? target.pathname : target);
+        // mkdirSync({recursive}) answers the first folder it made: each one from there down is given back, the outer first
+        const first = typeof r === "string" ? r.replace(/^\\\\\?\\/, "") : ""; // (Windows answers with a \\?\ prefix)
+        const made = name === "mkdirSync" && first ? (() => { const chain = []; for (let p = t; p.length >= first.length; p = path.dirname(p)) { chain.unshift(p); if (p === first || path.dirname(p) === p) break; } return chain; })() : [t];
+        for (const p of made) giveBack(p);
+      } catch { /* left as it is: housekeeping gives it back */ }
+      return r;
+    };
+  }
 }

@@ -31,13 +31,17 @@ test("issue #157: git as root in the factory user's home is refused however it n
     ["git", ["-c", "safe.directory=*", "-C", CHECKOUT, "worktree", "add", "/tmp/x"], {}],
     ["git", ["clone", "-q", "https://github.com/o/r.git", `${HOME}/factory-driver/r`], { cwd: "/root" }],
     ["git", ["-C", "/root", "clone", "--depth", "1", "https://github.com/o/r.git", "../home/godspeed-forge/r2"], {}],
+    ["git", ["config", "--file", `${CHECKOUT}/.git/config`, "--add", "x.y", "z"], { cwd: "/" }], // a path named anywhere in its arguments
+    ["git", ["-C", "/var/lib/x", "worktree", "add", `${HOME}/lap`], {}],
+    ["git", ["-C", "/var/lib/x", "diff", `--output=${HOME}/out.diff`], {}],
+    ["git", ["clone", "-q", CHECKOUT, "/var/lib/x/repo"], { cwd: "/" }], // root's git names nothing there, not even to read it
   ]) assert.match(rootGitRefusal(file, args, opts, AS_ROOT), /^refused: git .* as root in \/home\/godspeed-forge.*it runs as godspeed-forge \(runuser -u godspeed-forge --\), never as root/, `${file} ${args.join(" ")}`);
   for (const [file, args, opts] of [
     ["runuser", ["-u", "godspeed-forge", "--", "git", "-C", CHECKOUT, "fetch"], {}], // wrapped: the factory user's own git
     ["ip", ["netns", "exec", "godspeed-forge", "runuser", "-u", "godspeed-forge", "--", "git", "-C", CHECKOUT, "fetch"], {}],
     ["git", ["-C", "/usr/local/lib/godspeed-forge/godspeed-dev", "pull", "--ff-only"], {}], // the release records: root's own clone
     ["git", ["-C", "/var/lib/godspeed-keep-main-green/product.git", "fetch"], {}], // a step's own clone
-    ["git", ["clone", "-q", CHECKOUT, "/var/lib/x/repo"], { cwd: "/" }], // reading the checkout to clone it elsewhere writes nothing there
+    ["git", ["-C", "/var/lib/x", "push", "origin", "HEAD:refs/heads/fix/a-b", "https://github.com/o/r.git"], {}], // refs and addresses are no folders
     ["git", ["-C", "/home/godspeed-forgery", "status"], {}], // only the home itself, not a name that starts like it
     ["chown", ["-R", "godspeed-forge:", CHECKOUT], {}], // not git
   ]) assert.equal(rootGitRefusal(file, args, opts, AS_ROOT), "", `${file} ${args.join(" ")}`);
@@ -52,6 +56,9 @@ test("issue #157: git as root in the factory user's home is refused however it n
     ["bash", ["-lc", "git status --short"], { cwd: CHECKOUT }],
     ["env", ["-i", "PATH=/usr/bin", "bash", "-c", `git config --file "${CHECKOUT}/.git/config" --get remote.origin.url`], {}],
     [`git -C ${CHECKOUT} merge origin/main`, [], { shell: true }],
+    ["bash", ["-c", "cd \"$FD_FORGE_HOME/godspeed-mission-control\"; git checkout main"], { env: { FD_FORGE_HOME: HOME } }], // the home through the environment
+    ["bash", ["-c", "cd ${FD_FORGE_HOME}/querino && git pull"], { env: { FD_FORGE_HOME: HOME } }],
+    ["sh", ["-c", "cd ~/godspeed-mission-control && git status"], { env: { HOME } }],
   ]) assert.match(rootGitRefusal(file, args, opts, AS_ROOT), /^refused: a shell command that runs git as root names \/home\/godspeed-forge/, `${file} ${args.join(" ")}`);
   for (const [file, args] of [
     ["runuser", ["-u", "godspeed-forge", "--", "bash", "-c", `git -C ${CHECKOUT} fetch`]], // wrapped
@@ -130,6 +137,41 @@ test("issue #157: in the driver's process the guard stands in front of child_pro
   assert.equal(spawnSync("git", ["-C", repo, "status", "--short"]).status, 0, "taken off: git runs there again");
   assert.equal(enforceCheckoutGuard(FORGE, { root: false })(), undefined, "not root: nothing is put in front");
   assert.equal(cp.spawnSync, spawnSync);
+});
+
+test("issue #157: a file the driver's root process makes in the factory user's home is given to the owner of its folder at once: the stage step's STOP, made or written again through a temporary file; a folder of root's keeps root's", async () => {
+  const { createStop, removeStop } = await import("../steps/release/auto-stage.mjs");
+  const home = tmp(), checkout = path.join(home, "godspeed-mission-control"), factory = path.join(checkout, ".factory"), rootsOwn = path.join(home, "root-only");
+  fs.mkdirSync(factory, { recursive: true }); fs.mkdirSync(rootsOwn);
+  // what only root sees: everything this process makes comes out root's (uid 0); the factory user's folders are uid 1001
+  const given = new Map(), chowned = [];
+  const key = p => path.resolve(String(p));
+  const fsOps = {
+    lstat: p => ({ uid: given.has(key(p)) ? given.get(key(p)) : 0 }),
+    stat: p => ({ uid: key(p) === key(rootsOwn) ? 0 : given.get(key(p)) ?? 1001, gid: 1001 }),
+    lchown: (p, uid, gid) => { chowned.push([path.relative(home, p).replace(/\\/g, "/"), uid, gid]); given.set(key(p), uid); },
+  };
+  const off = enforceCheckoutGuard({ user: "factory-test", home }, { root: true, log: () => {}, fsOps });
+  try {
+    assert.equal(createStop(path.join(factory, "STOP"), Date.parse("2026-11-24T13:00:00Z")), true, "the stage step's own STOP code");
+    assert.deepEqual(chowned, [["godspeed-mission-control/.factory/STOP", 1001, 1001]]);
+    // the stage step's other way of writing it: a temporary file renamed over it
+    const tmpFile = path.join(factory, `STOP.${process.pid}.tmp`);
+    fs.writeFileSync(tmpFile, "auto-stage 1 x\n"); given.delete(key(path.join(factory, "STOP")));
+    fs.renameSync(tmpFile, path.join(factory, "STOP"));
+    assert.deepEqual(chowned.slice(1).map(c => c[0]), [`godspeed-mission-control/.factory/STOP.${process.pid}.tmp`, "godspeed-mission-control/.factory/STOP"]);
+    // folders made in one go, the outer first; a file opened to be written; nothing outside the home; a folder of root's keeps its files
+    chowned.length = 0;
+    fs.mkdirSync(path.join(home, "work", "a", "b"), { recursive: true });
+    const fd = fs.openSync(path.join(home, "work", "log.txt"), "a"); fs.closeSync(fd);
+    fs.writeFileSync(path.join(rootsOwn, "kept.txt"), "x");
+    const outside = path.join(tmp(), "elsewhere.txt"); fs.writeFileSync(outside, "x");
+    assert.deepEqual(chowned.map(c => c[0]), ["work", "work/a", "work/a/b", "work/log.txt"]);
+    assert.equal(removeStop(path.join(factory, "STOP")), true, "and it still removes its own STOP");
+  } finally { off(); }
+  chowned.length = 0;
+  fs.writeFileSync(path.join(home, "after.txt"), "x");
+  assert.deepEqual(chowned, [], "taken off with the guard");
 });
 
 test("issue #157: an acting run and a dead-man repair run have the factory's checkouts read-only, and their briefs say where they work instead", () => {
