@@ -18,8 +18,8 @@ import { tokenFor, missingRecords, forgeState, factoryLogins } from "./owner/acc
 import { projectAgent, agentProgram, detectAgent } from "./owner/agent.mjs";
 import { githubClient, repoPath } from "./owner/github.mjs";
 import { DEFAULT_STATE, forgePaths, readQuestions, saveQuestions, withLock, writeWaiting, setUpProjects, projectName, nowMs, iso, hasAppDetails } from "./owner/records.mjs";
-import { parseQuestions, pickIssue, openedBy, classify, agentPrompt, readAgentAnswer, fallbackWords, fallbackFor, OWNER_LABEL, idOf } from "./owner/questions.mjs";
-import { questionMessage, questionsGone } from "./owner/words.mjs";
+import { parseQuestions, pickIssue, openedBy, classify, decidesQuestion, agentPrompt, readAgentAnswer, fallbackWords, fallbackFor, OWNER_LABEL, idOf } from "./owner/questions.mjs";
+import { questionMessage, questionsGone, questionDecided } from "./owner/words.mjs";
 import { runAs } from "./owner/run.mjs";
 
 // forOwner: what the owner reads when this step is not working (never its internal name)
@@ -104,12 +104,18 @@ async function lookAt(ctx, gs, state, project, now) {
   const agent = fresh.length ? projectAgent(ctx.settings, project, state, { detect: (ctx.impl && ctx.impl.detectAgent) || detectAgent }) : null;
   let comments = null;
   const decided = new Map();
-  for (const pq of fresh) {
-    if (!known.has(pq.key)) {
-      comments ||= await gh.list(`${repoPath(repository)}/issues/${issue.number}/comments`, 5);
-      const answered = comments.some(c => /^\s*Owner decision\b/.test(String(c.body || "")) && (new RegExp(`question\\s+${pq.number}\\b`).test(String(c.body)) || String(c.body).includes(pq.heading)));
-      if (answered) { decided.set(pq.key, { status: "answered-elsewhere" }); continue; }
+  // a question the owner, or the manager, already settled on GitHub is never sent, and one sent is withdrawn
+  const open = parsed.filter(x => !known.has(x.key) || ["pending", "told"].includes(known.get(x.key).status));
+  if (open.length) {
+    comments = await gh.list(`${repoPath(repository)}/issues/${issue.number}/comments`, 5);
+    for (const pq of open) {
+      const rec = known.get(pq.key);
+      const ours = rec && rec.qid ? String(rec.qid) : null;
+      if (comments.some(c => !(ours && String(c.body || "").includes(ours)) && decidesQuestion(c, pq, who.logins))) decided.set(pq.key, { status: "answered-elsewhere" });
     }
+  }
+  for (const pq of fresh) {
+    if (decided.has(pq.key)) continue;
     let kind = classify(pq);
     let words = null, asked = false;
     if (kind !== "how") {
@@ -136,6 +142,13 @@ async function lookAt(ctx, gs, state, project, now) {
       }
       Object.assign(rec, { issue: issue.number, openedBy: openedBy(issue), number: pq.number, heading: pq.heading, options: pq.options });
       const d = decided.get(pq.key);
+      if (rec.status === "told" && d && d.status === "answered-elsewhere") {
+        rec.status = "withdrawn"; rec.withdrawnAt = iso(now); rec.withdrawnFor = "decided";
+        await saveQuestions(state, q);
+        await gs.sendToOwner(questionDecided(repository, rec.handle), { id: `forge-question-decided-${rec.qid}` });
+        said.push(`${rec.handle} withdrawn, already decided`);
+        continue;
+      }
       if (rec.status !== "pending" || !d) continue;
       if (d.status === "answered-elsewhere") { rec.status = "answered-elsewhere"; continue; }
       let kind = d.kind;
@@ -152,7 +165,7 @@ async function lookAt(ctx, gs, state, project, now) {
       const words = d.words || fallbackWords(pq);
       const handle = rec.handle || `F${q.next++}`;
       rec.handle = handle;
-      const text = questionMessage(repository, handle, words, { deadline: pq.deadline, fallback: fallbackFor(pq), link: issue.html_url || null });
+      const text = questionMessage(repository, handle, words, { deadline: pq.deadline, fallback: fallbackFor(pq), recommended: pq.recommended, link: issue.html_url || null });
       await saveQuestions(state, q); // the handle is kept before anything is sent
       await gs.sendToOwner(text, { id: `forge-question-${rec.qid}` });
       const about = words.question || words.example || pq.heading.replace(/\s*\([^)]*#\d+[^)]*\)/g, "").trim();

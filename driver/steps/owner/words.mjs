@@ -89,12 +89,13 @@ export const answerWords = {
 // The one message for a question of what the software should do. w: { example, choices[] }; deadline: ms or
 // null; fallback: what the factory does without an answer (null when it waits).
 // link: the question on GitHub, given only when nothing of it could be put in everyday words.
-export function questionMessage(repository, handle, w, { deadline = null, fallback = null, link = null } = {}) {
+export function questionMessage(repository, handle, w, { deadline = null, fallback = null, link = null, recommended = null } = {}) {
   const lines = [`${N(repository)} has a question for you (${handle}).`];
   if (w.question) lines.push(w.question);
   if (w.example) lines.push(w.example);
   if (!w.question && !w.example) lines.push(link ? `I could not put it in everyday words, so here it is as the factory wrote it: ${link}` : "I could not put it in everyday words.");
   (w.choices || []).forEach((c, i) => lines.push(`${i + 1}. ${c}`));
+  if (recommended && recommended <= (w.choices || []).length) lines.push(`I suggest ${recommended}.`);
   if (fallback && deadline) lines.push(`If you do not answer by ${when(deadline)}, it will ${fallback}.`);
   else if (fallback) lines.push(`If you do not answer, it will ${fallback}.`);
   else lines.push("It waits for your answer.");
@@ -103,6 +104,8 @@ export function questionMessage(repository, handle, w, { deadline = null, fallba
   lines.push(n ? `Reply ${orList(picks)}, or "${handle}" and your answer in your own words.` : `Reply "${handle}" and your answer in your own words.`);
   return lines.join("\n");
 }
+// a question already told, then decided on GitHub
+export const questionDecided = (repository, handle) => `${N(repository)} no longer needs your answer to ${handle}: it was already decided, so you can leave it.`;
 export const questionsGone = repository => `The ${N(repository)} factory is waiting for a decision from you, but its list of questions for you is gone, so I cannot pass the question on. I will tell you as soon as it asks again.`;
 
 // ---------------------------------------------------------------- a finished release
