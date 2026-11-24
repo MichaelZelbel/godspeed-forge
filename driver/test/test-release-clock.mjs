@@ -241,3 +241,38 @@ test("ticket 01: the state file lost while the look cannot be read and the relea
   assert.deepEqual(byClock(s).map(l => [l.minute, l.provider]), [[20, "codex"], [40, "claude"]], "no new ladder: rung 1 not again, rung 2 at 40 on the other AI");
   assert.deepEqual(s.requests.map(r => r.minute), [60]);
 });
+
+test("ticket 01: after a lost state file the next acting run gets a new unit, never the first one's again, and launches", async () => {
+  const s = server({ answers: { 1: LIE } });
+  const acts = path.join(s.root, "acts");
+  s.env = { ...s.env, ACT: { ...s.env.ACT, ACT_DIR: acts } };
+  const launch = s.deps.launchAct;
+  s.deps.launchAct = (e, a, o) => { const dir = path.join(a.ACT_DIR, o.unit); if (fs.existsSync(path.join(dir, "job.json"))) throw new Error(`${o.unit} was launched before`); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, "job.json"), "{}"); launch(e, a, o); };
+  for (let m = 0; m <= 30; m += 5) await s.round(m);
+  fs.rmSync(path.join(s.env.STATE_DIR, "state.json"));
+  for (let m = 35; m <= 45; m += 5) await s.round(m);
+  const runs = byClock(s);
+  assert.deepEqual(runs.map(l => l.minute), [20, 40]);
+  assert.notEqual(runs[0].unit, runs[1].unit, "a new unit name");
+  assert.ok(!s.log().some(e => e.kind === "acting run launch failed"));
+});
+
+test("ticket 01: one of the release's files that cannot be read never hides a change in the other", async () => {
+  const s = server({ answers: { 1: LIE } });
+  s.deps.releaseFiles = () => (s.at() >= 35 ? { autoStage: null, staging: { status: "staged", stagedAt: "2026-11-23T21:35:00Z" }, unread: { stage: "state.json cannot be read" } } : { autoStage: { blocked: {} }, staging: null });
+  for (let m = 0; m <= 60; m += 5) await s.round(m);
+  assert.deepEqual(byClock(s).map(l => l.minute), [20, 50], "the staging record changed at 35 (the state file unreadable beside it): no rung 2 at 40, a new ladder from the change");
+});
+
+test("ticket 01: a notice that reached nobody is not counted as told: it is sent again the next round", async () => {
+  const s = server({ answers: { 1: LIE } });
+  const blocker = path.join(s.root, "not-a-folder"); fs.writeFileSync(blocker, "x");
+  let down = true;
+  s.env = { ...s.env, NOTICES_FILE: path.join(blocker, "notices.json") }; // Godspeed's queue cannot be written
+  s.deps.deliver = { telegram: async text => (down ? { ok: false, why: "telegram down" } : (s.told.push({ minute: s.at(), text }), { ok: true, receipt: "42" })), issue: () => ({ ok: false, why: "no watch repository" }) };
+  for (let m = 0; m <= 60; m += 5) await s.round(m);
+  assert.ok(s.log().some(e => e.kind === "told Michael: nothing delivered, kept"));
+  assert.ok(!s.log().some(e => e.kind === "told Michael"));
+  down = false; await s.round(65);
+  assert.equal(s.told.filter(t => /about an hour/.test(t.text)).length, 1, "the next round it reached him");
+});

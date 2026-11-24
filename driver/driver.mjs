@@ -187,11 +187,10 @@ export async function round(env, deps = {}) {
         `its staging record: ${JSON.stringify(files.staging || null).slice(0, 800)}`,
         (k.held || []).length ? `held earlier by: ${k.held.join("; ")}` : "nothing checkable runs for it: no GitHub run on its candidate, release branch or version pull request, no STOP file, no freeze, install or check program",
         `the driver's release clock: still for ${k.minutes} minutes; an acting run at ${STANDSTILL.helperMinutes}, the other AI at ${STANDSTILL.otherAiMinutes}, the repair program and the owner at ${STANDSTILL.repairMinutes}. This is rung ${rung}.`] };
-      const n = (state.seq[`act:${entryId}`] || 0) + 1; state.seq[`act:${entryId}`] = n;
-      const unit = `factory-act-${crypto.createHash("sha1").update(entryId).digest("hex").slice(0, 10)}-${n}`;
+      const unit = nextActUnit(entryId);
       try {
         (deps.launchAct || launchAct)(env, env.ACT, { unit, entry, provider, tried: sc.tries || [] });
-        state.acts[`${entryId}#${n}`] = { unit, provider, rung, startedAt: nowIso2, standstill: k.id, fp: sc.fp };
+        state.acts[`${entryId}#${unit}`] = { unit, provider, rung, startedAt: nowIso2, standstill: k.id, fp: sc.fp };
         state.actRuns.push({ at: now, entry: entryId, provider });
         if (rung === 1) sc.rung1Provider = provider;
         (sc.launches ||= []).push({ rung, provider, at: nowIso2 });
@@ -202,17 +201,29 @@ export async function round(env, deps = {}) {
       }
     };
     let clockProviders = [];
+    // An acting run's unit name: the entry's hash and the next number, past every number a run folder already holds, so a lost
+    // state file never makes a second run collide with the first ("launched before")
+    const nextActUnit = entryId => {
+      const base = `factory-act-${crypto.createHash("sha1").update(entryId).digest("hex").slice(0, 10)}`;
+      let n = (state.seq[`act:${entryId}`] || 0) + 1;
+      while (env.ACT && env.ACT.ACT_DIR && fs.existsSync(path.join(env.ACT.ACT_DIR, `${base}-${n}`, "job.json"))) n++;
+      state.seq[`act:${entryId}`] = n;
+      return `${base}-${n}`;
+    };
     // The release's state now, as the clock sees it: a look that cannot be read and a file that cannot be read are taken as the
     // clock's last (unchanged), never as a change, so an unreadable source never resets or stops it. -> {look, files, fp, unread}
     // Each part is compared on its own: a part that can be read and changed is a change, a part that cannot be read is the
     // clock's last (with the state file lost, the journal's). -> {look (text, for the helpers), files, parts, fp, unread}
     const stateNow = (id, prev, text, known, about, journal) => {
-      let files = null, unread = null;
-      try { files = (deps.releaseFiles || readReleaseFiles)(env, id); } catch (e) { unread = String(e.message).slice(0, 200); }
-      const read = partsOf({ look: known && about ? text : "", autoStage: files ? files.autoStage : null, staging: files ? files.staging : null });
-      const parts = mergeParts({ look: known ? read.look : null, stage: files ? read.stage : null, staging: files ? read.staging : null }, (prev && prev.parts) || (journal && journal.parts) || null);
+      let got = null, unread = null;
+      try { got = (deps.releaseFiles || readReleaseFiles)(env, id); } catch (e) { got = { autoStage: null, staging: null, unread: { stage: String(e.message).slice(0, 200), staging: String(e.message).slice(0, 200) } }; }
+      const bad = got.unread || {}; // each file on its own: one that cannot be read never hides a change in the other
+      unread = [bad.stage, bad.staging].filter(Boolean).join("; ") || null;
+      const read = partsOf({ look: known && about ? text : "", autoStage: got.autoStage, staging: got.staging });
+      const parts = mergeParts({ look: known ? read.look : null, stage: bad.stage ? null : read.stage, staging: bad.staging ? null : read.staging }, (prev && prev.parts) || (journal && journal.parts) || null);
       const look = known ? (about ? text : "") : (prev && typeof prev.lookText === "string" ? prev.lookText : "");
-      if (!files) files = (prev && prev.files) || { autoStage: null, staging: null };
+      const last = (prev && prev.files) || { autoStage: null, staging: null };
+      const files = { autoStage: bad.stage ? last.autoStage : got.autoStage, staging: bad.staging ? last.staging : got.staging };
       return { look, files, unread, parts, fp: fpOf(parts) };
     };
     // What is the release's own work, for what a helper names (standstill.mjs ownedBy): its repository and version, auto-stage's
@@ -709,8 +720,9 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
           const a2 = await applyReport(env, { id: `standstill:${k.id}` }, { text, key: `tell:${nid}`, about: title }, { kind: "tell-michael", state, gated: true });
           const n2 = await sendNotice(env, nid, title, text, now, deps.deliver, [`standstill:${k.id}`]);
           appendEvents(journalFile, [n2]);
-          sc.done.notice = true;
-          record({ kind: "told Michael", entries: [`standstill:${k.id}`], minutes: k.minutes, by: "the release clock", queue: !a2.failed.length, receipts: n2.receipts, failed: n2.failed });
+          const delivered = !a2.failed.length || Object.keys(n2.receipts || {}).length > 0; // nothing delivered anywhere: tried again next round
+          if (delivered) sc.done.notice = true;
+          record({ kind: delivered ? "told Michael" : "told Michael: nothing delivered, kept", entries: [`standstill:${k.id}`], minutes: k.minutes, by: "the release clock", queue: !a2.failed.length, receipts: n2.receipts, failed: n2.failed });
         }
       }
       const taken = Object.keys(sc.done).filter(s => sc.done[s] && !doneBefore[s]).map(step => { const l = ["helper", "other"].includes(step) ? [...(sc.launches || [])].reverse().find(x => x.rung === (step === "helper" ? 1 : 2)) : null; return { t: "clock-step", release: k.id, fp: sc.fp, step, ...(l ? { provider: l.provider } : {}), at: iso(now) }; });
@@ -735,9 +747,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     if (L && !dry) {
       L.c.launched = true; L.c.launchedAt = now; // one launch per rung, whatever happens
 
-      const n = (state.seq[`act:${L.entry.id}`] || 0) + 1;
-      const unit = `factory-act-${crypto.createHash("sha1").update(L.entry.id).digest("hex").slice(0, 10)}-${n}`;
-      state.seq[`act:${L.entry.id}`] = n;
+      const unit = nextActUnit(L.entry.id);
       try {
         if (!provider) throw new Error("no AI provider is reachable for an acting run");
         (deps.launchAct || launchAct)(env, env.ACT, { unit, entry: L.entry, provider, tried: L.c.tries || [] });
@@ -1007,10 +1017,13 @@ export async function stageLookReal(env) {
 
 // The release's own files for its clock, read now: its auto-stage state (the stage step's state.json) and its staging record.
 // A file that is not there is null; one that cannot be read throws (the clock concludes nothing from it this round).
+// Each file on its own: one that cannot be read is named in `unread` ({stage, staging}) and the other still counts.
 export function readReleaseFiles(env, id) {
-  const read = f => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { if (e && e.code === "ENOENT") return null; throw new Error(`${f} cannot be read: ${e.message}`); } };
-  const st = env.AUTO_STAGE_STATE ? read(env.AUTO_STAGE_STATE) : null;
-  return { autoStage: ((st && st.releases) || {})[id] || null, staging: env.RELEASES_DIR ? read(path.join(env.RELEASES_DIR, id, "staging.json")) : null };
+  const unread = {};
+  const read = (f, part) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { if (e && e.code === "ENOENT") return null; unread[part] = `${f} cannot be read: ${e.message}`; return null; } };
+  const st = env.AUTO_STAGE_STATE ? read(env.AUTO_STAGE_STATE, "stage") : null;
+  const staging = env.RELEASES_DIR ? read(path.join(env.RELEASES_DIR, id, "staging.json"), "staging") : null;
+  return { autoStage: ((st && st.releases) || {})[id] || null, staging, ...(Object.keys(unread).length ? { unread } : {}) };
 }
 
 // Is the release's plan still approved? A plan that cannot be read counts as still approved (unknown is not a change).

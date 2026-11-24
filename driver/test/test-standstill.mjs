@@ -160,3 +160,15 @@ test("a lost state file while a source cannot be read: the journal's state stand
   assert.notEqual(fpOf(moved), journal.fp);
   assert.equal(tick(null, { fp: fpOf(moved), work: [], now: T0 + 35 * MIN, lastRoundAt: T0 + 30 * MIN, journal }).clock.done.helper, undefined, "a new ladder");
 });
+
+test("the release's files are read each on its own: a corrupt auto-stage state never hides the staging record", async () => {
+  const { readReleaseFiles } = await import("../driver.mjs");
+  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clock-files-"));
+  fs.writeFileSync(path.join(dir, "state.json"), "{ corrupt");
+  fs.mkdirSync(path.join(dir, "releases", ID), { recursive: true });
+  fs.writeFileSync(path.join(dir, "releases", ID, "staging.json"), JSON.stringify({ status: "staged" }));
+  const r = readReleaseFiles({ AUTO_STAGE_STATE: path.join(dir, "state.json"), RELEASES_DIR: path.join(dir, "releases") }, ID);
+  assert.deepEqual([r.autoStage, r.staging, !!(r.unread && r.unread.stage), !!(r.unread && r.unread.staging)], [null, { status: "staged" }, true, false]);
+});
+
