@@ -305,6 +305,14 @@ export function advance(entries, chain0, now, opts = {}) {
     // An entry goes up a rung only after that rung's actor ACTUALLY RAN on it and ended without a milestone (or crashed, or timed
     // out). Waiting in line for the one-at-a-time slot is not a failed attempt. (Older state that climbed on the clock alone is put back.)
     const tried = rung => (c.tries || []).some(t => t.rung === rung);
+    // An acting run that explicitly asked the owner has already sent its notice. Keep that exact
+    // hold until the source records an answer or other meaningful milestone; do not turn a one-rung
+    // owner hold back into fresh on-call work on the next inventory pass.
+    if (c.ownerHold) {
+      c.rung = e.backlog ? 1 : 3; c.launched = true; c.told = true;
+      rows.push({ entry: e, rung: c.rung, deadline: Infinity, action: null, told: true, c });
+      chain[e.id] = c; continue;
+    }
     // Backlog (needs-owner pull requests and queue items that belong to no approved release) is a queue with a known next action: the
     // next budget window. It never goes to Michael, however long it waits or whatever the budget says; after both actors tried, the cycle
     // starts again after a day. Only an approved release and the machinery's own entries may reach him.

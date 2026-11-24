@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { prompt, launchAct, actResult, resultOf, queueNotice, markHandled, actDefaults, SIGN } from "../onduty.mjs";
+import { prompt, launchAct, actResult, resultOf, queueNotice, markHandled, actDefaults, runJob, SIGN } from "../onduty.mjs";
 
 const entry = { id: "ticket:r#1", kind: "ticket", title: "one (#1)", evidence: ["no milestone since X"] };
 test("the brief carries the stuck item, what earlier runs tried, the tools, and the never-list (never a cut, never outward, never Michael's word)", () => {
@@ -18,6 +18,7 @@ test("an acting run is a transient unit that outlives the round; its result is r
   const calls = [];
   const l = launchAct({}, a, { unit: "factory-act-abc-1", entry, provider: "claude", tried: [] }, (c, args) => { calls.push([c, ...args]); return { status: 0 }; });
   assert.equal(l.provider, "claude"); assert.equal(l.model, a.CLAUDE_MODEL);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "factory-act-abc-1", "job.json"))).notices, a.NOTICES, "the configured notice queue is carried into the isolated job");
   assert.ok(calls[0].includes("--unit=factory-act-abc-1") && calls[0].includes("--collect") && calls[0].includes("--run"));
   assert.throws(() => launchAct({}, a, { unit: "factory-act-abc-1", entry, provider: "codex" }, () => ({ status: 0 })), /launched before/);
   assert.throws(() => launchAct({}, a, { unit: "bad unit", entry, provider: "codex" }), /not an acting unit/);
@@ -54,4 +55,20 @@ test("review findings: the notice queue has one writer at a time, and the stuck 
 test("an acting run is told not to interfere with work that is visibly running, and answers in-progress", () => {
   const p = prompt({ kind: "release", title: "t", evidence: [] }, [], "/x");
   assert.match(p, /do not interfere: report RESULT: in-progress/); assert.equal(resultOf("scenarios are running\nRESULT: in-progress"), "in-progress");
+});
+
+test("both acting providers receive only the configured notice path, not the driver's credentials", () => {
+  for (const provider of ["claude", "codex"]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `act-${provider}-`));
+    const notice = path.join(dir, "configured-notices.json");
+    fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify({ provider, model: "m", brain: dir, prompt: "p", factoryHome: path.join(dir, "factory"), claudeBin: "/bin/claude", actDir: dir, notices: notice, minutes: 1 }));
+    let childEnv;
+    runJob(dir, (_cmd, args, options) => {
+      childEnv = options.env;
+      if (provider === "codex") fs.writeFileSync(args[args.indexOf("-o") + 1], "RESULT: resolved");
+      return { status: 0, stdout: provider === "claude" ? "RESULT: resolved" : "", stderr: "" };
+    });
+    assert.equal(childEnv.FD_ACT_NOTICES, notice, `${provider} gets the configured queue`);
+    assert.equal(childEnv.GITHUB_TOKEN, undefined); assert.equal(childEnv.GH_TOKEN, undefined); assert.equal(childEnv.OPENROUTER_API_KEY, undefined);
+  }
 });

@@ -119,7 +119,7 @@ export function launchAct(env, a, { unit, entry, provider, tried = [], mode = "r
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const model = provider === "claude" ? a.CLAUDE_MODEL : a.CODEX_MODEL;
   const self = path.posix.join(HERE, "onduty.mjs");
-  fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify({ unit, provider, model, brain: a.BRAIN, prompt: prompt(entry, tried, self, a), factoryHome: a.FACTORY_HOME, claudeBin: a.CLAUDE_BIN, actDir: a.ACT_DIR, minutes: a.RUN_MINUTES, startedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify({ unit, provider, model, brain: a.BRAIN, prompt: prompt(entry, tried, self, a), factoryHome: a.FACTORY_HOME, claudeBin: a.CLAUDE_BIN, actDir: a.ACT_DIR, notices: a.NOTICES, minutes: a.RUN_MINUTES, startedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
   const r = spawn(a.SYSTEMD_RUN, [`--unit=${unit}`, "--collect", "--quiet", `--description=Godspeed factory driver: acting run (${provider} ${model})`,
     "-p", `RuntimeMaxSec=${a.RUN_MINUTES * 60 + 120}`, "-p", "TimeoutStopSec=30", ...sandboxProps(a, mode).flatMap(p => ["-p", p]), "--setenv=HOME=/root", "--setenv=LANG=C.UTF-8", `--setenv=PATH=${ROOT_PATH}`,
     a.NODE, self, "--run", dir], { encoding: "utf8" });
@@ -137,7 +137,7 @@ export function actResult(env, a, unit, active = u => spawnSync("systemctl", ["i
 }
 
 // ---------------------------------------------------------------- the run (inside the unit)
-function runJob(dir) {
+export function runJob(dir, spawn = spawnSync) {
   const job = readJson(path.join(dir, "job.json"), null);
   if (!job) throw new Error("no job");
   const last = path.join(dir, "last.txt");
@@ -145,15 +145,15 @@ function runJob(dir) {
   if (job.provider === "claude") {
     const home = path.join(job.actDir, "claude-home"); fs.mkdirSync(home, { recursive: true });
     for (const [from, to] of [[`${job.factoryHome}/.claude/.credentials.json`, ".credentials.json"], [`${job.factoryHome}/.claude.json`, ".claude.json"]]) if (!fs.existsSync(path.join(home, to))) { try { fs.symlinkSync(from, path.join(home, to)); } catch {} }
-    r = spawnSync(job.claudeBin, ["-p", "--model", job.model, "--dangerously-skip-permissions"], { input: job.prompt, cwd: job.brain, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20,
-      env: { PATH: `${path.dirname(job.claudeBin)}:${ROOT_PATH}`, HOME: "/root", CLAUDE_CONFIG_DIR: home, IS_SANDBOX: "1", LANG: "C.UTF-8" } });
+    r = spawn(job.claudeBin, ["-p", "--model", job.model, "--dangerously-skip-permissions"], { input: job.prompt, cwd: job.brain, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20,
+      env: { PATH: `${path.dirname(job.claudeBin)}:${ROOT_PATH}`, HOME: "/root", CLAUDE_CONFIG_DIR: home, IS_SANDBOX: "1", LANG: "C.UTF-8", FD_ACT_NOTICES: job.notices } });
     fs.writeFileSync(last, r.stdout || "");
   } else {
     const home = path.join(job.actDir, "codex-home"); fs.mkdirSync(home, { recursive: true });
     const auth = path.join(home, "auth.json"); // root has no Codex login: the factory user's file, linked (a copy would drift when it refreshes)
     if (!fs.existsSync(auth)) fs.symlinkSync(`${job.factoryHome}/.codex/auth.json`, auth);
-    r = spawnSync("codex", ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "danger-full-access", "-m", job.model, "-C", job.brain, "-o", last, "-"],
-      { input: job.prompt, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: ROOT_PATH, HOME: "/root", CODEX_HOME: home, LANG: "C.UTF-8" } });
+    r = spawn("codex", ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "danger-full-access", "-m", job.model, "-C", job.brain, "-o", last, "-"],
+      { input: job.prompt, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: ROOT_PATH, HOME: "/root", CODEX_HOME: home, LANG: "C.UTF-8", FD_ACT_NOTICES: job.notices } });
   }
   let said = ""; try { said = fs.readFileSync(last, "utf8"); } catch {}
   if (!said && r.status !== 0) said = `the ${job.provider} run failed: ${String(r.stderr || "").trim().split("\n").pop()}`;

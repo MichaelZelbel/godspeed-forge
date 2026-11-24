@@ -389,6 +389,17 @@ test("review fixes: a lost run is timed from its launch and recorded as a try; r
   assert.ok(covers({ id: "PAUSE:p", repo: "o/r", what: "w", since: NOW - 30 * H, expiresAt: NaN }), "and keeps covering for as long as it is in place: it is reminded daily");
 });
 
+test("an explicit owner hold stays put without duplicate work, and a meaningful change resumes it", () => {
+  const e = { id: "owner-wait", kind: "pr", owner: "factory loop", title: "waiting for product choice", milestoneAt: NOW - 9 * H, limitH: 1, evidence: [] };
+  const held = { "owner-wait": { rung: 3, rungSince: NOW - 5 * 60000, milestone: NOW - 9 * H, launched: true, told: true, ownerHold: true, tries: [{ rung: 1, result: "notice" }] } };
+  const next = advance([e], held, NOW);
+  assert.equal(next.rows[0].rung, 3); assert.equal(next.actions.launch, null); assert.equal(next.actions.tell.length, 0, "the already queued note is not duplicated");
+  const changed = advance([{ ...e, milestoneAt: NOW + 1 }], next.chain, NOW + 2);
+  assert.equal(changed.rows[0].rung, 0); assert.equal(changed.rows[0].c.ownerHold, undefined, "an answer or evidence milestone resumes normal work");
+  const backlog = advance([{ ...e, backlog: true }], held, NOW);
+  assert.equal(backlog.rows[0].rung, 1, "backlog never sits on the owner rung"); assert.equal(backlog.actions.launch, null, "the explicit hold still prevents another acting run"); assert.equal(backlog.actions.tell.length, 0);
+});
+
 test("backlog is a queue with a known next action: never rung 3, 4 of the 8 daily runs are reserved for releases and machinery, oldest first, a new cycle after a day", () => {
   const bl = (id, h) => ({ id, kind: "pr", backlog: true, owner: "factory loop", title: id, milestoneAt: NOW - h * H, limitH: 1, evidence: [] });
   const mach = { id: "clock", kind: "obstacle", obstacleKind: "clock", owner: null, title: "clock", milestoneAt: NOW, limitH: 0, evidence: [] };
