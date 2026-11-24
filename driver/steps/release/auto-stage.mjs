@@ -985,6 +985,13 @@ async function versionStep({ ctx, version, plan, deferred, rs, save, sayOnce, bl
     save();
   };
   if (!pr) {
+    // main may already carry this version or a newer one (beta.28 merged, not yet installed, while the older
+    // beta.27 is still approved): opening the pull request would move the product back.
+    const onMain = vp.mainVersion ? await vp.mainVersion() : null;
+    if (onMain && G.compareVersions(version, onMain) <= 0) {
+      log(`Superseded: ${version} is approved but not newer than ${onMain}, which main already carries; no version pull request is opened.`);
+      return { outcome: "waiting", why: "superseded by main's version" };
+    }
     const section = versionNotes({ plan, version, deferred });
     const items = deliveredItems(plan, deferred);
     if (dry) {

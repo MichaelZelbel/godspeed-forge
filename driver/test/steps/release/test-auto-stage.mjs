@@ -1384,6 +1384,18 @@ test("a wrong version opens the release step's own pull request once; a crash af
   assert.equal(w.vcalls.filter((c) => c[0] === "open").length, 1);
 });
 
+test("main already at a newer version than the approved release: no version pull request is opened", async () => {
+  const { w, ctx } = versioned();
+  ctx.versionPull.mainVersion = async () => "2.0.0-beta.28";
+  const lines = [];
+  ctx.log = (x) => lines.push(x);
+  const r = await A.autoStage(ctx);
+  assert.equal(r.outcome, "waiting");
+  assert.equal(w.vcalls.filter((c) => c[0] === "open").length, 0, "nothing is opened");
+  assert.ok(lines.some((l) => /Superseded: .* not newer than 2\.0\.0-beta\.28/.test(l)));
+  assert.equal(w.notices.length, 0);
+});
+
 test("the version pull request is approved and merged once its required check passes, then the freeze goes on as always", async () => {
   const { w, ctx } = versioned({ pr: { number: 701, state: "open", merged: false, head: "7".repeat(40), title: "Release step of 2.0.0-beta.25: the version" }, required: "running" });
   assert.equal((await A.autoStage(ctx)).outcome, "waiting");

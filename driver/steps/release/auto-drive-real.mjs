@@ -187,6 +187,13 @@ export function realVersionPull({ cfg, env, log, readmeWith, versionWith }) {
   const repo = cfg.repo;
   return {
     find: async (branch) => builder().hub.findPull(branch),
+    // The version main's notebook/package.json carries now, or null when it cannot be read.
+    mainVersion: async () => {
+      const r = await builder().bapi("GET", `/repos/${repo}/contents/${VERSION_FILE}?ref=main`);
+      if (!r.ok) return null;
+      const m = Buffer.from(r.json.content, "base64").toString("utf8").match(/"version"\s*:\s*"([^"]+)"/);
+      return m ? m[1] : null;
+    },
     // -> {pr, head} | {cannot}
     open: async ({ branch, version, title, body, section, message }) => {
       const { bapi, hub } = builder();
