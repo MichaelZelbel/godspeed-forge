@@ -4,7 +4,7 @@
 // These cases hold the acting run to the Apps' tokens (the real gh and git are asked), its gh and git guard to refusing the
 // owner's login and a finding already on the item, the chain to climbing instead of starting the same run again, and replay
 // that morning: from the comments GitHub has, and through the driver's own rounds.
-// test cases: 16
+// test cases: 17
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process';
 import { testCase } from './cases.mjs';
 import { TEST_ENV } from '../driver/test/env.mjs';
 import {
-  findingOf, findingMarker, findingsIn, stateText, commentOf, findingWhy, ownerWhy, tokenIdentity, decide, prepareAppRun, appVars,
+  findingOf, findingMarker, findingsIn, stateText, commentOf, findingWhy, ownerWhy, tokenIdentity, decide, prepareAppRun, appVars, itemHistory, gitSplit,
   mintAppToken, runRepos, asOwnerObstacles, readGuardLog, GUARD_FILE, AS_OWNER_MINUTES,
 } from '../driver/owner-guard.mjs';
 import { prompt, launchAct, actResult, runJob, sandboxProps, actDefaults, noticeHeld, sameFindingAgain } from '../driver/onduty.mjs';
@@ -74,6 +74,13 @@ testCase('a note is read from every way gh posts one; other calls are not notes'
   assert.ok(commentOf(['api', 'graphql', '-f', 'query=mutation { deleteIssueComment(input: {id: "x"}) { clientMutationId } }'], d).graphql);
   assert.ok(commentOf(['api', 'graphql', '-f', 'query=mutation { minimizeComment(input: {subjectId: "x", classifier: OUTDATED}) { clientMutationId } }'], d).graphql);
   assert.equal(commentOf(['api', '-X', 'POST', `repos/${REPO}/issues/comments/5/reactions`, '-f', 'content=+1'], d), null, 'a reaction is no note');
+  // the repository flag may stand before the command, or between its words
+  assert.deepEqual(commentOf(['-R', REPO, 'pr', 'comment', '895', '--body', 'x'], d), { repo: REPO, number: 895, body: 'x', review: true });
+  assert.deepEqual(commentOf(['pr', '-R', REPO, 'comment', '895', '-b', 'x'], d), { repo: REPO, number: 895, body: 'x', review: true });
+  assert.deepEqual(commentOf(['pr', `--repo=${REPO}`, 'comment', '895', '-b', 'x'], d), { repo: REPO, number: 895, body: 'x', review: true });
+  for (const q of ['mutation { submitPullRequestReview(input: {pullRequestReviewId: "x", event: COMMENT, body: "y"}) { clientMutationId } }',
+    'mutation { dismissPullRequestReview(input: {pullRequestReviewId: "x", message: "y"}) { clientMutationId } }',
+    'mutation { addPullRequestReviewThread(input: {pullRequestId: "x", body: "y"}) { clientMutationId } }']) assert.ok(commentOf(['api', 'graphql', '-f', `query=${q}`], d).graphql, q);
 }
 
 testCase('a note without the run\'s finding line, or with another, is refused; one whose finding is on the item already is refused as unchanged');
@@ -96,9 +103,33 @@ testCase('a note without the run\'s finding line, or with another, is refused; o
     ['a label', { event: 'unlabeled', at }], ['a review', { event: 'reviewed', at, body: '' }], ['a close', { event: 'closed', at }]])
     assert.deepEqual(findingWhy(c(`said again\n${mark}`), { finding: f }, () => [...said, e]), { why: '' }, `${what} after the note: a new state, a new note`);
   assert.match(findingWhy({ repo: REPO, number: 895, body: null, edit: true }, { finding: f }, none).why, /never edited, deleted or hidden/);
+  // the run after a notice decides the item: its decision carries the same finding and is not the finding said again
+  const decision = `Manager decision (Mission Control, on Michael's standing instruction of 2026-11-24): one more repair lap.\n${mark}`;
+  assert.deepEqual(findingWhy(c(decision), { finding: f }, () => quiet), { why: '' });
+  assert.equal(findingWhy(c(decision), { finding: f }, () => [...quiet, { event: 'commented', at: '2026-11-24T06:00:00Z', body: decision }]).unchanged, true, 'the same decision twice is unchanged');
   assert.match(findingWhy(c(`x ${mark}`), { finding: f }, () => { throw new Error('HTTP 502'); }).why, /could not be read \(HTTP 502\); try again/);
   assert.deepEqual(findingWhy(c('anything'), { finding: '' }, none), { why: '' }, 'no finding: no check');
   assert.match(findingWhy({ graphql: true, body: 'x' }, { finding: f }, none).why, /gh issue comment or gh pr comment/);
+}
+
+testCase('with a finding, only gh\'s own commands go through; the head of a pull request arrived when its branch got its first check suite');
+{
+  const root = tmp('commands');
+  const gh = fakeGitHub(root);
+  const f = findingOf(prEntry('x'));
+  const env = cleanEnv({ GH_TOKEN: APP_TOKEN });
+  assert.match(decide('gh', ['c', '895', '--body', 'x'], { finding: f, realGh: gh.realGh }, { env, cwd: root }).why, /gh c is not one of gh's own commands; aliases and extensions are not used here/);
+  assert.match(decide('gh', ['-R', REPO, 'my-extension', 'x'], { finding: f, realGh: gh.realGh }, { env, cwd: root }).why, /not one of gh's own commands/);
+  assert.equal(decide('gh', ['pr', 'view', '895', '-R', REPO], { finding: f, realGh: gh.realGh }, { env, cwd: root }).why, '');
+  assert.equal(decide('gh', ['--version'], { finding: f, realGh: gh.realGh }, { env, cwd: root }).why, '');
+  const s = gh.state();
+  s.pulls = { [`${REPO}#895`]: { head: { sha: 'abc', ref: 'fix-layout' } } };
+  s.suites = { abc: [{ created_at: '2026-11-24T04:00:00Z', head_branch: 'elsewhere' }, { created_at: '2026-11-24T06:10:00Z', head_branch: 'fix-layout' }, { created_at: '2026-11-24T06:20:00Z', head_branch: 'fix-layout' }] };
+  fs.writeFileSync(gh.stateFile, JSON.stringify(s));
+  const events = itemHistory({ env, realGh: gh.realGh })(REPO, 895);
+  assert.deepEqual(events.filter(e => e.event === 'head-arrived'), [{ event: 'head-arrived', at: '2026-11-24T06:10:00Z', body: '' }], 'the first suite on its own branch, not one from before on another');
+  assert.equal(events.filter(e => e.event === 'commented').length, loadFixture().before.length);
+  assert.deepEqual(gitSplit(['-c', 'remote.origin.pushurl=x', '-C', '/r', '--no-pager', 'push', 'origin', 'b']), { pre: ['-c', 'remote.origin.pushurl=x', '-C', '/r', '--no-pager'], cmd: 'push', rest: ['origin', 'b'] });
 }
 
 testCase('whose login: an App\'s token passes without asking GitHub, the owner\'s is refused, one nobody can name is refused');
@@ -191,6 +222,11 @@ testCase('git: a push goes out only over https and never with the owner\'s login
   assert.match(d(['push', 'origin', 'fix']), /pushes only over https/, 'a remote rewritten to ssh');
   assert.match(d(['push', `https://github.com/${REPO}.git`, 'fix']), /pushes only over https/, 'an address rewritten to ssh');
   assert.equal(d(['push', '../elsewhere', 'fix']), '', 'a folder on this machine');
+  git('config', '--unset', 'url.git@github.com:.pushInsteadOf');
+  assert.match(d(['-c', `remote.origin.pushurl=git@github.com:${REPO}.git`, 'push', 'origin', 'fix']), /pushes only over https/, 'a push address given on the command line');
+  assert.match(d(['-c', 'url.git@github.com:.pushInsteadOf=https://github.com/', 'push', `https://github.com/${REPO}.git`, 'fix']), /pushes only over https/, 'a rewrite given on the command line');
+  assert.match(d(['-C', repo, 'push', 'ssh', 'fix']), /pushes only over https/, 'the folder given with -C');
+  assert.equal(d(['-C', repo, 'push', 'origin', 'fix']), '');
   assert.equal(d(['status'], env), '', 'nothing else is asked about');
 }
 

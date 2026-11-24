@@ -13,10 +13,12 @@
 //                    and git found first on PATH as two one-line shims that call this file.
 //   decide()         what the shims (and the factory helpers' guard, release-driver-guard.mjs) ask before a call goes through:
 //                    whose login it would use. An App's token passes; the owner's login is refused, and the refusal is logged
-//                    with owner: true, which the driver turns into an "as-owner" obstacle (asOwnerObstacles). A note on an
-//                    issue or pull request carries the run's finding line (the item and a hash of its state, findingOf); a
-//                    note whose finding is already on that item is refused as unchanged (logged with unchanged: true), and
-//                    the driver records the run as "unchanged" instead of a new finding.
+//                    with owner: true, which the driver turns into an "as-owner" obstacle (asOwnerObstacles). A push goes out
+//                    only over https (over ssh the login is whatever key root holds), judged where git will really send it.
+//                    A note on an issue or pull request carries the run's finding line (the item and a hash of its state,
+//                    findingOf); one whose finding is already on that item, with nothing happened there since but other
+//                    helpers' notes (GitHub's timeline), is refused as unchanged (logged with unchanged: true), and the
+//                    driver records the run as "unchanged" instead of a new finding. A note is never edited or taken back.
 //   mintAppToken()   the App token for the run, made with the token script and the keys file, for this one child.
 //
 //   node owner-guard.mjs --config <guard.json> gh|git <args...>     (the shims)
@@ -25,7 +27,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { flagValue, bodyOf, apiBody, apiPayload, gitCommand } from "./release-driver/release-driver-guard.mjs";
+import { flagValue, bodyOf, apiBody, apiPayload } from "./release-driver/release-driver-guard.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)).replace(/\\/g, "/");
 export const GUARD_FILE = path.posix.join(HERE, "owner-guard.mjs");
@@ -169,7 +171,8 @@ function apiComment(args, cwd) {
   const method = String(explicit || (fields ? "POST" : "GET")).toUpperCase();
   if (endpoint === "graphql") {
     const t = apiPayload(args, cwd);
-    if (t !== null && !(/\bmutation\b/i.test(t) && /\b(add|update|delete|minimize)(Comment|IssueComment|DiscussionComment|PullRequestReview\w*)\b/.test(t))) return null;
+    // any mutation of a comment or a review (add, update, delete, minimize, submit, dismiss, ...) is a note or takes one back
+    if (t !== null && !(/\bmutation\b/i.test(t) && /\b[a-z][A-Za-z]*(?:Comment|Review)[A-Za-z]*\s*\(/.test(t))) return null;
     return { repo: null, number: null, body: t, graphql: true };
   }
   // a note taken away or rewritten: the record of what was found, which "unchanged" reads, would no longer hold
@@ -182,10 +185,22 @@ function apiComment(args, cwd) {
 }
 // A gh call that posts a note on an issue or pull request -> {repo, number, body} (repo or number null when the call does not
 // name them, body null when it cannot be read); null for every other call.
+// The repository flag may stand anywhere, before the command too (gh -R o/r pr comment ...): it is read and taken out.
+function withoutRepo(a) {
+  let repo = null; const out = [];
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    if (x === "-R" || x === "--repo") { repo = a[i + 1] ?? ""; i++; continue; }
+    if (x.startsWith("--repo=")) { repo = x.slice(7); continue; }
+    if (/^-R./.test(x)) { repo = x.slice(2); continue; }
+    out.push(x);
+  }
+  return { args: out, repo: repoOf(repo) };
+}
 export function commentOf(args, cwd) {
-  const a = args.filter(x => x !== undefined).map(String);
+  const all = args.filter(x => x !== undefined).map(String);
+  const { args: a, repo: repoFlag } = withoutRepo(all);
   const [group, sub, ...rest] = a;
-  const repoFlag = repoOf(flagValue(a, ["--repo", "-R"]));
   const target = flags => {
     const pos = positionals(rest, flags);
     const url = pos.map(p => ITEM_URL.exec(p)).find(Boolean);
@@ -218,14 +233,16 @@ export const itemHistory = ({ env = process.env, realGh = "/usr/bin/gh" } = {}) 
     if (!Array.isArray(page) || page.length < 100) break;
   }
   const out = rows.map(e => ({ event: String((e && e.event) || ""), at: eventAt(e), body: String((e && e.body) || "") }));
-  // a commit carries the time it was made, not when it reached the pull request: when its head arrived is when GitHub made
-  // its first check suite
+  // a commit carries the time it was made, not when it reached the pull request: its head arrived when GitHub made the first
+  // check suite for it on the pull request's own branch (a suite from another branch it was on before says nothing about this one)
   const pr = run(realGh, ["api", `repos/${repo}/pulls/${n}`], { env });
   if (pr.status === 0) {
     try {
-      const sha = (JSON.parse(pr.stdout || "{}").head || {}).sha;
-      const cs = sha ? run(realGh, ["api", `repos/${repo}/commits/${sha}/check-suites?per_page=100`], { env }) : { status: 1 };
-      const first = cs.status === 0 ? ((JSON.parse(cs.stdout || "{}").check_suites || []).map(s => s && s.created_at).filter(Boolean).sort()[0]) : null;
+      const head = JSON.parse(pr.stdout || "{}").head || {};
+      const cs = head.sha ? run(realGh, ["api", `repos/${repo}/commits/${head.sha}/check-suites?per_page=100`], { env }) : { status: 1 };
+      const suites = cs.status === 0 ? (JSON.parse(cs.stdout || "{}").check_suites || []).filter(s => s && s.created_at) : [];
+      const mine = suites.filter(s => s.head_branch === head.ref);
+      const first = (mine.length ? mine : suites).map(s => s.created_at).sort()[0];
       if (first) out.push({ event: "head-arrived", at: first, body: "" });
     } catch { /* the timeline alone */ }
   }
@@ -234,6 +251,10 @@ export const itemHistory = ({ env = process.env, realGh = "/usr/bin/gh" } = {}) 
 // Events that change nothing about an item: someone was notified or mentioned.
 const QUIET = new Set(["subscribed", "unsubscribed", "mentioned"]);
 const isNote = e => e.event === "commented" || e.event === "reviewed";
+// A decision is not a finding said again: a note headed "Manager decision" is compared only with earlier decisions of the same
+// finding (the run after a notice decides the item, under the owner's standing instruction, after the finding was posted).
+const DECISION = /^[\s#>*_`~]*manager\s+decision\b/i;
+const kindOf = body => (DECISION.test((String(body || "").split("\n").find(l => l.trim()) || "").trim()) ? "decision" : "finding");
 // -> {why, unchanged?}: why is "" when the note may be posted. cfg.finding: the run's finding ("" = no finding check).
 // history(repo, n) -> the item's events (itemHistory). A finding is unchanged when a note with it is on the item and nothing
 // has happened there since except notes of the driver's helpers (a commit, a label, a person's comment, a review: all new).
@@ -249,7 +270,8 @@ export function findingWhy(c, cfg, history) {
   if (!c.repo || !c.number) return { why: "name the issue or pull request by its number, and the repository with -R <owner/repo>, so the guard can see what is already there" };
   let events;
   try { events = history(c.repo, c.number); } catch (e) { return { why: `what is already on ${c.repo}#${c.number} could not be read (${String(e.message).slice(0, 160)}); try again` }; }
-  const said = events.filter(e => isNote(e) && findingsIn(e.body).includes(cfg.finding)).map(e => Date.parse(e.at)).filter(Number.isFinite);
+  const kind = kindOf(c.body);
+  const said = events.filter(e => isNote(e) && findingsIn(e.body).includes(cfg.finding) && kindOf(e.body) === kind).map(e => Date.parse(e.at)).filter(Number.isFinite);
   if (!said.length) return { why: "" };
   const last = Math.max(...said);
   const moved = events.some(e => Date.parse(e.at) > last && !QUIET.has(e.event) && !(isNote(e) && e.body.includes("factory-driver:")));
@@ -258,6 +280,16 @@ export function findingWhy(c, cfg, history) {
 }
 
 // ---------------------------------------------------------------- the guard
+// gh's own top-level commands (gh 2.x); anything else is an alias or an extension
+const GH_COMMANDS = new Set(["accessibility", "agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "completion", "config", "copilot", "extension", "gist",
+  "gpg-key", "help", "issue", "label", "org", "pr", "preview", "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow"]);
+// git's options before the command and the ones among them that take the next word as their value
+const GIT_TAKES = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--attr-source"]);
+export function gitSplit(a) {
+  let i = 0;
+  while (i < a.length && String(a[i]).startsWith("-")) i += GIT_TAKES.has(String(a[i])) ? 2 : 1;
+  return { pre: a.slice(0, i), cmd: a[i], rest: a.slice(i + 1) };
+}
 // cfg: {owner, finding, repo, realGh, realGit, cache}. -> {why, owner?, unchanged?}
 export function decide(tool, args, cfg = {}, { env = process.env, cwd = process.cwd() } = {}) {
   const realGh = cfg.realGh || "/usr/bin/gh", realGit = cfg.realGit || "/usr/bin/git", cache = cfg.cache || "";
@@ -266,6 +298,9 @@ export function decide(tool, args, cfg = {}, { env = process.env, cwd = process.
     const why = cfg.owner ? ownerWhy(ghIdentity({ env, realGh, cache, cwd }), cfg.owner) : "";
     if (why) return { why, owner: true };
     if (!cfg.finding) return { why: "" };
+    // an alias or an extension could post a note the guard cannot read: only gh's own commands
+    const first = withoutRepo(a).args.find(x => !x.startsWith("-"));
+    if (first && !GH_COMMANDS.has(first)) return { why: `gh ${first} is not one of gh's own commands; aliases and extensions are not used here` };
     const c = commentOf(a, cwd);
     if (c && c.number && !c.repo) {
       // no -R: the repository gh itself would post to (GH_REPO, else the folder's own remote)
@@ -275,11 +310,10 @@ export function decide(tool, args, cfg = {}, { env = process.env, cwd = process.
     return findingWhy(c, cfg, itemHistory({ env, realGh }));
   }
   if (tool === "git") {
-    const g = gitCommand(a);
-    const pushing = g.cmd ? g.cmd === "push" : a.includes("push");
-    if (cfg.owner && pushing) {
-      const pre = g.cmd ? g.pre : [];
-      const rest = g.cmd ? g.rest : a.slice(a.indexOf("push") + 1);
+    // git's own options before the command, every one of them (-c remote.origin.pushurl=..., --git-dir, -C): each question the
+    // guard asks git carries them, so it sees the push exactly as git will make it
+    const { pre, cmd, rest } = gitSplit(a);
+    if (cfg.owner && cmd === "push") {
       const where = pushAddresses(rest, argv => run(realGit, [...pre, ...argv], { env, cwd }));
       const why = pushWhy(where, cfg.owner, { env, realGit, realGh, pre, cwd, cache });
       if (why) return { why, owner: true };
