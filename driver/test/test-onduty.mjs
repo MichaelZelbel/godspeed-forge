@@ -178,3 +178,13 @@ test("the sign-in check asks the smallest model once, in the acting runs' own ho
   const cx = signinCheck({ ...a, LOGIN_CODEX_MODEL: "small" }, "codex", (cmd, args, o) => { calls.push({ cmd, args, o }); return { status: 0, stdout: "OK", stderr: "" }; });
   assert.ok(cx.ok); assert.ok(calls[1].args.includes("small") && calls[1].args.includes("read-only")); assert.equal(calls[1].o.env.CODEX_HOME, loginHome("/acts", "codex"));
 });
+
+test("ticket 01: two repair requests in the same moment (two releases' clocks in one round) are two files, never one written over the other", async () => {
+  const { repairRequest } = await import("../onduty.mjs");
+  const spool = fs.mkdtempSync(path.join(os.tmpdir(), "act-spool-"));
+  const at = new Date("2026-11-24T10:00:00Z");
+  const a = repairRequest({ SPOOL: spool }, "release a", at, { release: "a" }), b = repairRequest({ SPOOL: spool }, "release b", at, { release: "b" });
+  assert.notEqual(a, b);
+  assert.deepEqual(fs.readdirSync(spool).map(n => JSON.parse(fs.readFileSync(path.join(spool, n), "utf8")).release).sort(), ["a", "b"]);
+  assert.ok(fs.readdirSync(spool).every(n => /^repair-.*\.json$/.test(n)), "the names the dead-man reads");
+});

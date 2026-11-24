@@ -258,7 +258,7 @@ do_check() {
     const mine = lines.filter(e => e.entry === `standstill:${RELEASE}` || e.release === RELEASE || (e.entries || []).includes(`standstill:${RELEASE}`));
     const launch = r => mine.find(e => e.kind === "acting run launched" && e.rung === r);
     const repair = mine.find(e => e.kind === "repair requested");
-    const told = mine.find(e => e.kind === "told Michael");
+    const toldAll = mine.filter(e => e.kind === "told Michael"), told = toldAll[0];
     const spool = (() => { try { return fs.readdirSync(SPOOL).filter(n => /^(repair|handled)-.*\.json$/.test(n)); } catch { return []; } })();
     const dm = fs.readFileSync(`${DRILL}/deadman-journal.json`, "utf8").split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
       .map(j => ({ at: Number(j.__REALTIME_TIMESTAMP) / 1000, text: String(j.MESSAGE || "") })).filter(j => /asked for a repair/.test(j.text));
@@ -274,10 +274,10 @@ do_check() {
       ["the other AI launched by minute 40", launch(2) && minute(launch(2).at) <= 40 && launch(2).provider !== launch(1)?.provider, launch(2) && `minute ${minute(launch(2).at)}, ${launch(2).provider}`],
       ["a repair request in the dead-man spool by minute 60", repair && minute(repair.at) <= 60 && spool.length > 0, repair && `minute ${minute(repair.at)}, ${repair.file}`],
       ["read by the dead-man by minute 60", read && minute(read.at) <= 60, read && `minute ${minute(read.at)}`],
-      ["one notice to the owner", !!told, told && `minute ${minute(told.at)}`],
+      ["one notice to the owner, by minute 60", toldAll.length === 1 && minute(told.at) <= 60, told && `minute ${minute(told.at)}, ${toldAll.length} in all`],
     ];
     let ok = true;
-    for (const [what, pass, how] of checks) { console.log(`${pass ? "PASS" : "FAIL"}: ${what}${how ? ` (${how})` : ""}`); if (!pass && !/notice/.test(what)) ok = false; }
+    for (const [what, pass, how] of checks) { console.log(`${pass ? "PASS" : "FAIL"}: ${what}${how ? ` (${how})` : ""}`); if (!pass) ok = false; }
     console.log(ok ? "THE DRILL PASSED" : "THE DRILL FAILED");
     process.exit(ok ? 0 : 1);
   

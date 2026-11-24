@@ -14,6 +14,7 @@
 // them a repair request went to the built-in default spool, which nothing reads, and beta.31 stood still for 19 hours).
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { defaultSettingsDir } from "./settings.mjs";
@@ -131,8 +132,10 @@ export function markHandled(file, repo, heading) {
 // dead-man starts a driver-repair run. -> the file written
 export function repairRequest(a, what, now = new Date(), extra = {}) {
   fs.mkdirSync(a.SPOOL, { recursive: true });
-  const f = path.join(a.SPOOL, `repair-${now.getTime()}.json`);
-  fs.writeFileSync(f, JSON.stringify({ at: now.toISOString(), what: String(what).slice(0, 2000), ...extra }, null, 2) + "\n");
+  // two requests in one moment (two releases' clocks in one round) never share a file: the name carries a random part, and "wx"
+  // refuses to write over one that exists
+  const f = path.join(a.SPOOL, `repair-${now.getTime()}-${crypto.randomBytes(4).toString("hex")}.json`);
+  fs.writeFileSync(f, JSON.stringify({ at: now.toISOString(), what: String(what).slice(0, 2000), ...extra }, null, 2) + "\n", { flag: "wx" });
   return f;
 }
 export class RepairRefused extends Error {}

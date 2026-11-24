@@ -2,7 +2,7 @@ import { TEST_ENV } from "./env.mjs";
 // The release clock's own rules (standstill.mjs); the whole round, beta.31 replayed, is in test-driver.mjs.
 import { test } from "./harness.mjs";
 import assert from "node:assert/strict";
-import { STANDSTILL, normaliseLook, releaseState, inReleaseStep, workFor, tick, nextStep, namedIn, checkNamed, noticeText, repairWords, OWN_UNITS, ownedBy } from "../standstill.mjs";
+import { STANDSTILL, normaliseLook, releaseState, inReleaseStep, workFor, tick, nextStep, namedIn, checkNamed, noticeText, repairWords, OWN_UNITS, ownedBy, partsOf, mergeParts, fpOf } from "../standstill.mjs";
 void TEST_ENV;
 
 const MIN = 60000, T0 = Date.parse("2026-11-23T21:00:00Z");
@@ -141,14 +141,22 @@ test("only the release's own programs and units count: another project's freeze 
     { startedAt: now - 5 * MIN, args: `node /x/release/stage-server.mjs o/r 2.0.0-beta.31 --release godspeed-2.0.0-beta.31-other` },
     { startedAt: now - 5 * MIN, args: `node /x/release/staging-check.mjs o/r 2.0.0-beta.31 --release ${ID} --tell` }];
   assert.deepEqual(workFor({ id: ID, activity: { runs: [], procs }, about: true, now, repo: "o/r" }).map(w => w.what), ["the release step's staging-check program"]);
-  const own = { repo: "o/r", version: "2.0.0-beta.31" };
+  const own = { id: ID, repo: "o/r", version: "2.0.0-beta.31" };
   assert.equal(ownedBy({ kind: "unit", id: "other-project-scenarios.service" }, own), false);
-  assert.equal(ownedBy({ kind: "unit", id: "godspeed-freeze-2.0.0-beta.31.service" }, own), true);
+  assert.equal(ownedBy({ kind: "unit", id: "other-project-freeze-2.0.0-beta.31.service" }, own), false, "the same version number of another project");
+  assert.equal(ownedBy({ kind: "unit", id: `freeze-${ID}.service` }, own), true, "one that names the release itself");
   assert.equal(ownedBy({ kind: "unit", id: "forge-step-stage.service" }, own), false);
 });
 
-test("a lost state file while a source cannot be read: the journal's state stands, never a new ladder", () => {
-  const r = tick(null, { fp: "what-could-be-read", work: [], now: T0 + 35 * MIN, lastRoundAt: T0 + 30 * MIN, journal: { fp: "the-state", since: T0, steps: ["helper"], launches: [{ rung: 1, provider: "codex" }], tries: [] }, incomplete: true });
-  assert.deepEqual([r.clock.fp, Math.round(r.clock.stillMs / MIN), r.clock.done.helper, r.clock.rung1Provider], ["the-state", 35, true, "codex"]);
-  assert.equal(tick(null, { fp: "what-could-be-read", work: [], now: T0 + 35 * MIN, lastRoundAt: T0 + 30 * MIN, journal: { fp: "the-state", since: T0, steps: [] } }).clock.fp, "what-could-be-read", "a complete read that differs is a change");
+test("a lost state file while a source cannot be read: the journal's state stands, never a new ladder; a part that can be read and changed is a change", () => {
+  const whole = partsOf({ look: LOOK, autoStage: { blocked: {} }, staging: null });
+  const journal = { fp: fpOf(whole), parts: whole, since: T0, steps: ["helper"], launches: [{ rung: 1, provider: "codex" }], tries: [] };
+  // the look cannot be read now and the state file is gone: the journal's look stands
+  const now = mergeParts({ look: null, stage: whole.stage, staging: whole.staging }, journal.parts);
+  const r = tick(null, { fp: fpOf(now), work: [], now: T0 + 35 * MIN, lastRoundAt: T0 + 30 * MIN, journal });
+  assert.deepEqual([r.clock.fp, Math.round(r.clock.stillMs / MIN), r.clock.done.helper, r.clock.rung1Provider], [journal.fp, 35, true, "codex"]);
+  // the look cannot be read, but the staging record can, and it changed: that is a change, whatever the look says
+  const moved = mergeParts({ look: null, stage: whole.stage, staging: partsOf({ staging: { status: "staged" } }).staging }, journal.parts);
+  assert.notEqual(fpOf(moved), journal.fp);
+  assert.equal(tick(null, { fp: fpOf(moved), work: [], now: T0 + 35 * MIN, lastRoundAt: T0 + 30 * MIN, journal }).clock.done.helper, undefined, "a new ladder");
 });

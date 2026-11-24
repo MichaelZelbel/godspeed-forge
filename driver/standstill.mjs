@@ -52,10 +52,17 @@ export function stable(v) {
   if (v && typeof v === "object") return Object.fromEntries(Object.keys(v).filter(k => !VOLATILE.has(k)).sort().map(k => [k, stable(v[k])]));
   return v;
 }
-// -> the release's state as one fingerprint (and its parts, for the evidence)
+// The release's state is three parts, each kept as its own fingerprint, so that a part that cannot be read this round is taken
+// as unchanged (the last known one) while a part that can be read and changed is a change. -> {look, stage, staging}
+const h = v => crypto.createHash("sha1").update(JSON.stringify(v)).digest("hex").slice(0, 16);
+export const partsOf = ({ look, autoStage, staging }) => ({ look: h(normaliseLook(look)), stage: h(stable(autoStage || null)), staging: h(stable(staging || null)) });
+// parts: this round's parts, null for one that could not be read; known: the clock's (or the journal's) last parts
+export const mergeParts = (parts, known) => Object.fromEntries(["look", "stage", "staging"].map(k => [k, parts[k] != null ? parts[k] : (known && known[k] != null ? known[k] : h(k === "look" ? "" : null))]));
+export const fpOf = parts => h([parts.look, parts.stage, parts.staging]);
+// -> the release's state as one fingerprint, and its parts
 export function releaseState({ look, autoStage, staging }) {
-  const parts = { look: normaliseLook(look), stage: stable(autoStage || null), staging: stable(staging || null) };
-  return { fp: crypto.createHash("sha1").update(JSON.stringify(parts)).digest("hex").slice(0, 16), parts };
+  const parts = partsOf({ look, autoStage, staging });
+  return { fp: fpOf(parts), parts };
 }
 
 // Is the release in the release step's hands? While the factory still builds its tickets, each ticket has its own clock.
@@ -106,12 +113,10 @@ export function workFor({ id, activity, autoStage, about, named = [], now, repo 
 // steps}), which a lost or corrupt state file cannot take away. -> { clock, due: ["helper" | "other-ai" | "repair" | "notice"] }
 // A new state is counted from the last round that saw the old one (the state changed somewhere after it), so a step is never
 // late against the change itself, and at most one round early.
-// incomplete: this round's read lacked a source (a look that could not be read, a file that could not be read): unknown is
-// unchanged, so the clock's own state stands, or with no clock from the state file the journal's.
-export function tick(prev, { fp, work, now, lastRoundAt, journal = null, incomplete = false }) {
+// fp: this round's fingerprint, its unreadable parts taken from the clock's (or with no clock, the journal's) last ones
+export function tick(prev, { fp, work, now, lastRoundAt, journal = null }) {
   const held = work.filter(w => w.until > now);
   let c;
-  if (incomplete) { if (prev && prev.fp) fp = prev.fp; else if (journal && journal.fp && Number.isFinite(journal.since)) fp = journal.fp; }
   if (!(prev && prev.fp === fp) && journal && journal.fp === fp && Number.isFinite(journal.since)) {
     // the state file lost this clock: the journal has when this state began and which steps were taken (time held by work
     // since then is not known, so it counts as still: the steps come early, never late)
@@ -172,7 +177,7 @@ export const OWN_UNITS = /^(factory-driver|factory-deadman|factory-act-|factory-
 export const RELEASE_UNITS = /(freeze|scenario|stage-server|staging-check)/i;
 export function ownedBy(n, own) {
   if (!n || !own) return false;
-  if (n.kind === "unit") return RELEASE_UNITS.test(n.id) && !OWN_UNITS.test(n.id) && !!own.version && n.id.includes(own.version); // a release program's unit that names this release
+  if (n.kind === "unit") return RELEASE_UNITS.test(n.id) && !OWN_UNITS.test(n.id) && !!own.id && n.id.includes(own.id); // a release program's unit that names this release (its id is its plan folder: unique)
   if (String(n.repo || "").toLowerCase() !== String(own.repo || "").toLowerCase()) return false;
   const bump = own.bump || null, nums = (own.prNumbers || []).map(Number), heads = own.prHeads || [];
   if (n.kind === "pr") return (!!bump && Number(n.id) === Number(bump.pr)) || nums.includes(Number(n.id));

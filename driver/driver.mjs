@@ -30,7 +30,7 @@ import { clockCheck, wentBackwards, verifyInstalled, deliver, readEnvFile } from
 import { gateStep, gateClear, GATE } from "./gate.mjs";
 import { movingUntilFor, heldUntil, creditEvents, creditKeyById, ACTIVITY, buildInventory, advance, violationEntry, describeRow, parseStage, stageStalled, factoryWorking, CHAIN, H as HR, ownerName } from "./inventory.mjs";
 import { actDefaults as onDutyDefaults, launchAct, actResult, markHandled, answeredFile, repairRequestChecked } from "./onduty.mjs";
-import { STANDSTILL, releaseState, inReleaseStep, workFor, tick, nextStep as clockNextStep, stillMinutes, namedIn, checkNamed, noticeText, repairWords, ownedBy, OWN_UNITS } from "./standstill.mjs";
+import { STANDSTILL, partsOf, mergeParts, fpOf, inReleaseStep, workFor, tick, nextStep as clockNextStep, stillMinutes, namedIn, checkNamed, noticeText, repairWords, ownedBy, OWN_UNITS } from "./standstill.mjs";
 import { aiDefaults, providers, factoryProvider, ladderCandidates, launchHelper, helperResult, refreshTokens, checkJson, helperDir, UNIT_RE } from "./ai.mjs";
 import { applyReport, applyDueDefaults, actDefaults, notify, plain } from "./act.mjs";
 import { housekeep, hkDefaults } from "./housekeeping.mjs";
@@ -204,20 +204,24 @@ export async function round(env, deps = {}) {
     let clockProviders = [];
     // The release's state now, as the clock sees it: a look that cannot be read and a file that cannot be read are taken as the
     // clock's last (unchanged), never as a change, so an unreadable source never resets or stops it. -> {look, files, fp, unread}
-    const stateNow = (id, prev, text, known, about) => {
-      const look = known ? (about ? text : "") : (prev && typeof prev.look === "string" ? prev.look : "");
+    // Each part is compared on its own: a part that can be read and changed is a change, a part that cannot be read is the
+    // clock's last (with the state file lost, the journal's). -> {look (text, for the helpers), files, parts, fp, unread}
+    const stateNow = (id, prev, text, known, about, journal) => {
       let files = null, unread = null;
       try { files = (deps.releaseFiles || readReleaseFiles)(env, id); } catch (e) { unread = String(e.message).slice(0, 200); }
-      if (!files) files = (prev && prev.parts) || { autoStage: null, staging: null };
-      return { look, files, unread, fp: releaseState({ look, autoStage: files.autoStage, staging: files.staging }).fp };
+      const read = partsOf({ look: known && about ? text : "", autoStage: files ? files.autoStage : null, staging: files ? files.staging : null });
+      const parts = mergeParts({ look: known ? read.look : null, stage: files ? read.stage : null, staging: files ? read.staging : null }, (prev && prev.parts) || (journal && journal.parts) || null);
+      const look = known ? (about ? text : "") : (prev && typeof prev.lookText === "string" ? prev.lookText : "");
+      if (!files) files = (prev && prev.files) || { autoStage: null, staging: null };
+      return { look, files, unread, parts, fp: fpOf(parts) };
     };
     // What is the release's own work, for what a helper names (standstill.mjs ownedBy): its repository and version, auto-stage's
     // version pull request, and its tickets' pull requests
     const releaseOwn = (id, autoStage) => {
       const rel = (worldNow.releases || []).find(r => r.id === id) || { tickets: [] };
       const prs = (rel.tickets || []).flatMap(t => (((worldNow.items || {})[t.issue] || {}).prs) || []);
-      const as = autoStage !== undefined ? autoStage : ((state.standstill || {})[id] && state.standstill[id].parts ? state.standstill[id].parts.autoStage : null);
-      return { repo: env.REPO, version: rel.version || ((state.standstill || {})[id] || {}).version || null, bump: (as && as.bump) || null, prNumbers: prs.map(p => p.number), prHeads: prs.map(p => p.headSha).filter(Boolean) };
+      const as = autoStage !== undefined ? autoStage : ((state.standstill || {})[id] && state.standstill[id].files ? state.standstill[id].files.autoStage : null);
+      return { id, repo: env.REPO, version: rel.version || ((state.standstill || {})[id] || {}).version || null, bump: (as && as.bump) || null, prNumbers: prs.map(p => p.number), prHeads: prs.map(p => p.headSha).filter(Boolean) };
     };
     let worldNow = {};
 
@@ -513,18 +517,17 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
         : inReleaseStep(rel.id, stage, about ? stageText : "", jv.releases[rel.id] || null);
       if (!step.yes) { clocks[rel.id] = { id: rel.id, inStep: false, why: step.why }; delete state.standstill[rel.id]; continue; }
       // an unreadable source never stops the clock: nothing is known to have changed, so its part is the one the clock has
-      const now0 = stateNow(rel.id, prev, stageText, lookKnown, about);
+      const now0 = stateNow(rel.id, prev, stageText, lookKnown, about, (jv.clocks || {})[rel.id] || null);
       if (now0.unread) { step = { yes: true, why: `its state could not be read (${now0.unread.slice(0, 120)}); the clock goes on` }; record({ kind: "release clock: a source is unreadable", release: rel.id, why: now0.unread }); }
       const { look, files, fp } = now0;
       try {
         const named = prev && prev.fp === fp && (prev.named || []).length ? (deps.checkNamed || checkNamedReal)(prev.named).filter(n => n.running && ownedBy(n, releaseOwn(rel.id, files.autoStage))) : [];
         const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, about, named, now, repo: env.REPO });
-        const incomplete = !lookKnown || !!now0.unread;
-        const t = tick(prev, { fp, work, now, lastRoundAt: jv0.lastRoundAt, journal: (jv.clocks || {})[rel.id] || null, incomplete });
+        const t = tick(prev, { fp, work, now, lastRoundAt: jv0.lastRoundAt, journal: (jv.clocks || {})[rel.id] || null });
         t.clock.named = named; t.clock.version = rel.version || t.clock.version;
-        if (!incomplete) { t.clock.look = look; t.clock.parts = files; } // what was read whole; an incomplete read keeps the last whole one
+        t.clock.parts = now0.parts; t.clock.lookText = look; t.clock.files = files; // the parts as now known (unreadable ones the last known)
         // the journal keeps when this state began, so a lost state file never resets the clock
-        if (!((jv.clocks || {})[rel.id] && jv.clocks[rel.id].fp === t.clock.fp)) clockEvents.push({ t: "clock", release: rel.id, fp: t.clock.fp, since: t.clock.since, at: nowIso });
+        if (!((jv.clocks || {})[rel.id] && jv.clocks[rel.id].fp === t.clock.fp)) clockEvents.push({ t: "clock", release: rel.id, fp: t.clock.fp, parts: t.clock.parts, since: t.clock.since, at: nowIso });
         state.standstill[rel.id] = t.clock;
         clocks[rel.id] = { id: rel.id, version: t.clock.version, inStep: true, why: step.why, due: t.due, look, files, minutes: stillMinutes(t.clock), held: t.clock.held, next: clockNextStep(t.clock) };
       } catch (e) { record({ kind: "release clock failed", release: rel.id, why: String(e.message).slice(0, 200) }); }
@@ -698,7 +701,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
           // apart); the release's own sources are read again right now and must agree, and none may be unreadable
           // the same rules as the clock: what cannot be read is unchanged (so the hour is never missed), what has changed holds it
           let text2 = null, known2 = false; try { text2 = await (deps.stageLook || stageLookReal)(env); known2 = typeof text2 === "string"; } catch { known2 = false; }
-          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id));
+          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null);
           const gone = fresh.files.staging && fresh.files.staging.status === "installed" ? "it is installed now" : !(deps.planApproved || planStillApproved)(env, k.id) ? "its plan is no longer approved" : null;
           if (fresh.fp !== sc.fp || gone) { record({ kind: "message held", entry: `standstill:${k.id}`, why: gone || "the release moved in the fresh read" }); continue; }
           const words = versionWords(k.version || "");
