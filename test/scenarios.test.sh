@@ -14,6 +14,13 @@ if [ "$1" = build ]; then
   echo scenario-test-image
   exit 0
 fi
+if [ "$1" = image ]; then
+  echo sha256:scenario-test-image
+  exit 0
+fi
+if [ "$1" = rmi ]; then
+  exit 0
+fi
 [ "$1" = run ]
 shift
 scenario_root=

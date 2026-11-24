@@ -80,6 +80,17 @@ def app_of(authorization):
     return int(json.loads(base64.urlsafe_b64decode(padded))["iss"])
 
 
+def state_used(root):
+    """The codes already exchanged, kept beside the state."""
+    path = root / "used-codes.json"
+    used = json.loads(path.read_text()) if path.exists() else []
+    class Used(list):
+        def append(self, item):
+            super().append(item)
+            path.write_text(json.dumps(list(self)))
+    return Used(used)
+
+
 class Handler(BaseHTTPRequestHandler):
     lock = threading.Lock()
     root = None
@@ -114,6 +125,11 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(status, value)
 
     def route(self, method, path, query, payload, state):
+        matched = re.fullmatch(r"/app-manifests/([^/]+)/conversions", path)
+        if matched and method == "POST":
+            return self.convert(unquote(matched.group(1)))
+        if path == "/app" and method == "GET":
+            return 200, {"id": self.require_app()}
         matched = re.fullmatch(r"/app/installations/(\d+)/access_tokens", path)
         if matched and method == "POST":
             self.require_app()
@@ -128,6 +144,17 @@ class Handler(BaseHTTPRequestHandler):
         if not self.headers.get("authorization", "").startswith("Bearer "):
             return 401, {"message": "Bad credentials"}
         return self.repository(method, repo, rest, query, payload, state)
+
+    def convert(self, code):
+        """A manifest's temporary code for its App: the code names the App ('builder' or 'release'), and the key is made
+        here so the Forge has something real to sign with. A code works once."""
+        role = code.split("-")[0]
+        if role not in ("builder", "release") or code in state_used(self.root):
+            return 404, {"message": "Not Found"}
+        state_used(self.root).append(code)
+        key = subprocess.run(["openssl", "genrsa", "2048"], capture_output=True, text=True, check=True).stdout
+        return 201, {"id": {"builder": 1, "release": 2}[role], "slug": f"scenario-{role}", "name": f"Forge {role} scenario",
+                     "pem": key}
 
     def require_app(self):
         token = self.headers.get("authorization", "")

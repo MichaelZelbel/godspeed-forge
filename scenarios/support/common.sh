@@ -55,8 +55,11 @@ scenario_notices() {
 }
 
 scenario_cleanup() {
-  if [ -n "${SCENARIO_ROOT-}" ] && [ -d "$SCENARIO_ROOT" ]; then
+  if [ -z "${SCENARIO_KEEP-}" ] && [ -n "${SCENARIO_ROOT-}" ] && [ -d "$SCENARIO_ROOT" ]; then
     rm -rf "$SCENARIO_ROOT"
+  fi
+  if [ -n "${image_tag-}" ]; then
+    docker rmi "$image_tag" >/dev/null 2>&1 || true
   fi
 }
 
@@ -88,14 +91,16 @@ scenario_start() {
     "$repository_root/test/stand-in-github/control" init \
       --remote "$SCENARIO_ROOT/remote.git" --runtime-remote /scenario/remote.git
 
-  if ! docker build -q \
+  # Tagged, so a cleanup of untagged images between the build and the run cannot take it; the tag is dropped at the end.
+  image_tag="forge-scenario:$(basename "$SCENARIO_ROOT" | tr 'A-Z' 'a-z')"
+  if ! docker build -q -t "$image_tag" \
     --build-arg GODSPEED_REVISION=candidate/2.0.0-beta.24 \
     -f "$repository_root/scenarios/support/Dockerfile" "$repository_root" \
     >"$SCENARIO_ROOT/artifacts/image.stdout" 2>"$SCENARIO_ROOT/artifacts/image.stderr"; then
     scenario_fail "Scenario container could not be prepared"
   fi
-  image=$(tail -n 1 "$SCENARIO_ROOT/artifacts/image.stdout")
-  printf '%s\n' "$image" >"$SCENARIO_ROOT/artifacts/image-id"
+  image=$image_tag
+  docker image inspect --format '{{.Id}}' "$image_tag" >"$SCENARIO_ROOT/artifacts/image-id"
   if ! docker run --rm \
     -e HOME=/home/scenario \
     -e PATH=/forge/test/stand-in-agent:/forge/test/stand-in-github:/usr/local/bin:/usr/bin:/bin \

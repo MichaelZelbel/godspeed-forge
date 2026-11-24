@@ -2,7 +2,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 . test/cases.sh
-# test cases: 3
+# test cases: 4
 
 root=$(mktemp -d)
 trap 'test_cases_end; rm -rf "$root"' EXIT
@@ -44,5 +44,16 @@ set -e
 [ "$failure_status" -eq 23 ]
 [ "$unsupported_status" -ne 0 ]
 grep -F "unsupported command" "$root/unsupported" >/dev/null
+
+test_case "the stand-in agent answers the Forge's setup request and runs its fixture script where it is asked"
+mkdir -p "$root/project" "$root/setup-fixture"
+printf 'printf written >made.txt\n' >"$root/setup-fixture/run"
+(
+  cd "$root/project"
+  env -i PATH="$PATH" STANDIN_AGENT_FIXTURE="$root/setup-fixture" \
+    STANDIN_AGENT_TRANSCRIPT="$root/setup-transcript" "$agent" exec --sandbox workspace-write "read this project"
+)
+grep -Fx written "$root/project/made.txt" >/dev/null
+grep -Fx "read this project" "$root/setup-transcript/request" >/dev/null
 
 echo "stand-in agent: pass"

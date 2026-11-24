@@ -2,7 +2,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 . test/cases.sh
-# test cases: 5
+# test cases: 6
 
 root=$(mktemp -d)
 trap 'test_cases_end; rm -rf "$root"' EXIT
@@ -124,5 +124,35 @@ set -e
 [ "$unsupported_status" -ne 0 ]
 grep -F "absolute local path" "$root/remote-error" >/dev/null
 grep -F "unsupported command" "$root/unsupported" >/dev/null
+
+test_case "gh repo clone, gh api and the App conversion serve what setup reads"
+export STANDIN_GITHUB_STATE="$root/state-three"
+"$control" init --remote "file://$remote"
+"$gh" repo clone scenario/sample "$root/cloned"
+[ "$(git -C "$root/cloned" remote get-url origin)" = "https://github.com/scenario/sample" ]
+[ "$(git -C "$root/cloned" remote get-url --push origin)" = "$remote" ]
+[ "$("$gh" api user --jq .login)" = "scenario-owner 1000" ]
+"$gh" api -i repos/scenario/sample | grep -F "x-oauth-scopes: repo, workflow" >/dev/null
+"$gh" api --method GET apps/scenario-builder >/dev/null
+"$gh" serve >"$root/serve3.log" 2>&1 &
+serve_pid=$!
+for _ in $(seq 100); do [ -f "$STANDIN_GITHUB_STATE/rest.port" ] && break; sleep 0.1; done
+python3 - "$(cat "$STANDIN_GITHUB_STATE/rest.port")" <<'PY'
+import json, sys, urllib.request, urllib.error
+base = f"http://127.0.0.1:{sys.argv[1]}"
+def convert(code):
+    request = urllib.request.Request(f"{base}/app-manifests/{code}/conversions", method="POST")
+    try:
+        with urllib.request.urlopen(request) as answer:
+            return answer.status, json.load(answer)
+    except urllib.error.HTTPError as error:
+        return error.code, None
+status, app = convert("builder-1")
+assert status == 201 and app["id"] == 1 and app["slug"] == "scenario-builder" and "PRIVATE KEY" in app["pem"], (status, app)
+assert convert("builder-1")[0] == 404
+assert convert("stranger-1")[0] == 404
+assert convert("release-1")[1]["id"] == 2
+PY
+kill "$serve_pid"
 
 echo "stand-in GitHub: pass"
