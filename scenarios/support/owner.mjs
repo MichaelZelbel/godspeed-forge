@@ -71,6 +71,6 @@ const [command, ...args] = process.argv.slice(2);
 try {
   await ({ seed, say, notices, 'factory-issue': factoryIssue })[command](...args);
 } catch (error) {
-  console.log(error.message);
+  console.error(error.message);
   process.exit(1);
 }
