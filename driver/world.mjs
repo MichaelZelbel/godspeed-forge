@@ -390,10 +390,12 @@ export function readDeliveredPages(env, deps, unreadable = []) {
   for (const n of names.sort()) {
     let s;
     try { s = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, n))); } catch (e) { if (e instanceof SyntaxError) unreadable.push({ part: `questions ${n}`, error: e.message }); continue; }
+    const m = /^state-(.+?)__(.+)\.json$/i.exec(n);
+    const repo = m ? `${m[1]}/${m[2]}` : env.REPO; // state.json is the main project's; state-<owner>__<repo>.json is that repository's
     for (const [key, t] of Object.entries((s && s.told) || {})) {
       const stages = (t && t.page && t.page.stages) || [];
       const reached = stages.some(st => Object.values((st && st.channels) || {}).some(c => c && c.receipt));
-      if (t && !t.answered && t.page && !t.page.closed && reached) out.push({ key, heading: String(t.heading || "") });
+      if (t && !t.answered && t.page && !t.page.closed && reached) out.push({ key, heading: String(t.heading || ""), repo });
     }
   }
   return out;

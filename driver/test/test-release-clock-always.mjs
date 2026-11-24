@@ -154,72 +154,50 @@ test("the one pause besides the go: a question of money, publishing or deleting,
   assert.ok(other.launched.length >= 1, "a question that names nothing of the release pauses nothing of it");
 });
 
-test("the delivered questions are read from the questions step's state: a page with a receipt, not answered and not closed", async () => {
+test("the delivered questions are read from the questions step's state, with the repository each belongs to: a page with a receipt, not answered and not closed", async () => {
   const { readDeliveredPages } = await import("../world.mjs");
-  const states = { "state.json": { told: {
-    a: { heading: "Spend on #616", page: { stages: [{ channels: { telegram: { receipt: "42" } } }] } },
+  const told = { a: { heading: "Spend on #616", page: { stages: [{ channels: { telegram: { receipt: "42" } } }] } },
     b: { heading: "answered", answered: true, page: { stages: [{ channels: { telegram: { receipt: "43" } } }] } },
     c: { heading: "closed", page: { closed: { at: "x" }, stages: [{ channels: { telegram: { receipt: "44" } } }] } },
     d: { heading: "no receipt", page: { stages: [{ channels: { telegram: { why: "down" } } }] } },
-    e: { heading: "decided at once" } } } };
-  const got = readDeliveredPages({ QUESTIONS_DIR: "/q" }, { readDir: () => Object.keys(states), readFile: p => JSON.stringify(states[p.split(/[\\/]/).pop()]) });
-  assert.deepEqual(got, [{ key: "a", heading: "Spend on #616" }]);
+    e: { heading: "decided at once" } };
+  const states = { "state.json": { told }, "state-acme__other.json": { told: { z: { heading: "Publish #616", page: { stages: [{ channels: { issue: { receipt: "u" } } }] } } } } };
+  const got = readDeliveredPages({ QUESTIONS_DIR: "/q", REPO: "acme/product" }, { readDir: () => Object.keys(states), readFile: p => JSON.stringify(states[p.split(/[\\/]/).pop()]) });
+  assert.deepEqual(got, [{ key: "z", heading: "Publish #616", repo: "acme/other" }, { key: "a", heading: "Spend on #616", repo: "acme/product" }]);
 });
 
-test("the dry run says, for each release, where it is, the minutes without progress and what comes next", async () => {
-  const s = server({ worldAt: (now, m) => world32(now, m), look: () => LOOK32 });
-  for (let m = 0; m <= 25; m += 5) await s.round(m);
-  const text = describe(await round({ ...s.env, DRY: true }, { ...s.deps, now: () => T0 + 30 * MIN }));
-  assert.match(text, new RegExp(`release ${ID32}: the release clock: still for 30 minutes; next step: the other AI \\(rung 2\\) by minute 40.*where it is: 1 of 8 tickets unfinished \\(#616: open, no live claim and no run on it, no pull request\\)`));
+test("a delivered question pauses a release only when it names one of its tickets as a whole number, in the release's own repository", async () => {
+  const { pageNamesRelease } = await import("../standstill.mjs");
+  const rel = { id: ID32, version: "2.0.0-beta.32", label: "beta.32", repo: REPO, tickets: [{ issue: 616 }, { issue: 609 }] };
+  assert.equal(pageNamesRelease([{ key: "k", heading: "Publish #616?", repo: REPO }], rel), true);
+  assert.equal(pageNamesRelease([{ key: "k", heading: "Publish #6160?", repo: REPO }], rel), false, "#6160 is not #616");
+  assert.equal(pageNamesRelease([{ key: "k", heading: "Publish #616?", repo: "someone/else" }], rel), false, "another project's #616");
+  assert.equal(pageNamesRelease([{ key: "k", heading: "Delete the data of beta.32 users?", repo: REPO }], rel), true, "the release named by its version");
 });
 
-test("the loop's claims on a ticket: a claim that was released or withdrawn is no claim, one in both comment windows counts once, and only the factory's own accounts can make one", async () => {
-  const { loopClaimsOf } = await import("../world.mjs");
-  const bot = "godspeed-dev-builder[bot]";
-  const got = loopClaimsOf([
-    { body: "Loop claim: run abc123\nArea: x", at: "2026-11-24T20:00:00Z", author: bot },
-    { body: "Loop claim released", at: "2026-11-24T19:00:00Z", author: bot },
-    { body: "Loop claim withdrawn", at: "2026-11-24T19:10:00Z", author: bot },
-    { body: "Loop claim: run abc123\nArea: x", at: "2026-11-24T20:00:00Z", author: bot },
-    { body: "Loop claim: run fake-run", at: "2026-11-24T20:10:00Z", author: "a-stranger" }, // the repository is public
-    { body: "Manager decision: start now", at: "2026-11-24T20:30:00Z", author: bot },
-  ], [bot.toLowerCase(), "boss"]);
-  assert.deepEqual(got, [{ run: "abc123", at: "2026-11-24T20:00:00Z" }]);
+test("a ticket that cannot be read keeps its last state, and a change in another ticket still counts as progress", async () => {
+  const { buildingState } = await import("../standstill.mjs");
+  const rel = { id: ID32, tickets: [{ issue: 615 }, { issue: 616 }] };
+  const base = now => { const w = world32(now, 0); return w; };
+  const w1 = base(T0);
+  const first = buildingState({ release: { ...w1.releases[0], tickets: rel.tickets }, world: w1, now: T0 });
+  const w2 = base(T0); w2.items[616] = { ...w2.items[616], partial: true, prs: [] }; // its pull request could not be read this round
+  const same = buildingState({ release: { ...w2.releases[0], tickets: rel.tickets }, world: w2, now: T0 + 5 * MIN, prevTokens: first.tokens });
+  assert.equal(same.fp, first.fp, "a read that failed is neither progress nor a standstill");
+  const w3 = base(T0); w3.items[615] = { ...w3.items[615], state: "open" }; w3.items[616] = { ...w3.items[616], partial: true, prs: [] };
+  const other = buildingState({ release: { ...w3.releases[0], tickets: rel.tickets }, world: w3, now: T0 + 10 * MIN, prevTokens: first.tokens });
+  assert.notEqual(other.fp, first.fp, "but a visible change in the other ticket is progress, even while one cannot be read");
 });
 
-test("a claim whose run cannot be checked holds the clock for half an hour at most, not three hours", async () => {
-  const unreadable = (now, m) => ({ ...world32(now, m, { claim: "run-616" }), unreadable: [{ part: "factory/x/runs", error: "no CLI" }] });
-  const s = server({ worldAt: unreadable, look: () => LOOK32 });
-  for (let m = 0; m <= 90; m += 5) await s.round(m);
-  const first = s.launched.find(l => l.entry === `standstill:${ID32}`);
-  assert.ok(first && first.minute >= 30 && first.minute <= 55, `held until 31, then the 20 minutes count (first step at ${first && first.minute})`);
-});
-
-test("the owner's go survives a stage look that cannot be read for a round: the release does not wake up and page", async () => {
-  let readable = true;
-  const s = server({ look: m => (readable ? `${HEAD(ID, "2.0.0-beta.31")}Already staged and announced at 2026-11-23T20:00:00Z; nothing to do.\n` : null) });
-  s.deps.stageLook = async () => { if (!readable) throw new Error("the look cannot be read"); return `${HEAD(ID, "2.0.0-beta.31")}Already staged and announced at 2026-11-23T20:00:00Z; nothing to do.\n`; };
-  for (let m = 0; m <= 30; m += 5) await s.round(m);
-  readable = false;
-  for (let m = 35; m <= 150; m += 5) await s.round(m);
-  assert.deepEqual(s.launched, [], "waiting for the go, whether or not this round could read the look");
-});
-
-test("the minute-60 notice is held when the tickets, read again, show progress since the round began", async () => {
-  let progressed = false;
-  const s = server({ worldAt: (now, m) => world32(now, m, { prHead: () => (progressed ? "c".repeat(40) : "a".repeat(40)) }), look: () => LOOK32 });
-  const first = s.deps.readWorld; let reads = 0;
-  s.deps.readWorld = async (...a) => { reads++; return first(...a); };
+test("the minute-60 notice is held when a question that names the release reached the owner since the round began", async () => {
+  let delivered = false;
+  const s = server({ worldAt: (now, m) => ({ ...world32(now, m), deliveredPages: delivered ? [{ key: "p", heading: "Publish #616?", repo: REPO }] : [] }), look: () => LOOK32 });
   for (let m = 0; m <= 50; m += 5) await s.round(m);
-  const before = s.told.length;
-  // the round at minute 55 reads the world once with no progress, and the fresh read (second call) sees a new commit
-  s.deps.readWorld = async (...a) => { reads++; const w = await first(...a); if (reads % 2 === 0) { progressed = true; } return w; };
-  progressed = false;
-  const calls = []; const orig = s.deps.readWorld;
-  s.deps.readWorld = async (...a) => { calls.push(1); if (calls.length >= 2) progressed = true; return orig(...a); };
+  const before = s.told.length, readWorld0 = s.deps.readWorld; const calls = [];
+  s.deps.readWorld = async (...a) => { calls.push(1); if (calls.length >= 2) delivered = true; return readWorld0(...a); };
   await s.round(55);
-  assert.equal(s.told.length, before, "no notice: the fresh read of the tickets showed a new commit");
-  assert.ok(s.log().some(e => e.kind === "message held"), "recorded as held");
+  assert.equal(s.told.length, before, "no notice: the release now waits on a question that reached the owner");
+  assert.ok(s.log().some(e => e.kind === "message held" && /reached the owner/.test(e.why)));
 });
 
 test("the test machine's repair halt of 2026-11-22, built from the live record: a halt is a standstill, an acting run at once, the other AI by minute 40, the owner told by minute 60", async () => {

@@ -103,21 +103,24 @@ export function inReleaseStep(id, stage, look, journal) {
 // reason to wait: nothing here looks at dependencies at all, so a ticket whose dependency closed is judged like any other.
 // Pure. release: world.releases[i]; world: the driver's world; -> null | { fp, work, lines, unread, open }
 const claimLive = (c, now) => Number.isFinite(Date.parse(c.at)) && now - Date.parse(c.at) < STANDSTILL.claimHours * H;
-export function buildingState({ release, world, now, activity = null }) {
+export function buildingState({ release, world, now, activity = null, prevTokens = null }) {
   const items = (world && world.items) || {};
   const tickets = ((release && release.tickets) || []).filter(t => t.issue && !t.deferred);
   const factories = (world && world.factories) || [];
   const prim = factories.find(f => f.primary !== false) || (world && world.factory) || {};
   const runsRead = !((world && world.unreadable) || []).some(u => /\/runs$/.test(String(u.part || "")));
   const runs = new Map((prim.activeRuns || []).map(r => [String(r.id), r]));
-  const parts = [], work = [], lines = [];
+  // each ticket's state as its own token; one that cannot be read (or was read only in part) keeps the token it had last round, so a
+  // ticket that cannot be read is neither progress nor a standstill, and a change in any other ticket still counts
+  const tokens = {}, work = [], lines = [];
   let unread = false, open = 0;
   for (const t of tickets) {
     const it = items[t.issue];
-    if (!it) { unread = true; parts.push(`${t.issue}|unread`); continue; }
+    if (!it) { unread = true; tokens[t.issue] = null; continue; }
     const prs = it.prs || [];
     const claims = (it.loopClaims || []).filter(c => claimLive(c, now));
-    parts.push([t.issue, it.state, prs.map(p => `${p.number}.${p.state}.${p.merged ? 1 : 0}.${p.headSha || ""}.${(p.comments || []).length}`).join(","), claims.map(c => c.run).join(",")].join("|"));
+    if (it.partial) unread = true;
+    tokens[t.issue] = it.partial ? null : [it.state, prs.map(p => `${p.number}.${p.state}.${p.merged ? 1 : 0}.${p.headSha || ""}.${(p.comments || []).length}`).join(","), claims.map(c => c.run).join(",")].join("|");
     if (it.state !== "open") continue;
     const parked = (it.labels || []).includes("needs-owner") || prs.some(p => p.state === "open" && (p.labels || []).includes("needs-owner"));
     open++;
@@ -143,7 +146,8 @@ export function buildingState({ release, world, now, activity = null }) {
     if (Number.isFinite(at) && ((r.headSha && heads.has(r.headSha)) || (r.headBranch && branches.has(r.headBranch)))) work.push({ what: `a GitHub run (${r.name || "a workflow"}) on a ticket's pull request`, until: at + STANDSTILL.runHours * H });
   }
   if (!open) return null;
-  return { fp: h(["build", ...parts]), work, lines, unread, open, total: tickets.length };
+  const merged = Object.fromEntries(tickets.map(t => [t.issue, tokens[t.issue] ?? (prevTokens && prevTokens[t.issue]) ?? "unread"]));
+  return { fp: h(["build", ...tickets.map(t => `${t.issue}:${merged[t.issue]}`)]), tokens: merged, work, lines, unread, open, total: tickets.length };
 }
 
 // A question that reached the owner (a page with a receipt, questions/pager.mjs: only money, publishing or deleting pages him) and
@@ -154,7 +158,8 @@ export function pageNamesRelease(pages, release) {
   const words = [release && release.id, release && release.label, release && release.version].filter(Boolean).map(w => String(w).toLowerCase());
   return (pages || []).some(p => {
     const text = `${p.key || ""} ${p.heading || ""}`.toLowerCase();
-    return nums.some(n => new RegExp(`#${n}(?!\d)`).test(text)) || words.some(w => text.includes(w));
+    if (p.repo && release && release.repo && String(p.repo).toLowerCase() !== String(release.repo).toLowerCase()) return false; // another project's question
+    return nums.some(n => new RegExp(`#${n}(?![0-9])`).test(text)) || words.some(w => text.includes(w));
   });
 }
 

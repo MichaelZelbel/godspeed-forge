@@ -223,7 +223,7 @@ export async function round(env, deps = {}) {
       const bad = got.unread || {}; // each file on its own: one that cannot be read never hides a change in the other
       unread = [bad.stage, bad.staging].filter(Boolean).join("; ") || null;
       const read = partsOf({ look: known && about ? text : "", autoStage: got.autoStage, staging: got.staging, build: bld ? bld.fp : undefined });
-      const parts = mergeParts({ look: known ? read.look : null, stage: bad.stage ? null : read.stage, staging: bad.staging ? null : read.staging, ...(bld ? { build: bld.unread ? null : read.build } : {}) }, (prev && prev.parts) || (journal && journal.parts) || null);
+      const parts = mergeParts({ look: known ? read.look : null, stage: bad.stage ? null : read.stage, staging: bad.staging ? null : read.staging, ...(bld ? { build: read.build } : {}) }, (prev && prev.parts) || (journal && journal.parts) || null);
       const look = known ? (about ? text : "") : (prev && typeof prev.lookText === "string" ? prev.lookText : "");
       const last = (prev && prev.files) || { autoStage: null, staging: null };
       const files = { autoStage: bad.stage ? last.autoStage : got.autoStage, staging: bad.staging ? last.staging : got.staging };
@@ -539,7 +539,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       // The one exception is the owner's go: the stage step says it has staged and announced the release (the question is delivered
       // before it says so), and the release then waits for him.
       const relObj = (world.releases || []).find(r => r.id === rel.id) || null;
-      let bld = null; try { bld = relObj ? buildingState({ release: relObj, world, now, activity }) : null; } catch (e) { record({ kind: "release clock: tickets unreadable", release: rel.id, why: String(e.message).slice(0, 160) }); }
+      let bld = null; try { bld = relObj ? buildingState({ release: relObj, world, now, activity, prevTokens: prev && prev.buildTokens }) : null; } catch (e) { record({ kind: "release clock: tickets unreadable", release: rel.id, why: String(e.message).slice(0, 160) }); }
       // the owner's go: this round's look says so, or (the look cannot be read now) the last round's did
       state.waitingGo ||= {};
       const waitingGo = (about && lookKnown && /^Already staged and announced at /m.test(stageText)) || (!lookKnown && !!state.waitingGo[rel.id]);
@@ -559,6 +559,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
         const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, about, named, now, repo: env.REPO, extra: bld ? bld.work : [] });
         const t = tick(prev, { fp, work, now, lastRoundAt: jv0.lastRoundAt, journal: (jv.clocks || {})[rel.id] || null });
         t.clock.named = named; t.clock.version = rel.version || t.clock.version;
+        t.clock.buildTokens = bld ? bld.tokens : undefined; // each ticket's last readable state
         t.clock.parts = now0.parts; t.clock.lookText = look; t.clock.files = files; // the parts as now known (unreadable ones the last known)
         // the journal keeps when this state began, so a lost state file never resets the clock
         if (!((jv.clocks || {})[rel.id] && jv.clocks[rel.id].fp === t.clock.fp)) clockEvents.push({ t: "clock", release: rel.id, fp: t.clock.fp, parts: t.clock.parts, since: t.clock.since, at: nowIso });
@@ -595,7 +596,8 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
           try { freshWorld = await (deps.readWorld || readWorld)(env, { gh, sh: deps.sh || shFor(env), ...(deps.worldDeps || {}) }); freshActivity = await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, freshWorld); } catch { freshWorld = null; }
           if (!freshWorld) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "the tickets could not be read again" }); continue; }
           const freshRel = (freshWorld.releases || []).find(r => r.id === k.id) || null;
-          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null, (() => { try { return freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity }) : null; } catch { return null; } })());
+          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null, (() => { try { return freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity, prevTokens: sc.buildTokens }) : null; } catch { return null; } })());
+          if (freshRel && (() => { try { return pageNamesRelease(freshWorld.deliveredPages, freshRel); } catch { return false; } })()) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "a question of money, publishing or deleting that names this release reached the owner since the round began" }); continue; }
           const gone = fresh.files.staging && fresh.files.staging.status === "installed" ? "it is installed now" : !(deps.planApproved || planStillApproved)(env, k.id) ? "its plan is no longer approved" : null;
           if (fresh.fp !== sc.fp || gone) { record({ kind: "message held", entry: `standstill:${k.id}`, why: gone || "the release moved in the fresh read" }); continue; }
           const words = versionWords(k.version || "");
