@@ -27,7 +27,7 @@ function server(edit = () => {}) {
   fs.writeFileSync(path.join(settingsDir, "driver.json"), JSON.stringify(files.d));
   fs.writeFileSync(path.join(settingsDir, "projects", "owner--repository.json"), JSON.stringify(files.p));
   const unitsDir = p("etc/systemd/system"), calls = [];
-  const s = { root, settingsDir, unitsDir, calls, p, files, round: "good", active: [], journal: "", stopFail: [], stopIgnored: [], startFail: [], enableFail: [], disableFail: [], disableNotFound: [], result: "success", stopRoundFail: false };
+  const s = { root, settingsDir, unitsDir, calls, p, files, round: "good", active: [], journal: "", stopFail: [], stopIgnored: [], startFail: [], enableFail: [], disableFail: [], disableNotFound: [], result: "success", stopRoundFail: false, stepUnits: [] };
   const failed = stderr => ({ status: 1, stdout: "", stderr });
   // a systemd that only records what it was asked. The first round (`systemctl start factory-driver.service`) is good, fails, hangs,
   // or ends without a status file; every other command can be made to fail.
@@ -38,8 +38,10 @@ function server(edit = () => {}) {
     if (cmd !== "systemctl") return { status: 0, stdout: "", stderr: "" };
     const verb = args[0], unit = args[args.length - 1];
     if (verb === "is-active") return { status: 0, stdout: s.active.includes(unit) ? "active\n" : "inactive\n", stderr: "" };
+    if (verb === "list-units") return { status: 0, stdout: s.stepUnits.map(u => `${u} loaded active running step\n`).join(""), stderr: "" };
     if (verb === "show") return { status: 0, stdout: `Result=${s.result}\nExecMainStatus=${s.result === "success" ? 0 : 1}\n`, stderr: "" };
     if (verb === "stop") {
+      if (/^forge-step-/.test(unit)) { s.stepUnits = s.stepUnits.filter(u => u !== unit); return { status: 0, stdout: "", stderr: "" }; }
       if (unit === "factory-driver.service") return s.stopRoundFail ? failed("Failed to stop factory-driver.service") : { status: 0, stdout: "", stderr: "" };
       if (s.stopFail.includes(unit)) return failed("Failed to stop " + unit);
       if (!s.stopIgnored.includes(unit)) s.active = s.active.filter(u => u !== unit);
@@ -159,6 +161,16 @@ test("a first round that fails, or ends with no fresh status.json, puts the prev
     assert.ok(s.calls.indexOf("systemctl stop factory-driver.service", i) > i, "the round's unit is stopped first");
     assert.ok(s.calls.indexOf("systemctl daemon-reload", s.calls.indexOf("systemctl stop factory-driver.service", i)) > 0, "then systemd reads the previous units again");
   }
+});
+
+test("a failed switch stops the forge-step-* units the round launched before the old timers start again", async () => {
+  const s = oldServer(x => { x.round = "fail"; x.stepUnits = ["forge-step-stage-1.service", "forge-step-ship-2.service"]; });
+  const m = await switchOf(s);
+  assert.match(m, /the round's step units are stopped \(forge-step-stage-1\.service, forge-step-ship-2\.service\)/);
+  assert.deepEqual(s.stepUnits, [], "no step unit is left running");
+  const lastStep = s.calls.lastIndexOf("systemctl stop forge-step-ship-2.service");
+  assert.ok(lastStep > 0 && lastStep < s.calls.indexOf("systemctl start auto-stage.timer") && lastStep < s.calls.indexOf("systemctl start old-trust.timer"), "step units stop first, then the old timers start");
+  assert.match(m, /Everything that was changed is back\./);
 });
 
 test("a timer that will not stop, or is still running afterwards, stops the switch before any round: the units are put back and what was stopped runs again", async () => {
