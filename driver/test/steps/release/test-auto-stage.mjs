@@ -1,4 +1,4 @@
-// test cases: 112
+// test cases: 113
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -1608,6 +1608,16 @@ test("issue #155: a failed candidate is filed before the install's record or a r
   const d = driven({ over: { itemPulls: async () => { throw new R.Refused("GitHub said 502 to /graphql."); } } });
   await assert.rejects(() => A.autoStage(d.ctx), /502/);
   assert.deepEqual(d.w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`], "filed before the rebuild reads anything");
+});
+
+test("issue #155: a failed run whose only failed job is the summary job files that one; one that names no failed job files the run", async () => {
+  const a = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, { ...failed, failedJobs: ["the verdict"] }] });
+  assert.equal((await A.autoStage(a.ctx)).outcome, "failed-tests");
+  assert.deepEqual(a.w.filed.map((i) => i.title), ["Nightly scenario failed: the verdict"]);
+  const b = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, { ...failed, failedJobs: [] }] });
+  assert.equal((await A.autoStage(b.ctx)).outcome, "failed-tests");
+  assert.deepEqual(b.w.filed.map((i) => i.title), ["Nightly scenario failed: the scenario run of 2.0.0-beta.25, which names no failed job"]);
+  assert.equal(b.w.notices.length, 1);
 });
 
 test("issue #155: the stage's read of the public stage file goes through the same retries", async () => {

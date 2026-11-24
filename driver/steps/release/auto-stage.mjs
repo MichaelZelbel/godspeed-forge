@@ -1254,11 +1254,14 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
         return { outcome: "waiting", why: "failed jobs unknown" };
       }
       if (named.from !== "jobs") log(`The failed jobs of run ${sc.run} were read from its ${named.from}, because GitHub's list of its jobs did not answer.`);
-      for (const job of named.jobs) {
+      // the scenarios that failed; when only the summary job failed, that one; when GitHub names no job at all, the run
+      const filed = named.jobs.length ? named.jobs : named.aggregate.length ? named.aggregate : [];
+      for (const job of filed) {
         const logText = await ctx.jobLog(sc.run, job);
         causes[job] = logText === null ? UNREAD_CAUSE : classifyFailure(logText, job); // a log GitHub would not give is said so, never a reason to stop
       }
-      await fileFailures({ ctx, rs, version, staged: sc, failures: named.jobs.map((job) => ({ job, cause: causes[job] })), save });
+      const failures = filed.length ? filed.map((job) => ({ job, cause: causes[job] })) : [{ job: `the scenario run of ${version}, which names no failed job`, cause: null }];
+      await fileFailures({ ctx, rs, version, staged: sc, failures, save });
     }
 
     // ---- no record of the install: the install costs nothing, so a few looks may try it again

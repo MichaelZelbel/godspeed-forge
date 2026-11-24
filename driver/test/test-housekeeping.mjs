@@ -2,7 +2,10 @@ import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-housekeeping.mjs   (offline: every command goes to a stand-in)
 import { test } from "./harness.mjs";
 import assert from "node:assert/strict";
-import { housekeep, ALLOWED_RESTART } from "../housekeeping.mjs";
+import { housekeep, ALLOWED_RESTART, takeAwayStop } from "../housekeeping.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const NOW = Date.parse("2026-11-18T15:00:00Z");
 const STANDIN = "/home/godspeed-forge/.archon/workspaces/x/standin_ai.py --scenario H-39";
@@ -196,6 +199,31 @@ test("issue #155: the stage step's STOP goes as soon as its writer has ended and
     await housekeep({}, stopWorld(o), { ...s.deps, now: () => at, readFile: () => `${o.line || LINE}\nx\n`, remove: f => removed.push(f) });
     assert.deepEqual(removed, gone ? [STOPFILE] : [], JSON.stringify(o));
   }
+});
+
+test("issue #155: a stage STOP younger than the time a started run takes to show on GitHub stays, though no run shows yet", async () => {
+  const made = Date.parse("2026-11-18T13:47:26.709Z");
+  for (const [minutes, gone] of [[5, false], [14, false], [16, true]]) {
+    const s = server();
+    const removed = [];
+    await housekeep({}, stopWorld(), { ...s.deps, now: () => made + minutes * 60000, readFile: () => `${LINE}\nx\n`, remove: f => removed.push(f) });
+    assert.deepEqual(removed, gone ? [STOPFILE] : [], `${minutes} minutes`);
+  }
+});
+
+test("issue #155: the STOP is removed only as the very file the round read; one a new look took over meanwhile is put back", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hk-stop-"));
+  const file = path.join(dir, "STOP");
+  fs.writeFileSync(file, `${LINE}\nThe release step pauses the factory.\n`);
+  assert.equal(takeAwayStop(file, LINE), true);
+  assert.equal(fs.existsSync(file), false);
+  const newer = "auto-stage 777 2026-11-18T16:00:00.000Z\nThe release step pauses the factory.\n";
+  fs.writeFileSync(file, newer);
+  assert.equal(takeAwayStop(file, LINE), false);
+  assert.equal(fs.readFileSync(file, "utf8"), newer, "the new look's STOP stays as it wrote it");
+  assert.deepEqual(fs.readdirSync(dir), ["STOP"], "nothing is left aside");
+  assert.equal(takeAwayStop(path.join(dir, "gone"), LINE), true, "one that is gone is gone");
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test("issue #155: a stage STOP whose step still runs as `driver.mjs --step stage` is never removed, though the round's read called its writer ended", async () => {
