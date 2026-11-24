@@ -27,6 +27,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { secondCheck, codexJson, tell, askMichael, loginOf, ownerLogin, trustedLogins, asManagerDecision, asQuestion, ownerOnlyReason, technicalWords, KEEP_CHECKS_DECISION } from "./release-driver/release-driver-owner-steps.mjs";
 import { planCutRule, planItemNames, ticketItem, versionWords } from "./release-driver/release-driver-cut.mjs";
+import { ownerName } from "./inventory.mjs";
 
 const HOUR = 3600 * 1000;
 const iso = ms => new Date(ms).toISOString();
@@ -261,6 +262,9 @@ async function postDecision(env, obstacle, text, report, deps, out, now, flagged
   // a factory question's decision names it, by title and by the marker the questions step and the question accountant
   // look for (questions/factory-owner-questions.mjs idOf); its needs-owner is the questions step's to lift, once no
   // other open question holds the item
+  // a factory question is decided on the owner's standing instruction of 2026-11-24, and says so: the factory's copy of
+  // Archon honours that heading for product, scope and look-and-feel questions, the plain one for technical matters only
+  if (question) { const who = ownerName(); posted = posted.replace(/^Manager decision \(Mission Control, not [^)]*\)/,`Manager decision (Mission Control, on ${who === "the owner" ? "the owner's" : `${who}'s`} standing instruction of 2026-11-24)`); }
   const naming = question ? `\nThis decides the factory question "${short(question.heading).slice(0, 200)}"${question.link ? ` (${question.link})` : ""}.\n<!-- factory-question:factory-question-${crypto.createHash("sha1").update(String(question.key)).digest("hex").slice(0, 10)} -->` : "";
   const body = `${posted}${naming}\n${actMarker(deps.id || obstacle.id)}`;
   for (const n of targets) {

@@ -27,6 +27,7 @@ testCase("the options and the recommendation are read in both forms the manager 
   assert.equal(parseRecommendation("Options: (a) x; (b) y. Recommendation: (b). Default after 2026-11-24 10:15 UTC: wait.").text, "(b).");
   assert.equal(parseRecommendation("Recommendation: **A** for now, **B** later. This is about how the site looks, so there is no default.").label, "a");
   assert.equal(parseRecommendation("What Mission Control would do: keep the page as it is.").text, "keep the page as it is.");
+  assert.equal(pickOption({ heading: "h", body: "- **A.** Now: push it, then Publish in the editor. **Recommended:** visitors get the fixes.\n- **B.** Wait and publish once, later." }).option.label, "a", "an option can carry the recommendation itself");
   assert.equal(leadingLabel("a new key"), null, "an article is never a label");
   assert.equal(leadingLabel("(c): it keeps the rule"), "c");
   assert.deepEqual(itemsOf("One land-only lap (#958 / PR #990, #950 / PR #953)"), [958, 990, 950, 953]);

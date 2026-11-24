@@ -53,7 +53,7 @@ testCase("the decide helper's decision is posted on the question's item, names t
   const posts = calls.filter(c => c[0].includes("POST"));
   assert.equal(posts.length, 1); assert.equal(posts[0][0][2], "repos/acme/app/issues/12/comments", "on the question's own repository and item");
   const body = posts[0][1].body;
-  assert.ok(body.startsWith("Manager decision (Mission Control, not Michael): Keep the card's look and feel"));
+  assert.ok(body.startsWith("Manager decision (Mission Control, on the owner's standing instruction of 2026-11-24): Keep the card's look and feel"), "the heading the factory's Archon honours for a product question, never the technical-only one");
   assert.ok(decidesQuestion(body, key) && names(body, key), "the questions step and the accountant both see it as deciding this question");
   assert.ok(!calls.some(c => c[0].includes("DELETE")), "needs-owner is the questions step's to lift, once no other question holds the item");
   assert.deepEqual(out.question.targets, [12]);

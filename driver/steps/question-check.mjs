@@ -94,10 +94,12 @@ export async function run(ctx) {
     const text = alarmText(late.length);
     const r = await io.telegram(text);
     const at = new Date(now).toISOString();
-    for (const k of late) st.alarmed[k] = at; // once per question: a failed send is retried by the driver from its journal, never sent again here
-    const journal = env.JOURNAL;
-    if (journal) { try { appendEvents(journal, [{ t: "notice", id: alarmId(late), at, title: "Factory questions reached nobody", text, receipts: r && r.ok ? { telegram: r.receipt } : {}, failed: r && r.ok ? [] : [(r && r.why) || "no answer"], entries: [] }]); } catch { /* the step's own state still records it */ } }
-    alarm = r && r.ok ? `; the owner was told about ${late.length} (receipt ${r.receipt})` : `; telling the owner about ${late.length} failed (${(r && r.why) || "no answer"}), the driver retries`;
+    let journaled = false;
+    if (env.JOURNAL) { try { appendEvents(env.JOURNAL, [{ t: "notice", id: alarmId(late), at, title: "Factory questions reached nobody", text, receipts: r && r.ok ? { telegram: r.receipt } : {}, failed: r && r.ok ? [] : [(r && r.why) || "no answer"], entries: [] }]); journaled = true; } catch { /* not durable: see below */ } }
+    // once per question, and never lost: it counts as said when Telegram took it, or when the journal holds it for the
+    // driver's delivery retry; with neither, this check says it again next round
+    if ((r && r.ok) || journaled) for (const k of late) st.alarmed[k] = at;
+    alarm = r && r.ok ? `; the owner was told about ${late.length} (receipt ${r.receipt})` : journaled ? `; telling the owner about ${late.length} failed (${(r && r.why) || "no answer"}), the driver retries` : `; telling the owner about ${late.length} failed and could not be written down; tried again next round`;
   }
   st.at = new Date(now).toISOString();
   if (!ctx.dry) writeJson(file, st);

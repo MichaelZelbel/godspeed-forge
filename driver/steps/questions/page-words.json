@@ -12,13 +12,12 @@
       "\\b(?:start|take out|upgrade|renew|raise|add|buy) (?:a |the |our |its |another )?(?:paid |new |bigger )?subscriptions?\\b",
       "\\bsubscribe to\\b",
       "\\bbilling (?:plan|account|tier|limit|cap)\\b",
-      "\\binvoice\\b",
       "\\b(?:monthly|spend(?:ing)?|key|credit|usage|account|budget|billing|rate)(?:'s)? (?:monthly )?(?:limit|cap|quota)\\b",
       "\\b(?:raise|increase|lift|bump|double|extend) (?:the |our |its |a |his |her |their )?(?:\\w+(?:'s)? ){0,2}(?:limit|cap|budget|quota|allowance)\\b",
       "\\b(?:upgrade|raise|move) (?:the |our |its )?(?:\\w+ )?(?:plan|tier) to\\b",
       "\\bupgrade (?:to )?(?:the |a )?(?:paid|pro|team|business|bigger|higher) (?:plan|tier)\\b",
       "\\btop(?:-| )?up\\b",
-      "\\bmoney\\b",
+      "\\b(?:spend|use|put|commit|invest)(?:s|ing)? (?:\\w+ ){0,2}money\\b",
       "[$€£]\\s?\\d",
       "\\d\\s?(?:usd|eur|gbp|dollars?|euros?)\\b"
     ]
@@ -26,22 +25,22 @@
   "publish": {
     "why": "it would publish something, put it live, or send something to people other than the owner",
     "patterns": [
-      "\\bpublish(?:es|ed|ing)?\\b",
+      "\\bpublish(?:es|ed|ing)?\\b(?! (?:button|buttons|date|dates|status|flag|state|setting|settings|toggle|icon|menu|page|form|field|tab|step|action|permission)s?\\b)",
       "\\bgo(?:es)? live\\b",
       "\\bput (?:it |this |them )?live\\b",
       "\\bmake (?:it |this |them |the \\w+ )?public\\b",
       "\\bpublic release\\b",
       "\\breleased? (?:it |this )?publicly\\b",
       "\\bpost(?:s|ed|ing)? (?:it |this |them )?(?:publicly|in public|on (?:social media|linkedin|x|twitter|facebook|instagram|reddit|youtube|tiktok|mastodon|bluesky|hacker news))",
-      "\\bannounce(?:s|d|ment)?\\b",
-      "\\bnewsletter\\b",
+      "\\bannounce(?:s|d)? (?:it |this |them |the \\w+ )?(?:publicly|to (?:users|customers|everyone|the public|subscribers|members))",
+      "\\bpublic announcement\\b",
+      "\\bsend (?:out )?(?:the |a |our )?newsletter\\b",
       "\\bpress release\\b",
-      "\\bsocial media\\b",
       "\\b(?:email|e-mail|mail|message|notify|write to|text|contact) (?:all |the |our |every |each |existing )?(?:users|customers|subscribers|members|clients|mailing list|list|people on)\\b",
       "\\bsend (?:\\w+ ){0,3}to (?:all |the |our |every |each |existing )?(?:users|customers|subscribers|members|clients|mailing list|people)\\b",
       "\\binvit(?:e|es|ing|ations?) (?:\\w+ ){0,2}(?:users|customers|people|members|clients|testers|subscribers)\\b",
       "\\bdeploy(?:s|ed|ing)? (?:it |this )?(?:to|on) (?:production|the public|the live)",
-      "\\b(?:app|play) store\\b",
+      "\\b(?:submit|publish|release|upload|ship|put)(?:s|ted|ed|ing)? (?:\\w+ ){0,3}(?:to|on|in) the (?:app|play) store\\b",
       "\\bsubmit (?:it |this )?(?:to|for) (?:review|the store|app review)"
     ]
   },
@@ -50,10 +49,7 @@
     "patterns": [
       "\\b(?:permanently|irreversibly|for good) (?:delete|remove|erase|destroy)",
       "\\b(?:delete|remove|erase|destroy)s? (?:\\w+ )?(?:permanently|irreversibly|for good)\\b",
-      "\\birreversibl",
-      "\\berase\\b",
-      "\\bwipe\\b",
-      "\\bpurge\\b",
+      "\\b(?:erase|wipe|purge)s? (?:all |the |every |their |its |old |inactive |existing )?(?:\\w+ )?(?:people's |users'? |user |customers'? |customer |members'? |member |person's )?(?:data|accounts?|records|profiles|history|database|backups)\\b",
       "\\b(?:delete|remove|drop) (?:all |every |the |old |inactive |existing |their |its )?(?:\\w+ )?(?:people's|users'?|user|customers'?|customer|members'?|member|persons'?|person's) (?:data|accounts?|records|profiles|notes|messages|chats|history|files)\\b",
       "\\b(?:delete|remove) (?:all|every|the|old|inactive|existing) (?:data|accounts|records|users|profiles|notes|messages|chats|backups)\\b",
       "\\bdrop (?:the )?(?:table|database|tables)\\b"

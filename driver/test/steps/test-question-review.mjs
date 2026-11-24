@@ -1,5 +1,5 @@
 // node --disable-warning=ExperimentalWarning driver/test/steps/test-question-review.mjs
-// test cases: 9
+// test cases: 14
 // What the first independent review of the question work (Codex, 2026-11-24) found, each kept from coming back.
 import { testCase } from "../../../test/cases.mjs";
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
@@ -149,4 +149,62 @@ testCase("a question handed to the driver that names several items is decided on
   await run(env(d), T0 + 10 * MIN, quiet, deps(g, channels()));
   const s = JSON.parse(fs.readFileSync(path.join(d, "state.json"), "utf8"));
   assert.ok(!s.routed[key] && s.decided[key]);
+}
+
+// ---- the second round of the review
+testCase("two pages whose titles differ only in their numbers stay two pages on the next run: each paged once");
+{
+  const d = setup("rv2-pages-"); const g = github(); const c = channels();
+  issue(d, `### Budget (#60)\n${PAY}\n\n### Budget (#61)\n${PAY}\n`);
+  for (const at of [0, 5, 10]) await run(env(d), T0 + at * MIN, quiet, deps(g, c));
+  assert.equal(c.tg.length, 2);
+  await run(env(d), T0 + 15 * MIN, quiet, deps(g, c));
+  const told = JSON.parse(fs.readFileSync(path.join(d, "state.json"), "utf8")).told;
+  assert.deepEqual(Object.keys(told).sort(), ["budget", "budget items 61"]); assert.equal(c.tg.length, 2, "neither is paged again");
+}
+
+testCase("with no recommendation, an option that changes what the project is for is never the one taken");
+{
+  const p = pickOption({ heading: "h", body: "Options: (a) change the purpose to teams; (b) change the purpose to families." });
+  assert.equal(p, null, "every option changes it: the decide helper");
+  const q = pickOption({ heading: "h", body: "Options: (a) change the purpose to teams; (b) keep it as it is for now." });
+  assert.equal(q.option.label, "b");
+}
+
+testCase("a mention is not an action: an invoice shown, no money, an app-store link, a build cache, a banner, a button");
+{
+  for (const t of ["show the invoice", "costs no money", "keep the app store link", "purge the build cache", "an announcement banner in the app", "where the Publish button sits", "a newsletter signup field"]) assert.equal(categoryOf(t), null, t);
+  for (const [t, c] of [["publish what main holds", "publish"], ["submit it to the App Store", "publish"], ["wipe the database", "delete"], ["purge inactive accounts", "delete"], ["spend more money", "money"], ["announce it to users", "publish"]]) assert.equal((categoryOf(t) || {}).category, c, t);
+}
+
+testCase("the decide helper's decision on a question counts as made only once it is in the journal");
+{
+  const d = setup("rv2-route-"); const g = github();
+  issue(d, "### Status of #70 (#70)\nFor your information.\n");
+  await run(env(d), T0, quiet, deps(g, channels()));
+  const key = keyOf("Status of #70 (#70)");
+  g.comments[70] = [{ body: `Manager decision (Mission Control, on Alex's standing instruction of 2026-11-24): nothing to change.\n<!-- factory-question:${idOf(key)} -->` }];
+  fs.mkdirSync(path.join(d, "jdir"));
+  await run(env(d, { JOURNAL: path.join(d, "jdir") }), T0 + 5 * MIN, quiet, deps(g, channels()));
+  assert.ok(JSON.parse(fs.readFileSync(path.join(d, "state.json"), "utf8")).routed[key], "unjournaled: still the driver's");
+  await run(env(d), T0 + 10 * MIN, quiet, deps(g, channels()));
+  assert.ok(JSON.parse(fs.readFileSync(path.join(d, "state.json"), "utf8")).decided[key]);
+  const j = fs.readFileSync(path.join(d, "journal.jsonl"), "utf8");
+  assert.ok(j.includes("the driver's decide helper") && j.includes("nothing to change."), "with the choice it made");
+}
+
+testCase("the two-hour message is never lost: with Telegram down and the journal unwritable, it is tried again next round");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rv2-alarm-"));
+  fs.mkdirSync(path.join(tmp, "s", "journal.jsonl"), { recursive: true }); // the journal cannot be written
+  const settings = { owner: { github_login: "boss", name: "Alex" }, server: { factory_user: "b", factory_home: "/h", state_dir: path.join(tmp, "s"), questions_dir: path.join(tmp, "q") }, steps: { questions: { godspeed_dir: tmp, hermes_home: tmp } } };
+  const sent = []; let up = false;
+  const ctx = at => ({ settings, main: { repository: "acme/app" }, projects: [{ repository: "acme/app" }], env: {}, stateDir: path.join(tmp, "s", "steps", "question-check"), now: T0 + at,
+    accountantDeps: { ownerIssue: () => ({ number: 7, body: "### Nobody has it\nx\n", url: "u" }), comments: () => [], telegram: async t => { sent.push(t); return up ? { ok: true, receipt: "9" } : { ok: false, why: "telegram http 502" }; } } });
+  await check.run(ctx(0)); await check.run(ctx(121 * MIN));
+  assert.equal(sent.length, 1);
+  up = true;
+  const r = await check.run(ctx(126 * MIN));
+  assert.equal(sent.length, 2, "said again, since nothing held it"); assert.match(r.summary, /receipt 9/);
+  await check.run(ctx(131 * MIN)); assert.equal(sent.length, 2, "and then never again");
 }

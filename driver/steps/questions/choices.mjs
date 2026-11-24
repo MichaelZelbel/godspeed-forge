@@ -82,7 +82,9 @@ const CHANGES = /\b(?:amend|amends|amendment|change|changes|changing|new|differe
 export function pickOption(q) {
   const body = String(q.body || "");
   const options = parseOptions(body);
-  const rec = parseRecommendation(body);
+  // an option can carry the recommendation itself ("- **A.** Now: ... **Recommended:** visitors get the fixes")
+  const marked = options.find(o => /\brecommended\b\s*[:)]|\(recommended\)/i.test(o.text));
+  const rec = marked ? { text: marked.text, label: marked.label } : parseRecommendation(body);
   const byLabel = l => options.find(o => o.label === l) || (/^[1-9]$/.test(l || "") ? options[Number(l) - 1] : null) || (/^[a-e]$/.test(l || "") && options[0] && /^[1-9]$/.test(options[0].label) ? options[l.charCodeAt(0) - 97] : null);
   if (rec) {
     const opt = rec.label ? byLabel(rec.label) : null;
@@ -95,8 +97,10 @@ export function pickOption(q) {
     }
     return { how: "recommended", label: opt ? opt.label : null, option: opt || null, text: said, recommendation: rec.text, options, labelUnresolved: !!(rec.label && !opt) };
   }
-  if (options.length) {
-    const best = options.map((o, i) => ({ o, i, s: score(o.text) })).sort((a, b) => b.s - a.s || a.i - b.i)[0].o;
+  // with no recommendation: the most reversible of the options that keep the mission; none keeps it, nothing by rule
+  const keeping = options.map((o, i) => ({ o, i, s: score(o.text) })).filter(x => !(MISSION.test(x.o.text) && CHANGES.test(x.o.text)));
+  if (keeping.length) {
+    const best = keeping.sort((a, b) => b.s - a.s || a.i - b.i)[0].o;
     return { how: "most reversible", label: best.label, option: best, text: best.text, recommendation: "", options };
   }
   return null;

@@ -625,7 +625,9 @@ export function loadState(file) {
     s.v = STATE_VERSION;
   }
   s.decided ||= {};
-  for (const [k, v] of Object.entries(s.told)) { const nk = v.driver ? k : keyOf(v.heading || k); if (nk !== k) { delete s.told[k]; s.told[nk] = v; } } // keys follow keyOf (a driver question keeps its item in the key)
+  // keys follow keyOf; a driver question keeps its item in the key, and a question that shares its title with another
+  // keeps the numbers numberAndKey gave it ("<key> items 13")
+  for (const [k, v] of Object.entries(s.told)) { const base = keyOf(v.heading || k); const nk = v.driver || k === base || k.startsWith(`${base} items `) ? k : base; if (nk !== k) { delete s.told[k]; s.told[nk] = v; } }
   return s;
 }
 function saveState(file, s) {
@@ -826,7 +828,11 @@ async function runLocked(env, now, log, deps) {
       let hit = null, all = true;
       try { for (const n of (v.items && v.items.length ? v.items : [v.issue])) { const h = io.comments(project.repo, n).find(x => decidesQuestion(x.body, k)); if (!h) { all = false; break; } hit ||= h; } } catch { continue; }
       if (all && hit && !env.DRY) {
-        state.decided = { ...(state.decided || {}), [k]: { at: nowIso, how: "the driver's decide helper", heading: v.heading, targets: [v.issue], items: v.items || [], comment: hit.html_url || null, ...(v.driver ? { driver: true, issue: v.issue } : {}) } };
+        // the decision goes into the driver's journal first; unwritten, the question stays the driver's and is looked at again
+        const choice = firstLine(hit.body).replace(/^[\s#>*_`~]*manager decision \([^)]*\)\s*:?\s*/i, "").slice(0, 400);
+        const targets = v.items && v.items.length ? v.items : [v.issue];
+        if (!io.journal([{ t: "decision", at: nowIso, repo: project.repo, question: v.heading, key: k, how: "the driver's decide helper", choice, targets, by: "the driver's decide helper" }])) continue;
+        state.decided = { ...(state.decided || {}), [k]: { at: nowIso, how: "the driver's decide helper", heading: v.heading, choice, targets, items: v.items || [], comment: hit.html_url || null, ...(v.driver ? { driver: true, issue: v.issue } : {}) } };
         delete state.routed[k]; c.save();
       }
     }
