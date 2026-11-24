@@ -122,6 +122,19 @@ test("dead-end: an issue closed as not planned, or closed an hour with no change
   assert.deepEqual(findObstacles(world({ state: "closed", stateReason: "completed", closedAt: H(16), prs: [], mergedRefs: [714] }), ledger(), NOW), []);
 });
 
+// the Forge 0.3.1, ticket 03: an issue closed as completed whose comments name nothing (claims 0, as world.mjs reads them) is a dead
+// end after one round, so the cut moves it in the next; one an App says was delivered, which GitHub confirms, is done; one whose
+// named delivery GitHub does not confirm keeps the hour
+test("ticket 03: closed as completed with nothing named is a dead end after one round; delivered is done; a named but unconfirmed delivery keeps the hour", () => {
+  const closed = (o) => world({ state: "closed", stateReason: "completed", prs: [], ...o });
+  assert.deepEqual(kinds(findObstacles(closed({ closedAt: M(6), claims: 0 }), ledger(), NOW)), ["dead-end"], "nothing named, closed one round ago");
+  assert.match(findObstacles(closed({ closedAt: M(6), claims: 0 }), ledger(), NOW)[0].evidence[0], /nothing names where its work is on main/);
+  assert.deepEqual(kinds(findObstacles(closed({ closedAt: M(3), claims: 0 }), ledger(), NOW)), [], "closed this very round: one more round to name it");
+  assert.deepEqual(findObstacles(closed({ closedAt: H(30), claims: 1, delivered: { number: 876, commit: "5d29db0", mergedAt: H(80) } }), ledger(), NOW), [], "delivered (Godspeed beta.31's ticket 01): never cut");
+  assert.deepEqual(kinds(findObstacles(closed({ closedAt: M(20), claims: 1 }), ledger(), NOW)), [], "a delivery named but not confirmed yet: the hour");
+  assert.deepEqual(kinds(findObstacles(closed({ closedAt: H(2), claims: 1 }), ledger(), NOW)), ["dead-end"], "and after it, a dead end");
+});
+
 const factory = (o = {}) => ({ project: "godspeed-mission-control", primary: true, repo: "MichaelZelbel/godspeed-mission-control", checkout: "/home/godspeed-forge/godspeed-mission-control", lastDecisions: [], activeRuns: [], board: [], stop: null, ...o });
 const idleDecisions = [{ at: H(1), text: "No launch: workable nothing" }, { at: M(30), text: "No launch: workable nothing" }, { at: M(5), text: "No launch: found nothing to start" }];
 

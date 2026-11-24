@@ -3,6 +3,7 @@
 // the tickets it covers (no "no-progress", no "nothing to do").
 import crypto from "node:crypto";
 import { isWorking, ticketKeyOf } from "./progress.mjs";
+import { onMain } from "./delivery.mjs";
 
 export const KINDS = ["parked", "check-failed", "no-progress", "dead-end", "factory-idle", "factory-stopped", "factory-restarts", "main-red", "unreadable", "unit-failed", "disk", "memory", "stale-process", "login", "no-ai", "tools-missing"];
 export const TICKET_KINDS = ["parked", "check-failed", "no-progress", "dead-end"];
@@ -10,8 +11,10 @@ export const TICKET_KINDS = ["parked", "check-failed", "no-progress", "dead-end"
 export const MACHINE_KINDS = ["unit-failed", "disk", "memory", "stale-process", "login", "factory-stopped", "factory-restarts"];
 // stopHours: a STOP made by the release step while the candidate's scenarios run is legit this long
 // (2026-11-18 ruling); maxRestarts: starts of the factory user's manager in 30 minutes that are still fine;
-// deadEndHours: a closed issue with no change linked is a dead end after this long (a change may still be linking)
-export const CONFIG = { allowedHours: { s: 4, m: 8, l: 16 }, checkRedMinutes: 20, idleDecisions: 3, diskPct: 90, memAvailPct: 10, stopHours: 2, maxRestarts: 2, deadEndHours: 1 };
+// deadEndHours: a closed issue with no change linked, but an App's comment naming a delivery GitHub does not confirm, is a dead
+// end after this long (a change may still be linking); deadEndUnnamedMinutes: one closed as completed with nothing at all named
+// is one after a single round, so the cut moves it in the next round (the Forge 0.3.1: beta.31 waited 28 hours on such a ticket)
+export const CONFIG = { allowedHours: { s: 4, m: 8, l: 16 }, checkRedMinutes: 20, idleDecisions: 3, diskPct: 90, memAvailPct: 10, stopHours: 2, maxRestarts: 2, deadEndHours: 1, deadEndUnnamedMinutes: 5 };
 
 export const obstacleId = (kind, key) => crypto.createHash("sha1").update(`${kind}\n${key}`).digest("hex").slice(0, 10);
 const IDLE = /workable nothing|found nothing to start/i;
@@ -35,12 +38,17 @@ export function findObstacles(world, ledger = {}, now = Date.now(), cfg0 = {}) {
       const item = (world.items || {})[ticket.issue];
       if (!item) continue; // unreadable: its own obstacle says so
       const prs = item.prs || [];
-      if (item.state === "closed" && (prs.some(p => p.merged) || (item.mergedRefs || []).length)) continue; // done
+      // done: a pull request merged into main closed it or names it, or the builder or release App's comment names a delivery
+      // GitHub confirms; a merge into another branch is not the item on main, as the release step judges it too
+      if (item.state === "closed" && (prs.some(onMain) || (item.mergedRefs || []).length || item.delivered)) continue;
       const base = { ticketKey: key, issue: ticket.issue };
-      // closed without its change reaching main: the plan's dead-end rule (what auto-stage did until 2026-11-18)
+      // closed without its change reaching main: the plan's dead-end rule (what auto-stage did until 2026-11-18). When the reading
+      // of its comments found nothing at all named (item.claims === 0, world.mjs), it waits one round, not an hour, so the release
+      // step never waits on the driver for it; an issue whose comments were not read that way keeps the hour
+      const nothingNamed = item.claims === 0;
       if (item.state === "closed" && !item.partial && !prs.some(p => p.state === "open")
-        && (item.stateReason === "not_planned" || now - ts(item.closedAt) >= cfg.deadEndHours * 3600000)) {
-        add("dead-end", key, { ...base, since: item.closedAt || nowIso }, [`issue #${ticket.issue} was closed${item.stateReason ? ` (${item.stateReason.replace(/_/g, " ")})` : ""} at ${item.closedAt} and no merged change closed it`]);
+        && (item.stateReason === "not_planned" || now - ts(item.closedAt) >= (nothingNamed ? cfg.deadEndUnnamedMinutes * 60000 : cfg.deadEndHours * 3600000))) {
+        add("dead-end", key, { ...base, since: item.closedAt || nowIso }, [`issue #${ticket.issue} was closed${item.stateReason ? ` (${item.stateReason.replace(/_/g, " ")})` : ""} at ${item.closedAt} and no merged change closed it${nothingNamed ? "; nothing names where its work is on main" : item.claims > 0 ? "; the change an App's comment names is not merged into main" : ""}`]);
         continue;
       }
       const parkedPr = prs.find(p => p.state === "open" && (p.labels || []).includes("needs-owner"));

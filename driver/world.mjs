@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { GODSPEED_RELEASE } from "./journal.mjs";
 import { readReleases, pickPlans, itemIssues, releaseLabel, planRepository, excludedIssues, requiredState, compareVersions, releaseVersion } from "./release-driver/release-driver.mjs";
+import { deliveryClaims, alreadyQuery, claimMerges, onMain } from "./delivery.mjs";
 
 // a unit this driver replaced (settings legacy_units, with or without .service/.timer) belongs to the old program, not to the factory
 // ONE predicate, used wherever a unit is started, restarted, re-enabled or turned into an obstacle: an entry with .service or .timer
@@ -40,6 +41,8 @@ export const defaultsFor = (e = process.env) => ({
   // The test machine's own module: its toolCoverage() says which hidden checks have no tool that can run
   // (2026-11-18: the driver never saw a missing tool; only Michael was told, by the test machine).
   TM_MODULE: e.FD_TM_MODULE || "",
+  // the builder and release Apps, whose comment on a closed issue may name where its work is on main (delivery.mjs)
+  APPS: [e.FD_BUILDER_APP, e.FD_RELEASE_APP].filter(Boolean),
 });
 
 const realDeps = env => ({
@@ -101,7 +104,7 @@ function readPr(env, deps, n, unreadable) {
       requiredSt = requiredState(runs);
     }
     return {
-      number: n, state: String(p.state || "").toLowerCase(), merged: !!p.merged_at, mergedAt: iso(p.merged_at), mergeSha: p.merge_commit_sha || null, createdAt: iso(p.created_at), labels: labelNames(p),
+      number: n, state: String(p.state || "").toLowerCase(), merged: !!p.merged_at, mergedAt: iso(p.merged_at), mergeSha: p.merge_commit_sha || null, base: (p.base && p.base.ref) || null, createdAt: iso(p.created_at), labels: labelNames(p),
       headSha: sha || null, lastCommitAt, requiredState: requiredSt.state, requiredSince: iso(requiredSt.at),
       comments: comments(deps.gh([`repos/${env.REPO}/issues/${n}/comments?per_page=50`])),
     };
@@ -114,18 +117,44 @@ function readItem(env, deps, n, unreadable) {
   const item = { number: n, mergedRefs: [], state: String(issue.state || "").toLowerCase(), stateReason: issue.state_reason ? String(issue.state_reason).toLowerCase() : null, labels: labelNames(issue), closedAt: iso(issue.closed_at), prs: [], comments: [], partial: false };
   try { item.comments = comments(deps.gh([`repos/${env.REPO}/issues/${n}/comments?per_page=50`])); }
   catch (e) { unreadable.push({ part: `issue#${n}/comments`, error: e.message }); item.partial = true; }
-  let nums = [];
+  let nums = [], appComments;
   try {
-    const q = `query { repository(owner: ${JSON.stringify(env.REPO.split("/")[0])}, name: ${JSON.stringify(env.REPO.split("/")[1])}) { issue(number: ${n}) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number } } timelineItems(last: 40, itemTypes: [CONNECTED_EVENT]) { nodes { ... on ConnectedEvent { subject { __typename ... on PullRequest { number } } } } } refs: timelineItems(last: 60, itemTypes: [CROSS_REFERENCED_EVENT]) { nodes { ... on CrossReferencedEvent { source { __typename ... on PullRequest { number merged } } } } } } } }`;
+    // the issue's newest 30 comments with their authors' type: the same window and shape the release step reads (auto-stage.mjs)
+    const q = `query { repository(owner: ${JSON.stringify(env.REPO.split("/")[0])}, name: ${JSON.stringify(env.REPO.split("/")[1])}) { issue(number: ${n}) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number } } timelineItems(last: 40, itemTypes: [CONNECTED_EVENT]) { nodes { ... on ConnectedEvent { subject { __typename ... on PullRequest { number } } } } } refs: timelineItems(last: 60, itemTypes: [CROSS_REFERENCED_EVENT]) { nodes { ... on CrossReferencedEvent { source { __typename ... on PullRequest { number merged mergedAt baseRefName mergeCommit { oid } repository { nameWithOwner } } } } } } comments(last: 30) { nodes { body author { __typename login } } } } } }`;
     const d = deps.gh(["graphql", "-f", `query=${q}`]);
     const i = d.data.repository.issue;
     nums = [...new Set([...i.closedByPullRequestsReferences.nodes.map(x => x.number), ...i.timelineItems.nodes.filter(e => e && e.subject && e.subject.number).map(e => e.subject.number)])];
     // a merged pull request that only mentions the issue (seen live: #679 closed by #714, which does not
-    // close it by keyword): the item's change is on main, so it is never a dead end
-    item.mergedRefs = [...new Set(((i.refs && i.refs.nodes) || []).filter(e => e && e.source && e.source.__typename === "PullRequest" && e.source.merged).map(e => e.source.number))];
+    // close it by keyword): the item's change is on main, so it is never a dead end. Only one of this repository merged into
+    // main counts: one merged elsewhere is not the item on main, and the release step would wait for a cut the driver never makes
+    const same = p => !p.repository || String(p.repository.nameWithOwner || "").toLowerCase() === String(env.REPO).toLowerCase();
+    const refs = ((i.refs && i.refs.nodes) || []).filter(e => e && e.source && e.source.__typename === "PullRequest" && e.source.merged).map(e => e.source)
+      .filter(p => same(p) && (!p.baseRefName || p.baseRefName === "main"));
+    item.mergedRefs = [...new Set(refs.map(p => p.number))];
+    // their merges into main, newest first: rung 0 writes the ticket's done line from one, so the release step counts it done too
+    item.mergedRefMerges = refs.filter(p => p.mergeCommit && p.mergeCommit.oid && p.baseRefName === "main" && p.repository).map(p => ({ number: p.number, commit: p.mergeCommit.oid, mergedAt: p.mergedAt })).sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt));
+    appComments = i.comments && Array.isArray(i.comments.nodes) ? i.comments.nodes : undefined;
   } catch (e) { unreadable.push({ part: `issue#${n}/prs`, error: e.message }); item.partial = true; }
   for (const pn of nums) { const p = readPr(env, deps, pn, unreadable); if (p) item.prs.push(p); else item.partial = true; }
+  readDelivery(env, deps, item, appComments, unreadable);
   return item;
+}
+// An issue closed as completed with no merged change linked to it: the builder or release App's comment may name where its work
+// is on main ("Delivered by <pull request URL>", "Already delivered on main by #N"), read exactly as the release step reads it
+// (delivery.mjs), from the same comments, so the two never disagree. item.claims: how many such comments (left unset when the
+// comments were not read: then nothing is concluded from their absence); item.delivered: the newest merge they prove.
+function readDelivery(env, deps, item, comments, unreadable) {
+  if (item.state !== "closed" || (item.stateReason && item.stateReason !== "completed") || item.prs.some(onMain) || item.mergedRefs.length || !comments) return;
+  const claims = deliveryClaims(comments, { repo: env.REPO, apps: env.APPS });
+  item.claims = claims.length;
+  if (!claims.length) return;
+  try {
+    const d = deps.gh(["graphql", "-f", `query=${alreadyQuery(env.REPO, claims.map(c => c.number))}`]);
+    const data = d && d.data && d.data.repository;
+    if (!data) throw new Error("GitHub gave no answer about the delivery the App named");
+    const merges = claims.flatMap(c => claimMerges(c, data[`a${c.number}`], env.REPO, item.number)).sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt));
+    if (merges.length) item.delivered = merges[0];
+  } catch (e) { unreadable.push({ part: `issue#${item.number}/delivery`, error: e.message }); item.partial = true; }
 }
 
 // ------------------------------------------------------------ factory and server
