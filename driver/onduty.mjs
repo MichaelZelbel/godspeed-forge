@@ -92,7 +92,7 @@ TOOLS (all as root): root's gh is logged in as the owner. Keys: set -a; . ${a.KE
 NEVER: remove or undo a pause, a parked project, a HOLD, PAUSE or STOP file (the owner may have set it on purpose), anything outward to people (mail, posts, messages), spending money, publishing or promoting a release, recording the owner's go, posting as the owner ("Owner decision" is only his own words), loosening or skipping a check or giving a bot more permissions, editing the product's .github/ files, moving an item out of a release (only the factory driver's own cut does that, and only when the item itself cannot be built; an item whose trouble is our own setup stays in and you fix the setup), deciding what the software does for its users or how it looks or is worded (that is his). Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step.
 
 WHEN DONE: post a short note on the issue or pull request, signed "${SIGN}". If the item was a question in the factory's queue and you answered it, run: node ${selfPath} --mark-handled "<owner/repo>" "<queue heading>". If the trouble is the factory DRIVER itself (its code, its units, its journal), you cannot edit it from here (read-only): run node ${selfPath} --repair-request "<what is wrong>" and the dead-man starts a repair; if that command fails, the request did not reach the dead-man, so say so and answer RESULT: unresolved. If you truly cannot unstick it, run: node ${selfPath} --notice "<short id>" "<ONE plain sentence for the owner in everyday words: what is stuck, what you tried, and the one step only he can take; no issue numbers or file names>".
-If another program is visibly working on this item right now (a GitHub Actions run in progress, auto-stage's STOP file, a freeze or scenarios running), do not interfere: report RESULT: in-progress and say in one sentence what is running.
+If another program is visibly working on this item right now (a GitHub Actions run in progress, auto-stage's STOP file, a freeze or scenarios running), do not interfere: report RESULT: in-progress and name what is running, as the systemd unit, the GitHub run (its URL or id) or the pull request; the driver checks it on its next round, and an in-progress that names none of these, or one that is not running, counts as unresolved.
 Your last line must be exactly one of: RESULT: resolved | RESULT: notice | RESULT: unresolved | RESULT: in-progress`;
 }
 export const resultOf = text => { const m = /RESULT:\s*(resolved|notice|unresolved|in-progress)\s*$/i.exec(String(text || "").trim()); return m ? m[1].toLowerCase() : "unresolved"; };
@@ -140,14 +140,14 @@ export class RepairRefused extends Error {}
 // its unit reads, <settings dir>/driver.env). A spool that is not set, a dead-man whose settings cannot be read, or two
 // different folders: nothing is written, and the run is told why (RepairRefused). -> the file written
 const sameFolder = (a, b) => { const real = p => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } }; return real(a) === real(b); };
-export function repairRequestChecked(e, what, now = new Date()) {
+export function repairRequestChecked(e, what, now = new Date(), extra = {}) {
   const spool = e.FD_SPOOL;
   if (!spool) throw new RepairRefused("the repair request was not written: FD_SPOOL is not set, so this run does not know the folder the dead-man reads. Nothing reached the dead-man.");
   const envFile = path.join(e.FD_SETTINGS_DIR || defaultSettingsDir(), "driver.env");
   const deadman = readSettingsEnvFile(envFile).DM_SPOOL;
   if (!deadman) throw new RepairRefused(`the repair request was not written: the dead-man's settings (${envFile}) cannot be read or name no spool. Nothing reached the dead-man.`);
   if (!sameFolder(spool, deadman)) throw new RepairRefused(`the repair request was not written: it would go to ${spool}, but the dead-man reads ${deadman}. Nothing reached the dead-man.`);
-  return repairRequest({ SPOOL: deadman }, what, now);
+  return repairRequest({ SPOOL: deadman }, what, now, extra);
 }
 export const answeredFile = a => path.join(a.QUESTIONS, "answered-elsewhere.json");
 

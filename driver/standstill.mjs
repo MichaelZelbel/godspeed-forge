@@ -1,0 +1,195 @@
+// The release clock (the Forge 0.3.1, ticket 01). Michael, 2026-11-24: "I don't want the release to sit still for even an hour
+// without you fixing it", and "Will that be hard-coded so that we can rely on it?" So this is plain code with constants, decided
+// from the release's own state alone, never from an AI's word or from work that happens near the release.
+//
+// Godspeed 2.0.0-beta.31 had every ticket done on 2026-11-23 and did not move for about 28 hours: one acting run answered
+// "in-progress" naming nothing anybody could check, it got a two-hour hold, unrelated activity used up the rest of the six-hour
+// moving credit, and the next escalation was due 19 hours after the release step began to wait.
+//
+// One clock per approved release that has not reached the owner's server, while the release step works on it:
+//   - the release's STATE is the stage step's look at it (look.txt, with its minutes and timestamps taken out), its stage in the
+//     auto-stage state file and its staging record; a change of any of them resets the clock and its ladder;
+//   - CHECKABLE WORK pauses the clock, only while it runs and only inside its own limit: a GitHub run in progress on the candidate
+//     tag, the release branch or the release's version pull request; auto-stage's STOP file younger than its limit; a freeze,
+//     install or check program of the release step that is running; and the unit, GitHub run or pull request an acting run's
+//     "in-progress" named, once the driver has checked it runs (or is open), for at most an hour after the answer;
+//   - never work: the stage step's own repeated waiting sentence, other projects' runs, an acting run's word;
+//   - at 20 minutes still an acting run (rung 1), at 40 the other AI (rung 2) whatever rung 1 said, at 60 a repair request to the
+//     dead-man naming the release and both tries, and one notice to the owner naming what was tried.
+// The six-hour moving credit and the 24- and 72-hour ceilings stay as outer limits (inventory.mjs); they never delay these steps.
+// Pure except checkNamed, whose commands come in as `run`.
+import crypto from "node:crypto";
+
+export const STANDSTILL = Object.freeze({
+  helperMinutes: 20, // rung 1: an acting run
+  otherAiMinutes: 40, // rung 2: the other AI, at once, whatever rung 1 answered
+  repairMinutes: 60, // the dead-man's repair request and one notice to the owner
+  namedHoldMinutes: 60, // what an acting run's "in-progress" names holds the clock at most this long after the answer
+  restartHours: 24, // after the repair step the ladder starts again when the release still has not moved
+  firstSightMaxMinutes: 10, // a new state is counted from the last round that saw the old one, never from further back than this
+  runHours: 6, // a GitHub run on the version pull request: its own timeout
+  scenariosHours: 3, // a run on the candidate or release branch, and a release program, are bounded by their own start
+  stopHours: 2, // auto-stage's STOP file
+});
+const MIN = 60000, H = 60 * MIN;
+
+// ---------------------------------------------------------------- the release's state
+// The stage step's look without what changes on every look while nothing happens: "(for 25 minutes)", "35 minutes old", times,
+// and commit ids (main's head is named in the look; the release's own steps show in its state file and staging record).
+export function normaliseLook(text) {
+  return String(text || "").split(/\r?\n/)
+    .map(l => l.replace(/\d{4}-\d\d-\d\d[T ]\d\d:\d\d(?::\d\d(?:\.\d+)?)?(?:Z|[+-]\d\d:?\d\d)?/g, "<time>")
+      .replace(/\s*\(for \d+ (?:minute|hour)s?\)/gi, "")
+      .replace(/\b\d+ (second|minute|hour|day)s?\b/gi, "<n> $1s")
+      .replace(/\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/g, "<commit>")
+      .trim())
+    .filter(Boolean).join("\n");
+}
+// A JSON value with its keys in order, without the times of a mere look (a staging record's lastCheck.at, a server clock).
+const VOLATILE = new Set(["at", "checkedAt", "lookedAt", "serverClock", "now"]);
+export function stable(v) {
+  if (Array.isArray(v)) return v.map(stable);
+  if (v && typeof v === "object") return Object.fromEntries(Object.keys(v).filter(k => !VOLATILE.has(k)).sort().map(k => [k, stable(v[k])]));
+  return v;
+}
+// -> the release's state as one fingerprint (and its parts, for the evidence)
+export function releaseState({ look, autoStage, staging }) {
+  const parts = { look: normaliseLook(look), stage: stable(autoStage || null), staging: stable(staging || null) };
+  return { fp: crypto.createHash("sha1").update(JSON.stringify(parts)).digest("hex").slice(0, 16), parts };
+}
+
+// Is the release in the release step's hands? While the factory still builds its tickets, each ticket has its own clock.
+// stage: parseStage(look) or null; journal: the journal's view of the release ({tickets, slots}) or null.
+export function inReleaseStep(id, stage, look, journal) {
+  if (stage && stage.id) {
+    if (stage.id !== id) return { yes: false, why: `the release step is working on ${stage.id}` };
+    if (/^Not complete yet: waiting on /m.test(String(look || ""))) return { yes: false, why: "the factory is still building its tickets" };
+    return { yes: true, why: "the release step is working on it" };
+  }
+  const sealed = (journal && journal.tickets) || [];
+  if (sealed.length && sealed.every(t => `t:${t.item}:resolved` in ((journal && journal.slots) || {}))) return { yes: true, why: "every ticket is done and the release step says nothing about it" };
+  return { yes: false, why: "the factory is still building its tickets" };
+}
+
+// ---------------------------------------------------------------- checkable work
+const versionIn = s => (/(\d+\.\d+\.\d+(?:-[a-z]+\.\d+(?:\.\d+)*)?)/i.exec(String(s || "")) || [])[1] || null;
+// -> [{what, until}] the work that holds the clock now (until > now). activity: readActivity's {runs, stop, procs}; autoStage: the
+// release's auto-stage state (its version pull request is rs.bump); about: the stage step's look is about this release; named:
+// what an acting run's in-progress named and the driver found running this round, with the time of the answer.
+export function workFor({ id, activity, autoStage, about, named = [], now }) {
+  const out = [];
+  const v = versionIn(id), bump = (autoStage && autoStage.bump) || null;
+  for (const r of (activity && activity.runs) || []) {
+    const at = Date.parse(r.createdAt);
+    if (!Number.isFinite(at)) continue;
+    if (/^(candidate|release)\//.test(String(r.headBranch || "")) && v && versionIn(r.headBranch) === v) out.push({ what: `a GitHub run (${r.name || "a workflow"}) on ${r.headBranch}`, until: at + STANDSTILL.scenariosHours * H });
+    else if (bump && ((bump.head && r.headSha === bump.head) || (bump.branch && r.headBranch === bump.branch))) out.push({ what: `a GitHub run (${r.name || "a workflow"}) on the version pull request${bump.pr ? ` #${bump.pr}` : ""}`, until: at + STANDSTILL.runHours * H });
+  }
+  if (about && activity && activity.stop && Number.isFinite(Date.parse(activity.stop.at))) out.push({ what: "auto-stage's STOP file (the scenarios run)", until: Date.parse(activity.stop.at) + STANDSTILL.stopHours * H });
+  if (about) for (const p of (activity && activity.procs) || []) {
+    const m = /release\/(freeze|stage-server|staging-check)\.mjs/.exec(String(p.args || ""));
+    if (m && Number.isFinite(p.startedAt)) out.push({ what: `the release step's ${m[1]} program`, until: p.startedAt + STANDSTILL.scenariosHours * H });
+  }
+  for (const n of named || []) if (Number.isFinite(n.answeredAt)) out.push({ what: `${n.what}, which an acting run named and is running`, until: n.answeredAt + STANDSTILL.namedHoldMinutes * MIN });
+  return out.filter(w => w.until > now);
+}
+
+// ---------------------------------------------------------------- the clock
+// prev: this release's clock from the last round, or null. -> { clock, due: ["helper" | "other-ai" | "repair" | "notice"] }
+// A new state is counted from the last round that saw the old one (the state changed somewhere after it), so a step is never
+// late: the release has stood still for at most that long when its step comes.
+export function tick(prev, { fp, work, now, lastRoundAt }) {
+  const held = work.filter(w => w.until > now);
+  let c;
+  if (prev && prev.fp === fp) {
+    c = { ...prev, done: { ...(prev.done || {}) }, tries: [...(prev.tries || [])] };
+    if (!held.length) c.stillMs += Math.max(0, now - c.lastAt);
+  } else {
+    const from = prev && Number.isFinite(prev.lastAt) ? prev.lastAt : lastRoundAt;
+    const back = Number.isFinite(from) ? Math.min(Math.max(0, now - from), STANDSTILL.firstSightMaxMinutes * MIN) : 0;
+    c = { fp, since: now - back, stillMs: held.length ? 0 : back, cycleFrom: 0, done: {}, tries: [], named: [] };
+  }
+  c.lastAt = now;
+  c.held = held.map(w => w.what);
+  const cycle = () => (c.stillMs - (c.cycleFrom || 0)) / MIN;
+  if (c.done.repair && cycle() >= STANDSTILL.repairMinutes + STANDSTILL.restartHours * 60) { c.cycleFrom = c.stillMs; c.done = {}; c.tries = []; } // the ladder starts again
+  const m = cycle(), due = [];
+  if (m >= STANDSTILL.helperMinutes && !c.done.helper) due.push("helper");
+  if (m >= STANDSTILL.otherAiMinutes && !c.done.other) due.push("other-ai");
+  if (m >= STANDSTILL.repairMinutes && !c.done.repair) due.push("repair");
+  if (m >= STANDSTILL.repairMinutes && !c.done.notice) due.push("notice");
+  return { clock: c, due };
+}
+export const stillMinutes = c => Math.floor((c ? c.stillMs : 0) / MIN);
+// The next step and the minute it comes at (the clock's own minutes). -> {what, at}
+export function nextStep(c) {
+  const base = Math.round((c.cycleFrom || 0) / MIN), d = c.done || {};
+  if (!d.helper) return { what: "an acting run (rung 1)", at: base + STANDSTILL.helperMinutes };
+  if (!d.other) return { what: "the other AI (rung 2)", at: base + STANDSTILL.otherAiMinutes };
+  if (!d.repair || !d.notice) return { what: "the repair program and one notice to the owner", at: base + STANDSTILL.repairMinutes };
+  return { what: "the ladder again, from rung 1", at: base + STANDSTILL.repairMinutes + STANDSTILL.restartHours * 60 + STANDSTILL.helperMinutes };
+}
+
+// ---------------------------------------------------------------- "in-progress" must be checkable
+// What an answer names that the driver can check: a systemd unit, a GitHub run (its address or id), a pull request (its address
+// or number). -> [{kind: "unit" | "run" | "pr", id, repo, what}]
+export function namedIn(text, repo) {
+  const t = String(text || ""), out = [], seen = new Set();
+  const add = (kind, id, r, what) => { const k = `${kind}:${r || ""}:${id}`; if (!seen.has(k)) { seen.add(k); out.push({ kind, id: String(id), repo: r || repo, what }); } };
+  for (const m of t.matchAll(/github\.com\/([\w.-]+\/[\w.-]+)\/actions\/runs\/(\d+)/g)) add("run", m[2], m[1], `the GitHub run ${m[2]}`);
+  for (const m of t.matchAll(/\b(?:GitHub\s+(?:Actions\s+)?)?(?:workflow\s+)?run(?:\s+id)?\s*#?(\d{6,})\b/gi)) add("run", m[1], null, `the GitHub run ${m[1]}`);
+  for (const m of t.matchAll(/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g)) add("pr", m[2], m[1], `pull request #${m[2]}`);
+  for (const m of t.matchAll(/\b(?:pull request|PR)\s*#(\d+)\b/gi)) add("pr", m[1], null, `pull request #${m[1]}`);
+  for (const m of t.matchAll(/\b([A-Za-z0-9][A-Za-z0-9@_.:-]*\.service)\b/g)) add("unit", m[1], null, `the unit ${m[1]}`);
+  return out;
+}
+const RUNNING = /^(queued|in_progress|waiting|requested|pending)$/;
+// The driver's own machinery is never the work on a release: its round (which is running while it checks), the dead-man, the
+// steps (the stage step's run is the one that repeats its waiting sentence) and the acting runs themselves. Beta.31's run said
+// "the factory driver is actively running the requested repair".
+export const OWN_UNITS = /^(factory-driver|factory-deadman|factory-act-|factory-helper-|factory-repair-|forge-step-)/;
+// Each named thing, checked now. run(cmd, args) -> {status, stdout}. Anything the driver cannot read counts as not running.
+export function checkNamed(named, run) {
+  return (named || []).map(n => {
+    try {
+      if (n.kind === "unit") {
+        if (!/^[A-Za-z0-9][A-Za-z0-9@_.:-]*\.service$/.test(n.id) || OWN_UNITS.test(n.id)) return { ...n, running: false };
+        const r = run("systemctl", ["is-active", n.id]);
+        return { ...n, running: /^(active|activating|reloading)$/.test(String(r.stdout || "").trim()) };
+      }
+      if (!/^[\w.-]+\/[\w.-]+$/.test(n.repo) || !/^\d+$/.test(n.id)) return { ...n, running: false };
+      if (n.kind === "run") {
+        const r = run("gh", ["api", `repos/${n.repo}/actions/runs/${n.id}`]);
+        return { ...n, running: r.status === 0 && RUNNING.test(String(JSON.parse(r.stdout || "{}").status || "")) };
+      }
+      if (n.kind === "pr") {
+        const r = run("gh", ["api", `repos/${n.repo}/pulls/${n.id}`]);
+        const p = r.status === 0 ? JSON.parse(r.stdout || "{}") : {};
+        return { ...n, running: p.state === "open" && !p.merged_at };
+      }
+    } catch { /* unreadable: not running */ }
+    return { ...n, running: false };
+  });
+}
+
+// ---------------------------------------------------------------- what the owner reads, and what the dead-man reads
+const PROVIDER_WORDS = { codex: "Codex", claude: "Claude" };
+// One sentence (two at most), plain: what does not move, what was tried, that the repair program is at it, and that nothing is
+// needed from him. versionName: how the release is named to him ("Beta 31"). launches: the acting runs the clock started
+// ([{rung, provider}], whether or not they have answered yet). requested: the dead-man has the repair request.
+export function noticeText(versionName, launches, requested) {
+  const started = (launches || []).filter(l => PROVIDER_WORDS[l.provider]).sort((a, b) => a.rung - b.rung);
+  const names = [...new Set(started.map(l => PROVIDER_WORDS[l.provider]))];
+  const tried = started.length >= 2 ? `Two AI helpers tried to move it${names.length === 2 ? `, first ${names[0]} and then ${names[1]}` : ""}, and it is still stuck`
+    : started.length === 1 ? `One AI helper (${names[0]}) tried to move it and it is still stuck; a second one could not be started`
+    : "No AI helper could be started to move it";
+  return `${versionName} has not moved for an hour. ${tried}, so ${requested ? "the repair program is now working on it" : "Mission Control keeps trying to start the repair program"}; nothing is needed from you unless a later message says so.`;
+}
+// The repair request the dead-man's repair run reads (deadman.mjs puts it into its brief). tries: the answers (and failed starts);
+// launches: the runs started, of which one without an answer yet is still running.
+export function repairWords(id, minutes, look, tries, launches = []) {
+  const lines = String(look || "").split(/\r?\n/).filter(Boolean).slice(0, 6).join(" / ");
+  const running = (launches || []).filter(l => !(tries || []).some(t => t.rung === l.rung && t.provider === l.provider)).map(l => ({ rung: l.rung, provider: l.provider, result: "still running" }));
+  const did = [...(tries || []), ...running].sort((a, b) => a.rung - b.rung).map(t => `rung ${t.rung} on ${t.provider}: ${t.result}${t.summary ? ` (${String(t.summary).replace(/\s+/g, " ").slice(0, 300)})` : ""}`).join("; ") || "no acting run could be started";
+  return `The approved release ${id} has not moved for ${minutes} minutes (the driver's release clock; its state, the stage step's look, auto-stage's state and the staging record, has not changed). The stage step says: ${lines || "nothing (no look about it)"}. What was tried: ${did}. Find out why the release does not move and make it move; if the fault is in the driver, repair the driver.`;
+}
