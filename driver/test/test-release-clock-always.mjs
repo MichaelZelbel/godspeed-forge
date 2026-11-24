@@ -135,10 +135,35 @@ test("a release that is staged and announced waits for the owner's go: the one p
   assert.deepEqual(s.requests, []);
 });
 
-test("a release whose every unfinished ticket waits on the owner's answer is the questions path's, not the clock's", async () => {
+test("a release whose every unfinished ticket is parked under needs-owner is still a standstill: Mission Control answers the factory's questions at once, so the clock runs (beta.25's four parked tickets)", async () => {
   const s = server({ worldAt: (now, m) => { const w = world32(now, m); w.items[616].labels = ["bug", "needs-owner"]; return w; }, look: () => LOOK32 });
   for (let m = 0; m <= 70; m += 5) await s.round(m);
-  assert.deepEqual(s.launched.filter(l => l.entry === `standstill:${ID32}`), []);
+  const runs = s.launched.filter(l => l.entry === `standstill:${ID32}`);
+  assert.deepEqual(runs.slice(0, 2).map(l => l.minute), [15, 35]);
+  assert.equal(s.requests.length, 1);
+  assert.match(s.requests[0].words, /parked \(needs-owner\)/, "the repair program is told the ticket is parked");
+});
+
+test("the one pause besides the go: a question of money, publishing or deleting, delivered to the owner (a receipt), that names the release", async () => {
+  const page = { key: "x", heading: "Publish the announcement for #616?" };
+  const named = server({ worldAt: (now, m) => ({ ...world32(now, m), deliveredPages: [page] }), look: () => LOOK32 });
+  for (let m = 0; m <= 120; m += 5) await named.round(m);
+  assert.deepEqual(named.launched, [], "the release waits on the owner for as long as the question waits");
+  const other = server({ worldAt: (now, m) => ({ ...world32(now, m), deliveredPages: [{ key: "y", heading: "Delete the old photos of another project" }] }), look: () => LOOK32 });
+  for (let m = 0; m <= 30; m += 5) await other.round(m);
+  assert.ok(other.launched.length >= 1, "a question that names nothing of the release pauses nothing of it");
+});
+
+test("the delivered questions are read from the questions step's state: a page with a receipt, not answered and not closed", async () => {
+  const { readDeliveredPages } = await import("../world.mjs");
+  const states = { "state.json": { told: {
+    a: { heading: "Spend on #616", page: { stages: [{ channels: { telegram: { receipt: "42" } } }] } },
+    b: { heading: "answered", answered: true, page: { stages: [{ channels: { telegram: { receipt: "43" } } }] } },
+    c: { heading: "closed", page: { closed: { at: "x" }, stages: [{ channels: { telegram: { receipt: "44" } } }] } },
+    d: { heading: "no receipt", page: { stages: [{ channels: { telegram: { why: "down" } } }] } },
+    e: { heading: "decided at once" } } } };
+  const got = readDeliveredPages({ QUESTIONS_DIR: "/q" }, { readDir: () => Object.keys(states), readFile: p => JSON.stringify(states[p.split(/[\\/]/).pop()]) });
+  assert.deepEqual(got, [{ key: "a", heading: "Spend on #616" }]);
 });
 
 test("the dry run says, for each release, where it is, the minutes without progress and what comes next", async () => {
@@ -158,4 +183,45 @@ test("the loop's claims on a ticket: a claim that was released or withdrawn is n
     { body: "Manager decision: start now", at: "2026-11-24T20:30:00Z" },
   ]);
   assert.deepEqual(got, [{ run: "abc123", at: "2026-11-24T20:00:00Z" }]);
+});
+
+test("the test machine's repair halt of 2026-11-22, built from the live record: a halt is a standstill, an acting run at once, the other AI by minute 40, the owner told by minute 60", async () => {
+  const { advance } = await import("../inventory.mjs");
+  // the halt as the AX41 held it (steps/test-machine/last.json, 2026-11-24): key and words as the step wrote them
+  const halt = { key: "repair-halted", words: "The program that repairs the test machine for the releases stopped itself at 2026-11-22 23:30 UTC, because its AI did something it is never allowed to do (the repair's AI did something it may not do (changed the live verifier tools, the holdout scenarios or the factory's checkout))", clear: "node /usr/local/lib/godspeed-factory/driver/driver.mjs --step test-machine --clear-halt --settings-dir /etc/godspeed-forge" };
+  const since = Date.parse("2026-11-22T23:30:00Z");
+  const entry = { id: `halt:test-machine:${halt.key}`, kind: "halt", step: "test-machine", owner: null, title: "the test-machine step stopped itself (repair-halted)", milestoneAt: since, limitH: 0, evidence: [`the test-machine step stopped itself and reports, on every run while it holds: ${halt.words}`, `when it is put right, the step's own command ends the halt: ${halt.clear}`] };
+  const t0 = since + 36 * 60 * MIN; // it has held for a day and a half when the new Forge first sees it
+  let chain = {}, launches = [], told = null, pending = null;
+  for (let m = 0; m <= 70; m += 5) {
+    const t = t0 + m * MIN;
+    if (pending && t >= pending.until) { pending.row.c.tries.push({ rung: pending.rung, result: "unresolved" }); pending = null; } // an acting run answers five minutes after its launch
+    const a = advance([entry], chain, t);
+    chain = a.chain;
+    if (a.actions.launch) { const r = a.actions.launch; r.c.launched = true; r.c.launchedAt = t; launches.push({ minute: m, rung: r.rung }); pending = { row: r, rung: r.rung, until: t + 5 * MIN }; }
+    if (a.actions.tell.length && told === null) { told = m; a.actions.tell[0].c.told = true; }
+  }
+  assert.deepEqual(launches.map(l => l.rung), [1, 2], "an acting run, then the other AI");
+  assert.ok(launches[0].minute <= 20 && launches[1].minute <= 40, `by 20 and by 40 (at ${launches.map(l => l.minute)})`);
+  assert.ok(told !== null && told <= 60, `the owner is told by minute 60 (at ${told})`);
+});
+
+test("what the owner sees: one line per release on the Forge's own page, rewritten every round", async () => {
+  const { clockLine, writeClockPage } = await import("../clockpage.mjs");
+  const building = { id: ID32, version: "2.0.0-beta.32", inStep: true, minutes: 4, where: "1 of 8 tickets unfinished (#616: open, being built)", next: { what: "an acting run (rung 1)", at: 20 }, held: ["a run is building #616 (claim by run r1)"] };
+  assert.equal(clockLine(building), "Beta 32: 1 of 8 tickets unfinished (#616: open, being built); no progress for 4 minutes, held by a run is building #616 (claim by run r1); next: an acting run (rung 1) at minute 20.");
+  const stuck = { ...building, minutes: 22, held: [], next: { what: "the other AI (rung 2)", at: 40 } };
+  assert.match(clockLine(stuck), /^Beta 32: .*; no progress for 22 minutes; next: the other AI \(rung 2\) at minute 40\.$/);
+  assert.equal(clockLine({ id: ID, version: "2.0.0-beta.31", inStep: false, why: "the release is staged and announced, and waits for the owner's go" }), "Beta 31: the release is staged and announced, and waits for the owner's go.");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clockpage-"));
+  assert.equal(writeClockPage(dir, [building, stuck], T0).written, true);
+  assert.match(fs.readFileSync(path.join(dir, "release-clock.html"), "utf8"), /<li>Beta 32: 1 of 8 tickets unfinished/);
+  assert.equal(fs.readFileSync(path.join(dir, "release-clock.txt"), "utf8").trim().split("\n").length, 2);
+  assert.equal(writeClockPage(path.join(dir, "missing"), [building], T0).written, false, "no folder (the watching page is not set up): nothing written, nothing thrown");
+  // and a whole round of the driver writes it through its own dependency
+  const written = [];
+  const s = server({ worldAt: (now, m) => world32(now, m), look: () => LOOK32 });
+  s.deps.writeClockPage = (d, clocks) => written.push(clocks.map(clockLine));
+  await s.round(0);
+  assert.match(written[0][0], /^Beta 32: 1 of 8 tickets unfinished \(#616: open, no live claim and no run on it, no pull request\); no progress for 0 minutes; next: an acting run \(rung 1\) at minute 20\.$/);
 });

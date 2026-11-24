@@ -96,10 +96,11 @@ export function inReleaseStep(id, stage, look, journal) {
 // for even an hour without you fixing it."
 // The release is standing still while its unfinished tickets have nothing live: no claim of a run that is still writing, and no
 // change since the clock began in any ticket's state (an issue opening or closing, a pull request opened, merged, given a new
-// commit or a new comment, which is where a review shows). Anything of those starts the count again; an unfinished ticket that
-// waits on the owner (needs-owner, on the issue or its pull request) is the parked path's, not this clock's; when every
-// unfinished ticket is parked the release waits on his answer and has no clock; when none is left the ticket part is gone. A dependency that is already closed is no reason
-// to wait: nothing here looks at dependencies at all, so a ticket whose dependency closed is judged like any other.
+// commit or a new comment, which is where a review shows). Anything of those starts the count again. A ticket parked
+// under needs-owner is unfinished like any other: since Mission Control answers the factory's questions at once (the owner's standing
+// instruction of 2026-11-24), a parked ticket is no reason to wait, so the clock runs; the only pause is a question of money,
+// publishing or deleting that was confirmed delivered to the owner (pageNamesRelease). A dependency that is already closed is no
+// reason to wait: nothing here looks at dependencies at all, so a ticket whose dependency closed is judged like any other.
 // Pure. release: world.releases[i]; world: the driver's world; -> null | { fp, work, lines, unread, open }
 const claimLive = (c, now) => Number.isFinite(Date.parse(c.at)) && now - Date.parse(c.at) < STANDSTILL.claimHours * H;
 export function buildingState({ release, world, now, activity = null }) {
@@ -110,7 +111,7 @@ export function buildingState({ release, world, now, activity = null }) {
   const runsRead = !((world && world.unreadable) || []).some(u => /\/runs$/.test(String(u.part || "")));
   const runs = new Map((prim.activeRuns || []).map(r => [String(r.id), r]));
   const parts = [], work = [], lines = [];
-  let unread = false, open = 0, parked = 0;
+  let unread = false, open = 0;
   for (const t of tickets) {
     const it = items[t.issue];
     if (!it) { unread = true; parts.push(`${t.issue}|unread`); continue; }
@@ -118,7 +119,7 @@ export function buildingState({ release, world, now, activity = null }) {
     const claims = (it.loopClaims || []).filter(c => claimLive(c, now));
     parts.push([t.issue, it.state, prs.map(p => `${p.number}.${p.state}.${p.merged ? 1 : 0}.${p.headSha || ""}.${(p.comments || []).length}`).join(","), claims.map(c => c.run).join(",")].join("|"));
     if (it.state !== "open") continue;
-    if ((it.labels || []).includes("needs-owner") || prs.some(p => p.state === "open" && (p.labels || []).includes("needs-owner"))) { parked++; lines.push(`#${t.issue}: parked on the owner (needs-owner)`); continue; }
+    const parked = (it.labels || []).includes("needs-owner") || prs.some(p => p.state === "open" && (p.labels || []).includes("needs-owner"));
     open++;
     let held = false;
     for (const c of claims) {
@@ -131,7 +132,7 @@ export function buildingState({ release, world, now, activity = null }) {
       }
     }
     const open_prs = prs.filter(p => p.state === "open").map(p => `#${p.number}`);
-    lines.push(`#${t.issue}: open, ${held ? "being built" : "no live claim and no run on it"}${open_prs.length ? `, open pull request ${open_prs.join(", ")}` : ", no pull request"}`);
+    lines.push(`#${t.issue}: open${parked ? ", parked (needs-owner)" : ""}, ${held ? "being built" : "no live claim and no run on it"}${open_prs.length ? `, open pull request ${open_prs.join(", ")}` : ", no pull request"}`);
   }
   // a GitHub run on an unfinished ticket's pull request (its checks) holds the clock for the run's own timeout
   const heads = new Set(), branches = new Set();
@@ -140,9 +141,20 @@ export function buildingState({ release, world, now, activity = null }) {
     const at = Date.parse(r.createdAt);
     if (Number.isFinite(at) && ((r.headSha && heads.has(r.headSha)) || (r.headBranch && branches.has(r.headBranch)))) work.push({ what: `a GitHub run (${r.name || "a workflow"}) on a ticket's pull request`, until: at + STANDSTILL.runHours * H });
   }
-  if (!open && !parked) return null;
-  // every unfinished ticket waits on the owner's answer: the questions path owns that wait, with its own escalation to him
-  return { fp: h(["build", ...parts]), work, lines, unread, open, parkedOnly: !open, total: tickets.length };
+  if (!open) return null;
+  return { fp: h(["build", ...parts]), work, lines, unread, open, total: tickets.length };
+}
+
+// A question that reached the owner (a page with a receipt, questions/pager.mjs: only money, publishing or deleting pages him) and
+// names this release, by one of its tickets' issue numbers, its version or its id, is the one reason besides the go for the release
+// to wait on him. pages: world.deliveredPages [{key, heading}]. A page that names nothing of the release pauses nothing of it.
+export function pageNamesRelease(pages, release) {
+  const nums = ((release && release.tickets) || []).map(t => t.issue).filter(Boolean);
+  const words = [release && release.id, release && release.label, release && release.version].filter(Boolean).map(w => String(w).toLowerCase());
+  return (pages || []).some(p => {
+    const text = `${p.key || ""} ${p.heading || ""}`.toLowerCase();
+    return nums.some(n => new RegExp(`#${n}(?!\d)`).test(text)) || words.some(w => text.includes(w));
+  });
 }
 
 // ---------------------------------------------------------------- checkable work

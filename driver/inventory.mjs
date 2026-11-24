@@ -17,7 +17,9 @@ import { ticketKeyOf, releaseKeyOf, isWorking } from "./progress.mjs";
 export const H = 3600000;
 const ts = v => (v ? Date.parse(v) : NaN);
 // perDay and reservedForRelease are the settings budget.act_runs_per_day and budget.reserved (8 and 4 unless set)
-export const CHAIN = { get reservedForRelease() { return Number(process.env.FD_ACT_RESERVED || 4); }, actHours: 1, actHours2: 1, restartHours: 24, get perDay() { return Number(process.env.FD_ACT_RUNS_PER_DAY || 8); }, sameItemHours: 6 };
+// haltRungMinutes: a step's halt is a standstill like any other (the Forge 0.3.3): an acting run at once, the other AI after 20 minutes,
+// and the owner told after 20 more, the release clock's own ladder, instead of an hour per rung
+export const CHAIN = { haltRungMinutes: 20, get reservedForRelease() { return Number(process.env.FD_ACT_RESERVED || 4); }, actHours: 1, actHours2: 1, restartHours: 24, get perDay() { return Number(process.env.FD_ACT_RUNS_PER_DAY || 8); }, sameItemHours: 6 };
 // rung 0 limits per kind of entry, in hours without a milestone
 export const LIMITS = { release: 2, stage: 2, ticket: null /* by size */, pr: 1, queue: 1, obstacle: 2 };
 export const SIZE_HOURS = { s: 4, m: 8, l: 16 };
@@ -331,11 +333,11 @@ export function advance(entries, chain0, now, opts = {}) {
     if (e.remindOnly) { // a pause: Michael is reminded when its time is up, and again every 24 hours; nobody acts for him
       if ((c.rung < 3 && now >= base + limit) || (c.rung === 3 && now >= c.rungSince + CHAIN.restartHours * H)) { c.rung = 3; c.rungSince = now; c.told = false; moved = true; }
     } else if (c.rung === 0 && (e.owner === null || force.has(e.id) || now >= base + limit)) { c.rung = 1; c.rungSince = now; c.launched = false; moved = true; }
-    else if ((c.rung === 1 || c.rung === 2) && now >= c.rungSince + (c.rung === 1 ? CHAIN.actHours : CHAIN.actHours2) * H && ranOrLost(c.rung)) {
+    else if ((c.rung === 1 || c.rung === 2) && now >= c.rungSince + (e.kind === "halt" ? CHAIN.haltRungMinutes * 60000 : (c.rung === 1 ? CHAIN.actHours : CHAIN.actHours2) * H) && ranOrLost(c.rung)) {
       c.rung += 1; c.rungSince = now; c.launched = false; c.told = false; moved = true;
     } else if (c.rung === 3 && now >= c.rungSince + CHAIN.restartHours * H) { c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; moved = true; }
     if (e.backlog && c.rung === 3) { c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; c.tries = []; c.cooldownUntil = now + 24 * H; moved = true; } // whichever path led here: backlog never reaches the owner
-    const deadline = c.rung === 0 ? base + limit : (c.rung === 1 || c.rung === 2) && !c.launched ? Math.max(now + 1, c.rungSince + CHAIN.actHours * H) : c.rungSince + (c.rung === 1 ? CHAIN.actHours : c.rung === 2 ? CHAIN.actHours2 : CHAIN.restartHours) * H;
+    const deadline = c.rung === 0 ? base + limit : (c.rung === 1 || c.rung === 2) && !c.launched ? Math.max(now + 1, c.rungSince + (e.kind === "halt" ? CHAIN.haltRungMinutes * 60000 : CHAIN.actHours * H)) : c.rungSince + (e.kind === "halt" && c.rung < 3 ? CHAIN.haltRungMinutes * 60000 : (c.rung === 1 ? CHAIN.actHours : c.rung === 2 ? CHAIN.actHours2 : CHAIN.restartHours) * H);
     rows.push({ entry: e, rung: c.rung, deadline, moved, c });
     chain[e.id] = c;
    } catch (err) { // an entry that breaks the chain is itself stuck: rung 1 now, the round goes on

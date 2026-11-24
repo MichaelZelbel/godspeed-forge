@@ -31,7 +31,8 @@ import { clockCheck, wentBackwards, verifyInstalled, deliver, readEnvFile } from
 import { gateStep, gateClear, GATE } from "./gate.mjs";
 import { movingUntilFor, heldUntil, creditEvents, creditKeyById, ACTIVITY, buildInventory, advance, violationEntry, describeRow, parseStage, stageStalled, factoryWorking, CHAIN, H as HR, ownerName } from "./inventory.mjs";
 import { actDefaults as onDutyDefaults, launchAct, actResult, markHandled, answeredFile, repairRequestChecked } from "./onduty.mjs";
-import { STANDSTILL, buildingState, partsOf, mergeParts, fpOf, inReleaseStep, workFor, tick, nextStep as clockNextStep, stillMinutes, namedIn, checkNamed, noticeText, repairWords, ownedBy, OWN_UNITS } from "./standstill.mjs";
+import { writeClockPage, STATUS_DIR as CLOCK_STATUS_DIR } from "./clockpage.mjs";
+import { STANDSTILL, buildingState, pageNamesRelease, partsOf, mergeParts, fpOf, inReleaseStep, workFor, tick, nextStep as clockNextStep, stillMinutes, namedIn, checkNamed, noticeText, repairWords, ownedBy, OWN_UNITS } from "./standstill.mjs";
 import { aiDefaults, providers, factoryProvider, ladderCandidates, launchHelper, helperResult, refreshTokens, checkJson, helperDir, UNIT_RE } from "./ai.mjs";
 import { applyReport, applyDueDefaults, actDefaults, notify, plain } from "./act.mjs";
 import { housekeep, hkDefaults } from "./housekeeping.mjs";
@@ -541,7 +542,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       let bld = null; try { bld = relObj ? buildingState({ release: relObj, world, now, activity }) : null; } catch (e) { record({ kind: "release clock: tickets unreadable", release: rel.id, why: String(e.message).slice(0, 160) }); }
       const waitingGo = about && lookKnown && /^Already staged and announced at /m.test(stageText);
       let step = waitingGo ? { yes: false, why: "the release is staged and announced, and waits for the owner's go" }
-        : bld && bld.parkedOnly ? { yes: false, why: "every unfinished ticket waits on the owner's answer; the questions path owns that wait" }
+        : relObj && (() => { try { return pageNamesRelease(world.deliveredPages, relObj); } catch { return false; } })() ? { yes: false, why: "a question of money, publishing or deleting that names this release was delivered to the owner (receipt), and waits for his answer" }
         : rel.unread ? { yes: true, why: "this round's read does not list it, and the journal holds it open; the clock goes on" }
         : !lookKnown && (prev || (jv.clocks || {})[rel.id]) ? { yes: true, why: "the release step's look cannot be read now; the clock goes on" }
         : { yes: true, why: bld ? `${bld.open} of ${bld.total} tickets are unfinished` : "the release step is working on it" };
@@ -565,6 +566,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     for (const id of Object.keys(state.standstill)) if (!listed(id) && !carried.includes(id)) delete state.standstill[id]; // installed, superseded or no longer open in the journal
     if (!dry && clockEvents.length) { try { appendEvents(journalFile, clockEvents); } catch (e) { record({ kind: "release clock not journaled", why: String(e.message).slice(0, 160) }); } }
     out.standstill = Object.values(clocks);
+    if (!dry) (deps.writeClockPage || writeClockPage)(process.env.FD_WATCH_STATUS_DIR || CLOCK_STATUS_DIR, out.standstill, now); // what the owner sees on the Forge's page
     // ---- the release clock's steps, in this round, whatever else runs (each counted in the day's acting runs)
     if (!dry) for (const k of Object.values(clocks)) {
       if (!k.inStep || !k.due.length) continue;
