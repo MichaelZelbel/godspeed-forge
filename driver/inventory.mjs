@@ -356,6 +356,9 @@ export function advance(entries, chain0, now, opts = {}) {
   const wanting = awaitingCapacity.filter(r => !(r.entry.backlog && !backlogAllowed)).sort((a, b) => (a.entry.backlog ? 1 : 0) - (b.entry.backlog ? 1 : 0) || ageKey(a) - ageKey(b)); // releases and machinery first, then the backlog oldest first
   if (budget <= 0) for (const r of awaitingCapacity) { r.c.budgetRetryAt = budgetRetryAt; r.deadline = budgetRetryAt; }
   else if (wanting.length && opts.slotFree !== false) { actions.launch = wanting[0]; }
+  // a halt's ladder is the release clock's (20 minutes a rung), which never waits for the one-at-a-time slot either: a long run on its first
+  // rung must not keep the other AI off its second
+  else if (wanting.some(r => r.entry.kind === "halt")) { actions.launch = wanting.find(r => r.entry.kind === "halt"); }
   for (const r of rows) if (r.rung === 3 && !r.c.told && !r.entry.told && !r.moving && !owned.has(r.entry.id)) actions.tell.push(r);
   // the invariant, checked here and not trusted: every entry has an owner and a future deadline, or moved this round
   const violations = [];

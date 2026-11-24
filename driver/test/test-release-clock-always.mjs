@@ -313,7 +313,7 @@ test("a halt's rungs end on their 20 minutes even while the acting run is still 
   const entry = { id: "halt:test-machine:repair-halted", kind: "halt", step: "test-machine", owner: null, title: "halt", milestoneAt: T0 - 36 * 60 * MIN, limitH: 0, evidence: ["halted"] };
   let chain = {}, launches = [], told = null;
   for (let m = 0; m <= 70; m += 5) {
-    const t = T0 + m * MIN, a = advance([entry], chain, t);
+    const t = T0 + m * MIN, a = advance([entry], chain, t, { slotFree: launches.length === 0 }); // the first run still holds the one-at-a-time slot when rung 2 is due
     chain = a.chain;
     if (a.actions.launch) { a.actions.launch.c.launched = true; a.actions.launch.c.launchedAt = t; launches.push({ minute: m, rung: a.actions.launch.rung }); } // no run ever answers
     if (a.actions.tell.length && told === null) { told = m; a.actions.tell[0].c.told = true; }
