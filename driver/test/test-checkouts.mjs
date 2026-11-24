@@ -350,3 +350,41 @@ test("ticket 08 (#157): housekeeping changes owners only inside a checkout in th
   assert.equal(s.owner.get(".factory/STOP"), FORGE_USER);
   assert.deepEqual(staged.repairs.map(r => [r.files, r.sample]), [[1, [".factory/STOP"]]]);
 });
+
+// issue #155 with #157: the stage step's own STOP is never a repair. It is written as root into the factory user's checkout, so the
+// guard of the driver's process gives it to that user the moment it is written (made, or taken over through a temporary file),
+// and housekeeping, which runs every round while the scenarios run, finds nothing of root's there and records nothing.
+test("issue #155: a stage run's STOP (made, taken over, removed) is the factory user's at once, so housekeeping makes no repair; without the guard it would", async () => {
+  const { takeStop, createStop, removeStop } = await import("../steps/release/auto-stage.mjs");
+  const run = async (guarded) => {
+    const f = checkoutFixture();
+    const factory = `${f.checkout}/.factory`, stop = `${factory}/STOP`;
+    fs.mkdirSync(factory); f.owner.set(".factory", FORGE_USER);
+    const rel = p => posix(path.relative(f.checkout, String(p)));
+    // what only root sees: a file this process makes comes out root's until it is given back
+    const fsOps = {
+      lstat: p => { const r = rel(p); if (!f.owner.has(r)) f.owner.set(r, "root"); return { uid: f.owner.get(r) === FORGE_USER ? 1001 : 0 }; },
+      stat: p => ({ uid: f.owner.get(rel(p)) === FORGE_USER || rel(p) === "" ? 1001 : 0, gid: 1001 }),
+      lchown: (p, uid) => { if (uid === 1001) f.owner.set(rel(p), FORGE_USER); },
+    };
+    // anything made that the guard never saw is root's, as on the server
+    const settle = () => { const walk = (dir, r = "") => { for (const d of fs.readdirSync(dir, { withFileTypes: true })) { const x = r ? `${r}/${d.name}` : d.name; if (!f.owner.has(x)) f.owner.set(x, "root"); if (d.isDirectory()) walk(path.join(dir, d.name), x); } }; walk(f.checkout); for (const k of [...f.owner.keys()]) if (!fs.existsSync(path.join(f.checkout, k))) f.owner.delete(k); };
+    const repairs = [];
+    const round = async () => { settle(); const out = await housekeep(f.env, hkWorld(), f.deps); repairs.push(...out.repairs); };
+    const off = guarded ? enforceCheckoutGuard({ user: FORGE_USER, home: f.home }, { root: true, log: () => {}, fsOps }) : () => {};
+    try {
+      const now = Date.parse("2026-11-24T12:47:44.892Z");
+      assert.equal(takeStop(stop, now), true, "the look pauses the factory");
+      await round(); // the rounds while the scenarios run
+      fs.rmSync(stop); assert.equal(createStop(stop, now, 2639648), true); f.owner.delete(".factory/STOP"); // a look that was killed left its STOP
+      if (guarded) f.owner.set(".factory/STOP", FORGE_USER); // (that look's own guard gave it back)
+      assert.equal(takeStop(stop, now + 900000), true, "the next look takes it over through a temporary file");
+      await round();
+      assert.equal(removeStop(stop), true, "the scenarios ended");
+      await round();
+    } finally { off(); }
+    return repairs;
+  };
+  assert.deepEqual(await run(true), [], "the Forge's own stage step never sets off a repair");
+  assert.ok((await run(false)).some(r => r.sample.includes(".factory/STOP")), "the check sees a STOP root kept, so the guard is what keeps it quiet");
+});
