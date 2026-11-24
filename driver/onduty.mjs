@@ -7,10 +7,16 @@
 //   node onduty.mjs --run <dir>                       (inside the unit) run the job in <dir>/job.json
 //   node onduty.mjs --notice <id> "<one sentence>"    (used by the run) queue one plain sentence for Michael
 //   node onduty.mjs --mark-handled "<repo>" "<heading>"  (used by the run) a queue question is answered
+//   node onduty.mjs --repair-request "<what is wrong>"   (used by the run) ask the dead-man for a driver repair
+//
+// The commands the run uses write where the driver and the dead-man read only when they carry the driver's settings:
+// launchAct writes them into the job (settingsEnv), and runJob hands them to the AI's environment (2026-11-23: without
+// them a repair request went to the built-in default spool, which nothing reads, and beta.31 stood still for 19 hours).
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { defaultSettingsDir } from "./settings.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)).replace(/\\/g, "/");
 export const SIGN = "Mission Control (on call), not Michael";
@@ -36,6 +42,25 @@ export const actDefaults = (e = process.env) => ({
   STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed/forge/driver",
   SPOOL: e.FD_SPOOL || "/var/lib/godspeed/forge/spool", // repair requests: acting runs write here, the dead-man reads
 });
+// The driver's settings as the modules read them (settings.mjs puts them into the environment): every FD_, DM_ and RD_
+// variable. The acting run's AI gets them, so `onduty.mjs --notice`, `--mark-handled` and `--repair-request` write into
+// the driver's own folders and never into a built-in default.
+export const SETTINGS_ENV = /^(FD|DM|RD)_[A-Z0-9_]+$/;
+export const settingsEnv = (e = process.env) => Object.fromEntries(Object.entries(e || {}).filter(([k, v]) => SETTINGS_ENV.test(k) && typeof v === "string" && !/[\0\n]/.test(v)));
+// The env file the dead-man's unit reads (EnvironmentFile=<settings dir>/driver.env, written by `driver install`): KEY=value
+// lines, a value with spaces or quotes written as a JSON string. -> {} when it cannot be read
+export function readSettingsEnvFile(file) {
+  let text; try { text = fs.readFileSync(file, "utf8"); } catch { return {}; }
+  const out = {};
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*(?:export\s+)?([A-Z0-9_]+)=(.*)$/.exec(line);
+    if (!m) continue;
+    let v = m[2].trim();
+    if (v.startsWith("\"")) { try { v = JSON.parse(v); } catch { v = v.replace(/^"|"$/g, ""); } } else v = v.replace(/^'|'$/g, "");
+    out[m[1]] = v;
+  }
+  return out;
+}
 // The control plane (9.7, 8.9): what an acting run on a RELEASE may read and never write. A DRIVER-REPAIR run (started by
 // the dead-man) may write the driver's install, and never the dead-man, the journal or the units.
 export const controlPlane = (a, mode = "release") => [
@@ -63,7 +88,7 @@ TOOLS (all as root): root's gh is logged in as the owner. Keys: set -a; . ${a.KE
 
 NEVER: remove or undo a pause, a parked project, a HOLD, PAUSE or STOP file (the owner may have set it on purpose), anything outward to people (mail, posts, messages), spending money, publishing or promoting a release, recording the owner's go, posting as the owner ("Owner decision" is only his own words), loosening or skipping a check or giving a bot more permissions, editing the product's .github/ files, moving an item out of a release (only the factory driver's own cut does that, and only when the item itself cannot be built; an item whose trouble is our own setup stays in and you fix the setup), deciding what the software does for its users or how it looks or is worded (that is his). Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step.
 
-WHEN DONE: post a short note on the issue or pull request, signed "${SIGN}". If the item was a question in the factory's queue and you answered it, run: node ${selfPath} --mark-handled "<owner/repo>" "<queue heading>". If the trouble is the factory DRIVER itself (its code, its units, its journal), you cannot edit it from here (read-only): run node ${selfPath} --repair-request "<what is wrong>" and the dead-man starts a repair. If you truly cannot unstick it, run: node ${selfPath} --notice "<short id>" "<ONE plain sentence for the owner in everyday words: what is stuck, what you tried, and the one step only he can take; no issue numbers or file names>".
+WHEN DONE: post a short note on the issue or pull request, signed "${SIGN}". If the item was a question in the factory's queue and you answered it, run: node ${selfPath} --mark-handled "<owner/repo>" "<queue heading>". If the trouble is the factory DRIVER itself (its code, its units, its journal), you cannot edit it from here (read-only): run node ${selfPath} --repair-request "<what is wrong>" and the dead-man starts a repair; if that command fails, the request did not reach the dead-man, so say so and answer RESULT: unresolved. If you truly cannot unstick it, run: node ${selfPath} --notice "<short id>" "<ONE plain sentence for the owner in everyday words: what is stuck, what you tried, and the one step only he can take; no issue numbers or file names>".
 If another program is visibly working on this item right now (a GitHub Actions run in progress, auto-stage's STOP file, a freeze or scenarios running), do not interfere: report RESULT: in-progress and say in one sentence what is running.
 Your last line must be exactly one of: RESULT: resolved | RESULT: notice | RESULT: unresolved | RESULT: in-progress`;
 }
@@ -101,25 +126,40 @@ export function markHandled(file, repo, heading) {
 }
 // 9.7: when the DRIVER is at fault, a release run cannot edit it (read-only); it files a request in the spool and the
 // dead-man starts a driver-repair run. -> the file written
-export function repairRequest(a, what, now = new Date()) {
+export function repairRequest(a, what, now = new Date(), extra = {}) {
   fs.mkdirSync(a.SPOOL, { recursive: true });
   const f = path.join(a.SPOOL, `repair-${now.getTime()}.json`);
-  fs.writeFileSync(f, JSON.stringify({ at: now.toISOString(), what: String(what).slice(0, 2000) }, null, 2) + "\n");
+  fs.writeFileSync(f, JSON.stringify({ at: now.toISOString(), what: String(what).slice(0, 2000), ...extra }, null, 2) + "\n");
   return f;
+}
+export class RepairRefused extends Error {}
+// `--repair-request` as the run uses it: the request lands only in the folder the dead-man reads (DM_SPOOL in the env file
+// its unit reads, <settings dir>/driver.env). A spool that is not set, a dead-man whose settings cannot be read, or two
+// different folders: nothing is written, and the run is told why (RepairRefused). -> the file written
+const sameFolder = (a, b) => { const real = p => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } }; return real(a) === real(b); };
+export function repairRequestChecked(e, what, now = new Date()) {
+  const spool = e.FD_SPOOL;
+  if (!spool) throw new RepairRefused("the repair request was not written: FD_SPOOL is not set, so this run does not know the folder the dead-man reads. Nothing reached the dead-man.");
+  const envFile = path.join(e.FD_SETTINGS_DIR || defaultSettingsDir(), "driver.env");
+  const deadman = readSettingsEnvFile(envFile).DM_SPOOL;
+  if (!deadman) throw new RepairRefused(`the repair request was not written: the dead-man's settings (${envFile}) cannot be read or name no spool. Nothing reached the dead-man.`);
+  if (!sameFolder(spool, deadman)) throw new RepairRefused(`the repair request was not written: it would go to ${spool}, but the dead-man reads ${deadman}. Nothing reached the dead-man.`);
+  return repairRequest({ SPOOL: deadman }, what, now);
 }
 export const answeredFile = a => path.join(a.QUESTIONS, "answered-elsewhere.json");
 
 // ---------------------------------------------------------------- launching (driver side)
 // -> { unit, dir, provider, model }. The transient unit survives the driver's round (a oneshot's own
 // control group is stopped when the round ends).
-export function launchAct(env, a, { unit, entry, provider, tried = [], mode = "release" }, spawn = spawnSync) {
+// settings: the driver's FD_/DM_/RD_ settings (its own environment unless given), written into the job for runJob.
+export function launchAct(env, a, { unit, entry, provider, tried = [], mode = "release", settings = settingsEnv(process.env) }, spawn = spawnSync) {
   if (!UNIT_RE.test(unit)) throw new Error(`not an acting unit name: ${unit}`);
   const dir = path.join(a.ACT_DIR, unit);
   if (fs.existsSync(path.join(dir, "job.json"))) throw new Error(`${unit} was launched before`);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const model = provider === "claude" ? a.CLAUDE_MODEL : a.CODEX_MODEL;
   const self = path.posix.join(HERE, "onduty.mjs");
-  fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify({ unit, provider, model, brain: a.BRAIN, prompt: prompt(entry, tried, self, a), factoryHome: a.FACTORY_HOME, claudeBin: a.CLAUDE_BIN, actDir: a.ACT_DIR, minutes: a.RUN_MINUTES, startedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify({ unit, provider, model, brain: a.BRAIN, prompt: prompt(entry, tried, self, a), factoryHome: a.FACTORY_HOME, claudeBin: a.CLAUDE_BIN, actDir: a.ACT_DIR, minutes: a.RUN_MINUTES, startedAt: new Date().toISOString(), settings: settingsEnv(settings) }, null, 2), { mode: 0o600 });
   const r = spawn(a.SYSTEMD_RUN, [`--unit=${unit}`, "--collect", "--quiet", `--description=Godspeed factory driver: acting run (${provider} ${model})`,
     "-p", `RuntimeMaxSec=${a.RUN_MINUTES * 60 + 120}`, "-p", "TimeoutStopSec=30", ...sandboxProps(a, mode).flatMap(p => ["-p", p]), "--setenv=HOME=/root", "--setenv=LANG=C.UTF-8", `--setenv=PATH=${ROOT_PATH}`,
     a.NODE, self, "--run", dir], { encoding: "utf8" });
@@ -137,7 +177,9 @@ export function actResult(env, a, unit, active = u => spawnSync("systemctl", ["i
 }
 
 // ---------------------------------------------------------------- the run (inside the unit)
-function runJob(dir) {
+// The AI's environment: the driver's settings (the job's, else this unit's own), and only then the few the AI itself needs.
+export const aiEnv = (job, own, extra) => ({ ...settingsEnv(own), ...settingsEnv(job.settings || {}), ...extra });
+export function runJob(dir, spawn = spawnSync, own = process.env) {
   const job = readJson(path.join(dir, "job.json"), null);
   if (!job) throw new Error("no job");
   const last = path.join(dir, "last.txt");
@@ -145,15 +187,15 @@ function runJob(dir) {
   if (job.provider === "claude") {
     const home = path.join(job.actDir, "claude-home"); fs.mkdirSync(home, { recursive: true });
     for (const [from, to] of [[`${job.factoryHome}/.claude/.credentials.json`, ".credentials.json"], [`${job.factoryHome}/.claude.json`, ".claude.json"]]) if (!fs.existsSync(path.join(home, to))) { try { fs.symlinkSync(from, path.join(home, to)); } catch {} }
-    r = spawnSync(job.claudeBin, ["-p", "--model", job.model, "--dangerously-skip-permissions"], { input: job.prompt, cwd: job.brain, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20,
-      env: { PATH: `${path.dirname(job.claudeBin)}:${ROOT_PATH}`, HOME: "/root", CLAUDE_CONFIG_DIR: home, IS_SANDBOX: "1", LANG: "C.UTF-8" } });
+    r = spawn(job.claudeBin, ["-p", "--model", job.model, "--dangerously-skip-permissions"], { input: job.prompt, cwd: job.brain, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20,
+      env: aiEnv(job, own, { PATH: `${path.dirname(job.claudeBin)}:${ROOT_PATH}`, HOME: "/root", CLAUDE_CONFIG_DIR: home, IS_SANDBOX: "1", LANG: "C.UTF-8" }) });
     fs.writeFileSync(last, r.stdout || "");
   } else {
     const home = path.join(job.actDir, "codex-home"); fs.mkdirSync(home, { recursive: true });
     const auth = path.join(home, "auth.json"); // root has no Codex login: the factory user's file, linked (a copy would drift when it refreshes)
     if (!fs.existsSync(auth)) fs.symlinkSync(`${job.factoryHome}/.codex/auth.json`, auth);
-    r = spawnSync("codex", ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "danger-full-access", "-m", job.model, "-C", job.brain, "-o", last, "-"],
-      { input: job.prompt, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: ROOT_PATH, HOME: "/root", CODEX_HOME: home, LANG: "C.UTF-8" } });
+    r = spawn("codex", ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "danger-full-access", "-m", job.model, "-C", job.brain, "-o", last, "-"],
+      { input: job.prompt, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: aiEnv(job, own, { PATH: ROOT_PATH, HOME: "/root", CODEX_HOME: home, LANG: "C.UTF-8" }) });
   }
   let said = ""; try { said = fs.readFileSync(last, "utf8"); } catch {}
   if (!said && r.status !== 0) said = `the ${job.provider} run failed: ${String(r.stderr || "").trim().split("\n").pop()}`;
@@ -171,8 +213,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
       console.log(queueNotice(a.NOTICES, `on-call-${id}`, text) ? "queued" : "already queued"); process.exit(0);
     }
     const qi = argv.indexOf("--repair-request");
-    if (qi >= 0) { console.log(repairRequest(a, argv[qi + 1] || "the driver is at fault")); process.exit(0); }
+    if (qi >= 0) {
+      try { console.log(repairRequestChecked(process.env, argv[qi + 1] || "the driver is at fault")); process.exit(0); }
+      catch (e) { if (!(e instanceof RepairRefused)) throw e; console.error(`onduty: ${e.message} Answer RESULT: unresolved.`); process.exit(3); }
+    }
     if (mi >= 0) { markHandled(answeredFile(a), argv[mi + 1], argv[mi + 2]); console.log("marked"); process.exit(0); }
-    console.error("usage: onduty.mjs --run <dir> | --notice <id> <sentence> | --mark-handled <repo> <heading>"); process.exit(2);
+    console.error("usage: onduty.mjs --run <dir> | --notice <id> <sentence> | --mark-handled <repo> <heading> | --repair-request <what is wrong>"); process.exit(2);
   } catch (e) { console.error("onduty failed:", e.message); process.exit(1); }
 }
