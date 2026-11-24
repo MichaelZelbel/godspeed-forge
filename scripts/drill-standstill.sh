@@ -21,8 +21,9 @@
 #   bash scripts/drill-standstill.sh reset               back to before start (to run it again)
 #
 # Stand-ins, all in /var/lib/forge-drill: the AIs (codex shadowed in /usr/local/sbin, claude named in the settings) answer
-# exactly what beta.31's helper answered; GitHub is the driver's own stand-in hook (RD_GH_CMD), showing two tickets closed
-# by merged pull requests and nothing running; the stage step is a timer that writes beta.31's waiting sentence into the
+# exactly what beta.31's helper answered; gh (shadowed in /usr/local/sbin and /usr/local/bin) shows two tickets closed by
+# merged pull requests, nothing of the release's running and a run on main, and takes no writes; the stage step is a timer
+# that writes beta.31's waiting sentence into the
 # driver's look.txt every 15 minutes, as the stage step does. The driver, the dead-man, their units, timers, spool and
 # journals are the real ones, installed by the install line.
 set -eu
@@ -98,10 +99,16 @@ EOF
   mkdir -p /usr/local/sbin
   [ -e /usr/local/sbin/codex ] && ! grep -q forge-drill /usr/local/sbin/codex && stop "/usr/local/sbin/codex exists and is not the drill's"
   ln -sf "$DRILL/bin/codex" /usr/local/sbin/codex # first on the acting runs' PATH
-  # GitHub: the driver's own stand-in hook (RD_GH_CMD): two tickets closed by merged pull requests, nothing running
+  # GitHub: a stand-in gh, first on every PATH the driver uses: two tickets closed by merged pull requests, nothing of the
+  # release's running, and one run on main in progress (activity near the release that is not the release's)
   cat >"$DRILL/bin/gh-standin.mjs" <<'EOF'
 import fs from "node:fs";
-const { args } = JSON.parse(fs.readFileSync(0, "utf8"));
+const argv = process.argv.slice(2);
+if (argv[0] === "auth") process.exit(0); // "gh auth status": signed in
+const refuse = (why, what) => { fs.appendFileSync("/var/lib/forge-drill/gh-unanswered.log", `${new Date().toISOString()} ${what}\n`); process.stderr.write(`${why}\n`); process.exit(1); };
+if (argv[0] !== "api") refuse("the drill's stand-in GitHub answers only reads", `gh ${argv.join(" ")}`);
+const args = argv.slice(1).filter(x => x !== "--paginate");
+if (args.includes("-X") || args.includes("--method") || args.includes("--input")) refuse("the drill's stand-in GitHub takes no writes", `WRITE ${args.join(" ")}`);
 const a = args.join(" "), REPO = "drill-owner/drill-product", now = Date.now(), iso = ms => new Date(ms).toISOString();
 const sha = n => String(n).padStart(40, "a");
 const say = v => { process.stdout.write(JSON.stringify(v)); process.exit(0); };
@@ -115,11 +122,16 @@ if (/check-runs/.test(a)) say({ check_runs: [{ name: "required", status: "comple
 if ((m = /commits\/(\w+)$/.exec(a))) say({ sha: m[1], commit: { committer: { date: iso(now - 28 * 3600e3) } } });
 if (/issues\?state=open&labels=needs-owner/.test(a)) say([]);
 if (/^search\/issues/.test(a)) say({ items: [] });
+if (/actions\/runs\?status=in_progress/.test(a)) say({ workflow_runs: [{ head_branch: "main", head_sha: sha(1), run_started_at: iso(now - 2 * 60e3), name: "required" }] });
 if (/actions\/(workflows\/[^/]+\/)?runs/.test(a)) say({ workflow_runs: [] });
-fs.appendFileSync("/var/lib/forge-drill/gh-unanswered.log", `${iso(now)} ${a}\n`);
-process.stderr.write(`the drill's stand-in GitHub has no answer for: ${a}\n`);
-process.exit(1);
+refuse(`the drill's stand-in GitHub has no answer for: ${a}`, a);
 EOF
+  printf '#!/usr/bin/env bash\nexec node %s/bin/gh-standin.mjs "$@"\n' "$DRILL" >"$DRILL/bin/gh"
+  chmod 755 "$DRILL/bin/gh"
+  for d in /usr/local/sbin /usr/local/bin; do
+    [ -e "$d/gh" ] && ! [ "$(readlink "$d/gh" 2>/dev/null)" = "$DRILL/bin/gh" ] && stop "$d/gh exists and is not the drill's"
+    ln -sf "$DRILL/bin/gh" "$d/gh"
+  done
   # the stage step: beta.31's waiting sentence, written into the driver's look.txt every 15 minutes
   cat >"$DRILL/bin/stage-look" <<EOF
 #!/usr/bin/env bash
@@ -182,7 +194,7 @@ write_settings() {
   "budget": { "act_runs_per_day": 8, "reserved": 4 },
   "notices": { "watch_repo": "", "godspeed_notices_file": "$WORKSPACE/.godspeed/notices.json" },
   "steps": { "stage": { "enabled": false }, "plan": { "enabled": false }, "questions": { "enabled": false }, "test-machine": { "enabled": false }, "trust": { "enabled": false }, "keep-main-green": { "enabled": false }, "owner-releases": { "enabled": false }, "owner-questions": { "enabled": false } },
-  "env": { "FD_MAX_HELPERS": "0", "RD_GH_CMD": "node $DRILL/bin/gh-standin.mjs" }
+  "env": { "FD_MAX_HELPERS": "0" }
 }
 EOF
   cat >"$SETTINGS/projects/drill-owner--drill-product.json" <<EOF
@@ -259,7 +271,7 @@ do_reset() {
   preconditions
   systemctl disable --now factory-driver.timer factory-deadman.timer forge-drill-stage.timer >/dev/null 2>&1 || true
   rm -rf "$STATE" /var/lib/godspeed/forge/deadman "$SPOOL" "$DRILL/started-at" "$DRILL/deadman-journal.json"
-  rm -f "$SETTINGS/driver.json" "$SETTINGS/driver.env" "$SETTINGS/projects/drill-owner--drill-product.json"
+  rm -f "$SETTINGS/driver.json" "$SETTINGS/driver.env" "$SETTINGS/projects/drill-owner--drill-product.json" /usr/local/sbin/gh /usr/local/bin/gh
 }
 
 case "${1:-}" in
