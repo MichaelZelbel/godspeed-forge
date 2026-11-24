@@ -16,6 +16,7 @@
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { look, defaults, toolCoverage } from "./test-machine/test-machine.mjs";
+import { gitInDir, factoryAccount } from "../checkout-guard.mjs";
 
 export { defaults, toolCoverage };
 export const STEP = { name: "test-machine", everyMinutes: 30, maxMinutes: 120, inRound: false };
@@ -101,8 +102,8 @@ export async function run(ctx) {
   try { env = envFor(ctx); } catch (e) { return { ok: false, summary: "not set up", error: e.message }; }
   const log = ctx.log || (() => {});
   // The staged release is read from the checkout of the release records, which the stage step keeps; a
-  // failed pull is not fatal.
-  if (!env.DRY && !env.CLEAR_HALT && !(ctx.deps && ctx.deps.check)) spawnSync("git", ["-C", get(ctx.main, "releases.records_checkout") || ".", "pull", "--ff-only", "-q"], { timeout: 120000, stdio: "ignore" });
+  // failed pull is not fatal. Records that live in the factory user's home are pulled as that user, never as root (issue #157).
+  if (!env.DRY && !env.CLEAR_HALT && !(ctx.deps && ctx.deps.check)) spawnSync(...gitInDir(factoryAccount(ctx.settings), get(ctx.main, "releases.records_checkout") || ".", ["pull", "--ff-only", "-q"]), { timeout: 120000, stdio: "ignore" });
   let r;
   try { r = await look(env, { log, ...(ctx.nowMs ? { now: ctx.nowMs } : {}), ...(ctx.deps || {}) }); }
   catch (e) { return { ok: false, summary: "the look failed", error: String(e.message).slice(0, 300) }; }

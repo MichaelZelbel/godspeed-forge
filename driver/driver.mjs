@@ -15,6 +15,7 @@
 // action), heartbeat (the end of the last round), round.lock (pid; a dead pid's lock is taken over),
 // helpers/<unit>/ (ai.mjs).
 import "./readonly.mjs"; // first: a --dry-run changes nothing
+import { enforceCheckoutGuard, factoryAccount } from "./checkout-guard.mjs"; // root never runs git in the factory user's folders (cli)
 import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -774,8 +775,11 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     // ---- housekeeping: the server's hiccups, and the timers whose step is housekeeping
     world.timersToStart = steps.filter(s => s.do === "housekeeping" && s.ob.kind === "factory-stopped" && s.ob.timer).map(s => s.ob.timer);
     if (!dry) {
-      out.housekeeping = await (deps.housekeep || housekeep)(env, world, deps.hkDeps || {});
-      if (out.housekeeping.done.length || out.housekeeping.failed.length) record({ kind: "housekeeping", ...out.housekeeping });
+      const { repairs = [], ...hk } = await (deps.housekeep || housekeep)(env, world, deps.hkDeps || {});
+      out.housekeeping = hk;
+      if (hk.done.length || hk.failed.length) record({ kind: "housekeeping", ...hk });
+      // what housekeeping repaired alone (a checkout given back to the factory user): on the record as the driver's own repair, no hand rescue
+      for (const r of repairs) record({ kind: "repaired alone", by: "housekeeping", handRescue: false, ...r });
       for (const p of world.actLoginsRepaired || []) if (state.actLogin) delete state.actLogin[p]; // the sign-in check answered: the login obstacle clears
     }
     const hkSummary = [...out.housekeeping.done, ...out.housekeeping.failed.map(f => `not done: ${f}`)].join("; ").slice(0, 600) || "nothing to do for it";
@@ -1088,7 +1092,9 @@ export async function cli(argv = process.argv.slice(2), io = {}) {
     loaded = loadSettings(dir, { steps: found.steps });
   } catch (e) { err(e.message); return 1; }
   Object.assign(process.env, loaded.env);
-  const base = { settings: loaded.settings, main: loaded.main, projects: loaded.projects, env: loaded.env, settingsDir: dir, dry, argv, clearHalt: argv.includes("--clear-halt"), log };
+  // a round and a step run as root: from here on no git of theirs runs as root in the factory user's home (issue #157)
+  (io.guard || enforceCheckoutGuard)(factoryAccount(loaded.settings));
+  const base ={ settings: loaded.settings, main: loaded.main, projects: loaded.projects, env: loaded.env, settingsDir: dir, dry, argv, clearHalt: argv.includes("--clear-halt"), log };
   if (opt("--step")) {
     const mod = found.steps.find(s => s.name === opt("--step"));
     if (!mod) { err(`there is no step ${opt("--step")} (${found.steps.map(s => s.name).join(", ") || "none installed"})`); return 2; }

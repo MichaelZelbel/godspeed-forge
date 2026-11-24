@@ -751,6 +751,24 @@ test("ticket 03: a linked pull request merged into another branch than main is n
   assert.ok(!out2.obstacles.some(o => o.kind === "dead-end"), "the same pull request merged into main: done");
 });
 
+// the Forge 0.3.1, ticket 08 (#157): what housekeeping gave back to the factory user is on the record as the driver's own repair
+test("ticket 08: a checkout housekeeping gave back to the factory user is recorded as a repair the driver made alone, never as a hand rescue", async () => {
+  const fx = fixture();
+  const checkout = "/home/godspeed-forge/godspeed-mission-control";
+  const repair = { what: "checkout ownership", checkout, files: 41298, gitFiles: 1298, owners: ["root"], sample: [".git/HEAD", ".git/index"], fetch: "works" };
+  fx.deps.housekeep = async () => ({ done: [`gave the factory's checkout ${checkout} back to godspeed-forge: 41298 files were not its (root), 1298 of them git's own (.git/HEAD); its git fetch works again`], failed: [], repairs: [repair] });
+  const out = await round(fx.env, fx.deps);
+  const log = fs.readFileSync(path.join(fx.env.STATE_DIR, "decisions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  const rec = log.filter(e => e.kind === "repaired alone");
+  assert.equal(rec.length, 1);
+  assert.deepEqual({ ...rec[0], at: undefined }, { at: undefined, kind: "repaired alone", by: "housekeeping", handRescue: false, ...repair });
+  const hk = log.find(e => e.kind === "housekeeping");
+  assert.match(hk.done[0], /^gave the factory's checkout/);
+  assert.equal(hk.repairs, undefined, "said once: the repair is its own record");
+  assert.ok(!log.some(e => e.kind === "hand rescue"));
+  assert.match(out.housekeeping.done[0], /^gave the factory's checkout/);
+});
+
 // ---------------------------------------------------------------- the Forge 0.3.1, ticket 04 (#141)
 test("ticket 04: the beta.31 answer 'Failed to authenticate' is a login obstacle, not a try: the rung keeps its count, housekeeping links the sign-in again and checks it in the same round, and the rung goes on with the AI that can sign in", async () => {
   const { launchAct: realLaunch, runJob } = await import("../onduty.mjs");
