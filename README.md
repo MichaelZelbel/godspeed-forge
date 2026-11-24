@@ -129,7 +129,9 @@ If the page does not open, your hosting company's firewall may be blocking it: l
   container of the Forge's own (`godspeed-forge-https`) that shares the certificates of Godspeed's. A server with no
   Godspeed web address gets a Caddy of the Forge's own (`godspeed-forge-https.service`, installed from Caddy's apt
   source when missing), at the server's tailnet name when it is on a tailnet (turn on HTTPS certificates for the tailnet
-  in Tailscale's admin page), else at its DNS name when that points at the server and port 80 is free. The install lets the
+  in Tailscale's admin page; that address opens only from devices on your tailnet, and no firewall line is printed for it),
+  else at its DNS name when that points at the server and port 80 is free. When Godspeed later gets a web address, the
+  Forge's own Caddy goes and the page moves to Godspeed's. The install lets the
   port in through the server's own firewall when ufw or firewalld is on; a firewall your hosting company runs in front
   of the server must let it in too.
 - **The sign-in** is the user name `forge` and a password made on your server. Running the install line or setup again

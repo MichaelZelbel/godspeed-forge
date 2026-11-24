@@ -309,6 +309,10 @@ testCase('with no Godspeed web address and no tailnet, a DNS name that points at
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(r.record.host, 'host.example.net');
   assert.equal(r.record.front, 'forge');
+  const again = server(root, { hostname: 'host.example.net', addresses: ADDRESSES, listening: 'LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\n' });
+  const second = await page(root, again).go();
+  assert.equal(second.ok, true, `port 80 held by the Forge's own Caddy is no stop: ${JSON.stringify(second)}`);
+  assert.equal(second.record.host, 'host.example.net');
   for (const [label, options] of [
     ['port 80 is taken', { hostname: 'host.example.net', addresses: ADDRESSES, listening: 'LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\n' }],
     ['the name points elsewhere', { hostname: 'elsewhere.example.net', addresses: ADDRESSES }],
