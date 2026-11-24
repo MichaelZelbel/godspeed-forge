@@ -333,7 +333,9 @@ export function advance(entries, chain0, now, opts = {}) {
     if (e.remindOnly) { // a pause: Michael is reminded when its time is up, and again every 24 hours; nobody acts for him
       if ((c.rung < 3 && now >= base + limit) || (c.rung === 3 && now >= c.rungSince + CHAIN.restartHours * H)) { c.rung = 3; c.rungSince = now; c.told = false; moved = true; }
     } else if (c.rung === 0 && (e.owner === null || force.has(e.id) || now >= base + limit)) { c.rung = 1; c.rungSince = now; c.launched = false; moved = true; }
-    else if ((c.rung === 1 || c.rung === 2) && now >= c.rungSince + (e.kind === "halt" ? CHAIN.haltRungMinutes * 60000 : (c.rung === 1 ? CHAIN.actHours : CHAIN.actHours2) * H) && ranOrLost(c.rung)) {
+    else if ((c.rung === 1 || c.rung === 2) && now >= c.rungSince + (e.kind === "halt" ? CHAIN.haltRungMinutes * 60000 : (c.rung === 1 ? CHAIN.actHours : CHAIN.actHours2) * H) && (e.kind === "halt" || ranOrLost(c.rung))) {
+      // a halt's rung ends on its 20 minutes whether or not its acting run has answered (a run may use 55 minutes); the rung counts as tried
+      if (e.kind === "halt" && !tried(c.rung)) (c.tries ||= []).push({ rung: c.rung, at: new Date(now).toISOString(), provider: "unknown", result: "unresolved", summary: "the 20 minutes of a halt's rung ended" });
       c.rung += 1; c.rungSince = now; c.launched = false; c.told = false; moved = true;
     } else if (c.rung === 3 && now >= c.rungSince + CHAIN.restartHours * H) { c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; moved = true; }
     if (e.backlog && c.rung === 3) { c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; c.tries = []; c.cooldownUntil = now + 24 * H; moved = true; } // whichever path led here: backlog never reaches the owner

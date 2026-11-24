@@ -307,3 +307,34 @@ test("a question naming beta.31 does not pause beta.3; and an empty open list wi
   const b = buildingState({ release: w.releases[0], world: w, now: T0 });
   assert.ok(b && b.unread && b.open === 0, "the unreadable flag survives when no ticket is known to be open");
 });
+
+test("a halt's rungs end on their 20 minutes even while the acting run is still working (a run may use 55 minutes)", async () => {
+  const { advance } = await import("../inventory.mjs");
+  const entry = { id: "halt:test-machine:repair-halted", kind: "halt", step: "test-machine", owner: null, title: "halt", milestoneAt: T0 - 36 * 60 * MIN, limitH: 0, evidence: ["halted"] };
+  let chain = {}, launches = [], told = null;
+  for (let m = 0; m <= 70; m += 5) {
+    const t = T0 + m * MIN, a = advance([entry], chain, t);
+    chain = a.chain;
+    if (a.actions.launch) { a.actions.launch.c.launched = true; a.actions.launch.c.launchedAt = t; launches.push({ minute: m, rung: a.actions.launch.rung }); } // no run ever answers
+    if (a.actions.tell.length && told === null) { told = m; a.actions.tell[0].c.told = true; }
+  }
+  assert.deepEqual(launches.map(l => l.rung), [1, 2]);
+  assert.ok(launches[1].minute <= 40, `the other AI by 40 (at ${launches[1].minute})`);
+  assert.ok(told !== null && told <= 60, `the owner told by 60 (at ${told})`);
+});
+
+test("GitHub's runs that cannot be read are not 'no runs': the fresh read holds the repair request and the notice", async () => {
+  const { readActivity } = await import("../duties.mjs");
+  const act = readActivity({ REPO }, { factories: [] }, (cmd, args) => (cmd === "gh" ? { status: 1, stdout: "", stderr: "rate limited" } : { status: 0, stdout: "" }), T0);
+  assert.equal(act.unreadable, true);
+  const ok = readActivity({ REPO }, { factories: [] }, (cmd) => (cmd === "gh" ? { status: 0, stdout: JSON.stringify({ workflow_runs: [] }) } : { status: 0, stdout: "" }), T0);
+  assert.equal(ok.unreadable, undefined);
+  let blind = false;
+  const s = server({ worldAt: (now, m) => world32(now, m), look: () => LOOK32 });
+  for (let m = 0; m <= 50; m += 5) await s.round(m);
+  const before = { told: s.told.length, req: s.requests.length }, act0 = s.deps.activity; const calls = [];
+  s.deps.activity = async (...a) => { calls.push(1); const r = await act0(...a); return calls.length >= 2 ? { ...r, unreadable: true } : r; };
+  await s.round(55);
+  assert.equal(s.requests.length, before.req); assert.equal(s.told.length, before.told);
+  assert.ok(s.log().some(e => e.kind === "message held" && /runs could not be read/.test(e.why)));
+});

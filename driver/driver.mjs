@@ -583,6 +583,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       let freshWorld = null, freshActivity = null;
       try { freshWorld = await (deps.readWorld || readWorld)(env, { gh, sh: deps.sh || shFor(env), ...(deps.worldDeps || {}) }); freshActivity = await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, freshWorld); } catch { freshWorld = null; }
       if (!freshWorld) return "the tickets could not be read again";
+      if (freshActivity && freshActivity.unreadable) return "GitHub's runs could not be read in the fresh read, so it did not confirm the standstill";
       const freshRel = (freshWorld.releases || []).find(r => r.id === k.id) || null;
       const freshBld = (() => { try { return freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity, prevTokens: sc.buildTokens || ((jv.clocks || {})[k.id] || {}).buildTokens || null }) : null; } catch { return null; } })();
       if (freshBld && freshBld.unread) return "a ticket could not be read in the fresh read, so it did not confirm the standstill";
