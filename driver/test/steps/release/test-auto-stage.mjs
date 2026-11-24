@@ -1,4 +1,4 @@
-// test cases: 108
+// test cases: 110
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -1501,6 +1501,28 @@ test("issue #155: the STOP goes the moment the scenarios have ended, before the 
   assert.deepEqual(w.stopSeenDuring.filter(([n]) => n === "staging-check.mjs").map(([, s]) => s), [false]);
 });
 
+test("issue #155: a failed first run lets the factory go while the install still runs, and the one rerun of its failed jobs pauses it again", async () => {
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, failed, failed, failed], extra: { serverDelayMs: 30 } });
+  ctx.rerunFailed = async () => { w.reruns++; w.stopSeenDuring.push(["rerun", fs.existsSync(w.stop)]); };
+  const r = await A.autoStage(ctx);
+  assert.equal(r.outcome, "failed-tests");
+  const at = (re) => w.log.findIndex((l) => re.test(l));
+  const firstRemoved = at(/^The factory's STOP file was removed\.$/);
+  assert.ok(firstRemoved >= 0 && at(/is on the server\.$/) > firstRemoved, w.log.join(" / "));
+  assert.ok(at(/paused again while the failed jobs run once more/) > at(/is on the server\.$/));
+  assert.deepEqual(w.stopSeenDuring.filter(([n]) => n === "rerun").map(([, s]) => s), [true], "paused while the rerun runs");
+  assert.equal(w.log.filter((l) => l === "The factory's STOP file was removed.").length, 2, "once after the run, once after its rerun");
+  assert.equal(fs.existsSync(w.stop), false);
+});
+
+test("issue #155: a failure the rebuild takes out of the release is filed before the rebuild starts", async () => {
+  const { w, ctx } = driven();
+  const r = await A.autoStage(ctx);
+  assert.equal(r.outcome, "refrozen");
+  assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`]);
+  assert.ok(ctx.state.releases[w.id].filed[`2.0.0-beta.25 ${JOB}`]);
+});
+
 test("issue #155, today's case: the run's jobs answer 502, so its failed jobs are named from its check runs, with the factory running again, and each is filed once, never beside an open issue that names it", async () => {
   const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, jobsUnread, jobsUnread, jobsUnread] });
   ctx.failedJobs = async () => { w.stopSeenDuring.push(["jobs", fs.existsSync(w.stop)]); return null; }; // GitHub said 502 to /actions/runs/<id>/jobs
@@ -1512,7 +1534,7 @@ test("issue #155, today's case: the run's jobs answer 502, so its failed jobs ar
   assert.equal(fs.existsSync(w.stop), false);
   const summarising = w.stopSeenDuring.filter(([n]) => ["jobs", "checks", "file", "staging-check.mjs"].includes(n));
   assert.ok(summarising.length >= 4 && summarising.every(([, s]) => s === false), `nothing that summarises or files holds the factory: ${JSON.stringify(summarising)}`);
-  assert.deepEqual(w.filed.map((i) => i.title), [`Candidate scenario failed: ${JOB}`], "filed by name; the job #1105 names is not filed again, the summary job never");
+  assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`], "filed by name; the job #1105 names is not filed again, the summary job never");
   assert.deepEqual(w.filed[0].labels, ["bug", "scenario-failure", "archon-triage"], "labelled as main's nightly files a failed everyday scenario");
   assert.match(w.filed[0].body, /The everyday scenario "two computers move reminders" failed on the candidate of 2\.0\.0-beta\.25 \(u\)/);
   assert.match(w.filed[0].body, /Its log could not be read when this was filed/);
@@ -1539,7 +1561,7 @@ test("issue #155: when GitHub can name the failed jobs neither from the jobs nor
   const r2 = await A.autoStage(next);
   assert.equal(r2.outcome, "failed-tests");
   assert.ok(w.log.includes("Nothing is running, so the factory is not paused."));
-  assert.deepEqual(w.filed.map((i) => i.title), [`Candidate scenario failed: ${JOB}`]);
+  assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`]);
   assert.equal(w.notices.length, 1);
   assert.deepEqual([w.dispatches, w.reruns], [1, 1], "one run, one rerun, never more");
   assert.equal(fs.existsSync(w.stop), false);
@@ -1558,7 +1580,7 @@ test("issue #155: a filing GitHub refuses is made by the next look, which says n
   assert.equal(fs.existsSync(w.stop), false);
   const r = await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile), fileIssue });
   assert.equal(r.outcome, "failed-tests");
-  assert.deepEqual(w.filed.map((i) => i.title), [`Candidate scenario failed: ${JOB}`]);
+  assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`]);
   assert.match(w.filed[0].body, /What went wrong, as its log says: GitHub limited how many requests/);
   assert.equal(w.notices.length, 1);
 });

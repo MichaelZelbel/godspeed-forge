@@ -1059,13 +1059,14 @@ async function failedOf(ctx, staged) {
   return { jobs: all.filter((j) => !G.isAggregateJob(j)), aggregate: all.filter((j) => G.isAggregateJob(j)), from };
 }
 
-// A candidate's failed scenario is filed the way a failed everyday scenario is filed from main's nightly run (the
-// product's scenarios/report-night.mjs): one issue per scenario, labelled bug, scenario-failure and archon-triage, which
-// the factory takes first. Never a second one while an open issue names the job already: the nightly's own "Nightly
-// scenario failed: <job>", or one filed by hand (on 2026-11-24 the main project's issue for beta.31's failed scenario was
-// filed by hand, because the step could not read the run's jobs and filed nothing).
+// A candidate's failed scenario is filed exactly as a failed everyday scenario is filed from main's nightly run (the
+// product's scenarios/report-night.mjs): one issue per scenario, titled "Nightly scenario failed: <job>" and labelled bug,
+// scenario-failure and archon-triage, which the factory takes first. With that title and label the nightly finds it as
+// its own: it adds a failing night to it and closes it the first night the scenario passes. Never a second one while an
+// open issue names the job already: the nightly's own, or one filed by hand (on 2026-11-24 the main project's issue for
+// beta.31's failed scenario was filed by hand, because the step could not read the run's jobs and filed nothing).
 export const FAILURE_LABELS = Object.freeze(["bug", "scenario-failure", "archon-triage"]);
-export const failureTitle = (job) => `Candidate scenario failed: ${job}`;
+export const failureTitle = (job) => `Nightly scenario failed: ${job}`;
 // The job's whole name in the title or the body ("stage" is not named by "stage-server").
 export const namesJob = (issue, job) => {
   if (!job) return false;
@@ -1155,15 +1156,21 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
   // The factory is paused only while something runs or may still be rerun: a look that merely tries the
   // install again does not hold it up.
   const needStop = sc.result === "none" || sc.result === "running" || (sc.result === "failed" && !rs.rerunAt);
-  const madeStop = needStop && takeStop(cfg.stopFile, now()); // a STOP of ours left by a killed look is taken back
-  // The STOP goes the moment the scenarios have ended, before the install is waited for and before anything is read
-  // to summarise them: on 2026-11-24 a summary GitHub could not make kept the factory halted for two hours.
+  const paused = needStop && takeStop(cfg.stopFile, now()); // a STOP of ours left by a killed look is taken back
+  // The STOP is held only while scenarios run: it goes the moment a run has ended, before the install is waited for and
+  // before anything is read to summarise it, and is taken again only for the one rerun of the failed jobs. On 2026-11-24
+  // a summary GitHub could not make kept the factory halted for two hours.
+  let held = paused;
   const releaseStop = () => {
-    if (madeStop && removeStop(cfg.stopFile)) log("The factory's STOP file was removed.");
+    if (held && removeStop(cfg.stopFile)) log("The factory's STOP file was removed.");
+    held = false;
+  };
+  const holdStop = () => {
+    if (paused && !held && (held = takeStop(cfg.stopFile, now()))) log("The factory is paused again while the failed jobs run once more.");
   };
   ctx.onExit(releaseStop);
   if (!needStop && removeStop(cfg.stopFile)) log("A STOP file an earlier look of this step left behind was removed: no scenarios run now.");
-  log(madeStop ? "The factory is paused while the scenarios run (STOP file made)." : needStop ? "A STOP file was there already, not made here; it is left as it is." : "Nothing is running, so the factory is not paused.");
+  log(paused ? "The factory is paused while the scenarios run (STOP file made)." : needStop ? "A STOP file was there already, not made here; it is left as it is." : "Nothing is running, so the factory is not paused.");
   let decided = null;
   try {
     // ---- the scenarios: one candidate run, never a second dispatch
@@ -1202,7 +1209,7 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
           });
 
     sc = await waitDone();
-    const ended = (x) => x.result === "passed" || (x.result === "failed" && !!rs.rerunAt); // nothing of it runs or reruns any more
+    const ended = (x) => x.result === "passed" || x.result === "failed"; // nothing of it runs now (a rerun pauses the factory again)
     if (ended(sc)) releaseStop();
     await server;
     if (sc.result === "failed" && !rs.rerunAt) {
@@ -1214,6 +1221,7 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
       rs.rerunAt = new Date(now()).toISOString(); // once, and only the failed jobs
       rs.rerunFromAttempt = info.attempt;
       save();
+      holdStop();
       await ctx.rerunFailed(sc.run);
       log(`Scenario run ${sc.run} failed in ${(sc.failedJobs || []).length} job(s); those jobs only were run once more.`);
       await ctx.sleep(Math.min(cfg.pollSeconds, 30) * 1000);
@@ -1332,6 +1340,9 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
   if (!traced.ok) return finishWith(D.stoppedWords(traced.why), "drive-untraced");
   if (!tickets.some((t) => !already.includes(t) && !traced.tickets.includes(t))) return finishWith(D.stoppedWords("taking that change out would leave nothing in the release"), "drive-untraced");
   const first = holding[0];
+  // Filed before the rebuild starts: whatever the rebuild later does (a new candidate, or a stop), the failures of this
+  // candidate are with the factory. A filing GitHub refuses starts nothing; the next look files and then rebuilds.
+  await fileFailures({ ctx, rs, version, staged, failures: judged, save });
   rs.drive = {
     phase: "revert-start",
     n: n + 1,
