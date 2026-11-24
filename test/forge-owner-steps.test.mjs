@@ -2,7 +2,7 @@
 // GitHub on 127.0.0.1, a stand-in bridge to Godspeed, a stand-in coding agent, project checkouts with an origin on
 // this machine and a stand-in factory/consumer.py. The acceptance of tickets 03 (questions reach the chat) and 04
 // (a finished release stages itself) of the Forge 0.1.0 plan, and ticket 02's facts. No network, no AI.
-// test cases: 17
+// test cases: 18
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -77,6 +77,7 @@ const F1_TEXT = [
   'When you open the app for the first time, it only says Welcome.',
   '1. It greets you by your name.',
   '2. It keeps the plain welcome.',
+  'I suggest 1.',
   'If you do not answer by Tuesday 24 November, 18:00 UTC, it will keep the plain welcome.',
   'Reply "F1 1" or "F1 2", or "F1" and your answer in your own words.'
 ].join('\n');
@@ -226,6 +227,41 @@ testCase('the step says once when the questions issue disappears while the facto
   assert.equal(gone[1].text, gone[0].text);
   assert.notEqual(gone[1].id, gone[0].id);
   assert.equal(bridge.attempts.filter(a => a.text === gone[0].text).length, 2, 'and nothing was sent a third time');
+}
+
+testCase('a question already decided on GitHub is never sent and one sent is withdrawn; a technical question is never sent and a product question is');
+{
+  const DEC = 'acme/decided';
+  const decApps = setUpProject(state, gh, DEC);
+  const bot = `${decApps.builder.slug}[bot]`;
+  const body = [
+    '### 1. Should the welcome screen show a tour? (#21)', 'When you open it, there is no tour.', '- (a) Show it.', '- (b) Do not.', 'Recommendation: (b).', '',
+    '### 2. Should the welcome screen say good morning? (#22)', 'When you open it, it says hello.', '- (a) Say it.', '- (b) Keep hello.', '',
+    '### 3. Should the welcome screen use the owner answer? (#23)', 'When you open it, it says hello.', '- (a) Yes.', '- (b) No.', '',
+    '### 4. Which test runner should the unit checks use?', 'The unit checks use the built-in runner.', '- (a) Keep it.', '- (b) Switch.', '',
+  ].join('\n');
+  const issue = gh.issue(DEC, { title: 'Owner decisions needed', body, user: { login: bot, type: 'Bot' } });
+  const comments = gh.repo(DEC).comments[String(issue.number)] = [
+    { id: 1, body: 'Manager decision (Mission Control, not Michael) (question 1: Should the welcome screen show a tour?)\n\nNo tour.', user: { login: bot } },
+    { id: 2, body: 'Owner decision (question 3: Should the welcome screen use the owner answer?)\n\n> yes', user: { login: 'the-owner' } },
+  ];
+  const n = bridge.sent.length;
+  assert.equal((await questionsStep.run(ctxFor([{ repository: DEC }]))).ok, true);
+  const sent = sentSince(n);
+  assert.equal(sent.length, 1, 'only the undecided product question is sent');
+  assert.ok(sent[0].text.includes('good morning') || sent[0].text.includes('question for you'), sent[0].text);
+  const recs = readQuestions(state).questions.filter(x => x.repository === DEC);
+  assert.deepEqual(recs.map(x => [x.number, x.status]), [[1, 'answered-elsewhere'], [2, 'told'], [3, 'answered-elsewhere'], [4, 'kept']]);
+  // question 2 is decided afterwards: it is withdrawn and the owner is told once
+  comments.push({ id: 3, body: 'Manager decision (Mission Control, not Michael): question 2: keep hello.', user: { login: bot } });
+  await questionsStep.run(ctxFor([{ repository: DEC }]));
+  await questionsStep.run(ctxFor([{ repository: DEC }]));
+  const after = sentSince(n);
+  assert.equal(after.length, 2);
+  assert.equal(after[1].text, `decided no longer needs your answer to ${recs[1].handle}: it was already decided, so you can leave it.`);
+  assertPlain(assert, after[1].text);
+  assert.equal(readQuestions(state).questions.find(x => x.repository === DEC && x.number === 2).status, 'withdrawn');
+  assert.ok(!bridge.json(WAITING_FILE).items.some(i => i.project === DEC));
 }
 
 testCase('a project the Forge has not set up, or without App details here, is skipped quietly, and the older questions step keeps its projects to itself');

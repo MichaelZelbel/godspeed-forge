@@ -2,7 +2,7 @@
 // tokens they use (lib/app-token.mjs), against a stand-in GitHub on 127.0.0.1 and a stand-in bridge to Godspeed.
 // The acceptance of tickets 02 (filing) and 05 (go, take it back, release status) of the Forge 0.1.0 plan, and the
 // answer half of ticket 03. No network, no AI.
-// test cases: 15
+// test cases: 16
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -402,6 +402,25 @@ testCase('every sentence the owner can get from these requests and steps is plai
     assert.equal(notPlain(text), '', text);
   }
   assert.equal(questionMessage(R, 'F4', { question: 'Should it greet people?', example: '', choices: [] }), 'my-app has a question for you (F4).\nShould it greet people?\nIt waits for your answer.\nReply "F4" and your answer in your own words.');
+}
+
+testCase('one message answering two questions is two answers, neither lost nor merged into the other');
+{
+  const heading = h => ({ key: keyOf(h), qid: idOf(REPO, keyOf(h)), heading: h });
+  const bot = `${appApps.builder.slug}[bot]`.toLowerCase();
+  app.issues.push({ number: 50, title: 'Owner decisions needed', body: 'x', state: 'open', labels: [], user: { login: `${appApps.builder.slug}[bot]`, type: 'Bot' } });
+  const q = emptyQuestions();
+  q.next = 12;
+  q.questions.push({ repository: REPO, ...heading('Should it say hello?'), handle: 'F10', status: 'told', issue: 50, openedBy: bot, number: 1, options: [] });
+  q.questions.push({ repository: REPO, ...heading('Should it say goodbye?'), handle: 'F11', status: 'told', issue: 50, openedBy: bot, number: 2, options: [] });
+  await saveQuestions(state, q);
+  const r = await answer({ id: 'm1', kind: 'answer', words: 'F10: only on Mondays\nF11: yes', at: '2026-11-22T11:00:00Z' }, ctx());
+  assert.deepEqual(r, { ok: true, say: 'Your answer to F10 is passed on to the my-app factory. Your answer to F11 is passed on to the my-app factory.' });
+  const comments = app.comments['50'];
+  assert.equal(comments.length, 2);
+  assert.ok(comments[0].body.includes('> F10: only on Mondays') && !comments[0].body.includes('yes'));
+  assert.ok(comments[1].body.includes('> F11: yes') && !comments[1].body.includes('Mondays'));
+  assert.deepEqual(readQuestions(state).questions.filter(x => ['F10', 'F11'].includes(x.handle)).map(x => x.status), ['answered', 'answered']);
 }
 
 await gh.close();

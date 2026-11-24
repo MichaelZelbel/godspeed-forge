@@ -58,7 +58,9 @@ export function parseQuestions(text) {
     if (will) fallback = will[1].trim();
     else if (def && !/^no default/i.test(def[1])) fallback = def[1].replace(DEADLINE, "").replace(/\bby\s*\.?$/i, "").replace(/[.\s]+$/, "").trim() || null;
     const note = /no decision needed|for your information/i.test(q.heading);
-    return { number: q.number, heading: q.heading, body, key: keyOf(q.heading), options: options.slice(0, 3), deadline: fallback ? deadline : null, fallback, note };
+    const rec = /(?:^|\n)\s*[-*]?\s*Recommendation:\s*\(?([a-c1-3])\)/i.exec(body);
+    const recommended = rec ? (/\d/.test(rec[1]) ? Number(rec[1]) : "abc".indexOf(rec[1].toLowerCase()) + 1) : null;
+    return { number: q.number, heading: q.heading, body, key: keyOf(q.heading), options: options.slice(0, 3), recommended: recommended && recommended <= options.length ? recommended : null, deadline: fallback ? deadline : null, fallback, note };
   });
 }
 
@@ -69,6 +71,17 @@ export const openedBy = issue => String((issue && issue.user && issue.user.login
 export const pickIssue = (issues, trusted) => (issues || [])
   .filter(i => i && !i.pull_request && i.state !== "closed" && String(i.title).trim() === TITLE && trusted && trusted.has(openedBy(i)))
   .sort((a, b) => Number(a.number) - Number(b.number))[0] || null;
+
+// A comment that settles question `pq`: the owner's answer, or the manager's decision (from the factory's own
+// login: `trusted`, a Set of lowercase logins, or null for any). The Forge's own relayed answer counts too.
+export function decidesQuestion(comment, pq, trusted = null) {
+  const body = String(comment && comment.body || "");
+  const owner = /^\s*Owner decision\b/.test(body);
+  const manager = /^\s*Manager decision\b/.test(body) && (!trusted || trusted.has(String(comment.user && comment.user.login || "").toLowerCase()));
+  if (!owner && !manager) return false;
+  return new RegExp(`question\\s+${pq.number}\\b`, "i").test(body) || body.includes(pq.heading) || body.includes(tidyHeading(pq.heading));
+}
+const tidyHeading = h => String(h).replace(/\s*\([^)]*#\d+[^)]*\)/g, "").trim();
 
 // ---------------------------------------------------------------- who answers
 // Deterministic first. A question of how something is built (tests, checks, files, keys, tools, anything the
