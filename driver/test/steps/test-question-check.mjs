@@ -97,9 +97,9 @@ testCase("an unreadable issue or comment list concludes nothing; the counts show
   assert.equal(r.ok, false); assert.match(r.error, /HTTP 502/);
   const lines = questionCounts(path.join(tmp, "state"));
   assert.equal(lines.length, 1); assert.match(lines[0], /^factory questions of acme\/app: 2 open, \d+ decided, \d+ with the owner \(delivered\), \d+ new, \d+ reached nobody$/);
-  assert.ok(NEW_OWNER_OFF.includes("question-check"), "off on a new owner's server, with the questions step");
+  assert.ok(NEW_OWNER_OFF.includes("questions"), "a new owner's server has the questions step off");
   const off = await check.run(ctx(0, { settings: { ...settings, steps: { questions: { enabled: false } } } }));
-  assert.equal(off.ok, true); assert.match(off.summary, /questions step is off/);
+  assert.equal(off.ok, true); assert.match(off.summary, /questions step is off/, "so this check does nothing there either, and reads nothing");
 }
 
 testCase("driver status --decisions lists what was decided for the owner, from the journal");

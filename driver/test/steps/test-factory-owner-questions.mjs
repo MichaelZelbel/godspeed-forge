@@ -176,12 +176,16 @@ testCase("an answer by email, or a comment on the urgent issue, counts as much a
   const ref = /\[q:([0-9a-f]{10})\]/.exec(c.mails[0].subject)[1];
   c.replies = [{ id: "e1", at: T0 + 11 * MIN, subject: `Re: x [q:${ref}]`, text: "2\nRegards" }];
   const buyIssue = stateOf(d).told[keyOf("Buy more credits")].page.stages[1].channels.issue.receipt;
-  c.comments[buyIssue] = [{ id: "c1", at: T0 + 12 * MIN, text: "buy: let us wait a month" }];
+  c.comments[buyIssue] = [{ id: "c0", at: T0 + 11 * MIN, text: "I'll look at it tomorrow" }];
+  await run(mkEnv(d), T0 + 12 * MIN, quiet, { channels: c.api });
+  assert.equal(postsOf(d).filter(x => /Buy more credits/.test(x.body)).length, 0, "a comment that decides nothing is not relayed (the same classifier as Telegram's free text)");
+  assert.deepEqual(stateOf(d).told[keyOf("Buy more credits")].seenReplies, ["issue-c0"], "and is not read again");
+  c.comments[buyIssue].push({ id: "c1", at: T0 + 12 * MIN, text: "buy: the first, but let us wait a month" });
   await run(mkEnv(d), T0 + 13 * MIN, quiet, { channels: c.api });
   const p = postsOf(d);
   assert.equal(p.length, 2);
   assert.ok(p.some(x => x.body.includes("> 2\n> Regards") && x.body.includes("sent by email") && x.body.includes("choice 2")));
-  assert.ok(p.some(x => x.body.includes("> buy: let us wait a month") && x.body.includes("written on the urgent issue")));
+  assert.ok(p.some(x => x.body.includes("> buy: the first, but let us wait a month") && x.body.includes("written on the urgent issue") && x.body.includes("Do the first thing.")));
   assert.equal(c.closed.length, 2, "both pages end");
 }
 

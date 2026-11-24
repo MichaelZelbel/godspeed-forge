@@ -97,8 +97,8 @@ async function decisions(settingsDir, days, say, now) {
 // release-records repository and hidden-check tools; questions needs the first owner's chat program; trust and
 // keep-main-green need an App-token program and keys file the Forge does not make, and keep-main-green reverts commits
 // on main by a check named "required" that a new owner's project does not have.
-// question-check checks what the questions step does, so it is off with it.
-export const NEW_OWNER_OFF = ['plan', 'stage', 'questions', 'question-check', 'test-machine', 'trust', 'keep-main-green'];
+// (question-check needs no entry: it checks what the questions step does and says so and does nothing while that step is off.)
+export const NEW_OWNER_OFF = ['plan', 'stage', 'questions', 'test-machine', 'trust', 'keep-main-green'];
 // The general steps for any owner (part of the same release): on from the start.
 export const NEW_OWNER_ON = ['owner-releases', 'owner-questions'];
 

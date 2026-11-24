@@ -639,7 +639,9 @@ async function decideNow(env, c, q, sev, now, log, io) {
 }
 
 // His answer by email or on the urgent issue: the channel carries one question only, so it is relayed verbatim
-// as an Owner decision, like a Telegram answer that names the question's handle.
+// as an Owner decision, like a Telegram answer that names the question's handle: "yes", "no" or a choice's number
+// are read without a model, and free text goes through the same decision classifier first (a reply that decides
+// nothing is remembered and the page goes on; a classifier that does not answer is asked again next run).
 async function otherAnswers(env, ctxs, now, log, ch, io) {
   const pages = [];
   for (const c of ctxs) {
@@ -652,14 +654,11 @@ async function otherAnswers(env, ctxs, now, log, ch, io) {
   const mails = withMail.length ? ((await ch.emailReplies(Math.min(...withMail.map(p => p.t.page.stages[0].at)))) || []) : [];
   for (const { c, q, t, k } of pages) {
     const r = pageRef(`${c.project.repo}\n${k}`);
-    const mail = mails.filter(m => String(m.subject).includes(`[q:${r}]`) && String(m.text || "").trim()).sort((a, b) => a.at - b.at)[0];
-    let reply = mail ? { id: `mail-${mail.id}`, at: mail.at, text: mail.text, via: "sent by email" } : null;
+    const seen = new Set(t.seenReplies || []);
     const url = urgentIssue(t.page);
-    if (!reply && url) {
-      const cs = await ch.issueComments(url);
-      const first = (cs || []).filter(x => String(x.text || "").trim()).sort((a, b) => a.at - b.at)[0];
-      if (first) reply = { id: `issue-${first.id}`, at: first.at, text: first.text, via: "written on the urgent issue" };
-    }
+    const fromIssue = url ? ((await ch.issueComments(url)) || []).map(x => ({ id: `issue-${x.id}`, at: x.at, text: x.text, via: "written on the urgent issue" })) : [];
+    const fromMail = mails.filter(m => String(m.subject).includes(`[q:${r}]`)).map(m => ({ id: `mail-${m.id}`, at: m.at, text: m.text, via: "sent by email" }));
+    const reply = [...fromMail, ...fromIssue].filter(x => String(x.text || "").trim() && !seen.has(x.id)).sort((a, b) => a.at - b.at)[0];
     if (!reply) continue;
     const words = String(reply.text).trim();
     const rest = t.handle ? words.replace(new RegExp("^" + t.handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s+") + "\\s*[:\\-\\u2014]?\\s*", "i"), "") : words;
@@ -669,12 +668,19 @@ async function otherAnswers(env, ctxs, now, log, ch, io) {
       routeToDriver(c, q, `He did not understand the question as it was sent to him, and replied: "${words.replace(/\s+/g, " ").slice(0, 400)}". Decide it without spending money, publishing or sending anything to other people, or deleting anyone's data; when every option would do one of those, decide to wait and say exactly what only the owner can do.`, now);
       c.save(); out.push("not understood: " + q.heading); continue;
     }
+    // "yes", "no" or a choice's number need no model; free text must decide the question to count
+    let meaning = handleMeaning(rest, t);
+    if (!meaning) {
+      const hits = matchMessage({ text: words }, [{ number: 1, heading: q.heading, title: q.heading, key: k, body: q.body }], env, { told: { [k]: t } });
+      if (hits === null) { log(`could not read his reply ${reply.via} to "${q.heading}" yet; tried again next run`); continue; }
+      if (!hits.length) { t.seenReplies = [...seen, reply.id].slice(-50); c.save(); log(`his reply ${reply.via} to "${q.heading}" decides nothing; the page goes on`); continue; }
+      meaning = hits[0].meaning;
+    }
     const target = q.driver ? q.issue : c.issue.number;
     let list;
     try { list = io.comments(c.project.repo, target); } catch (e) { log(`cannot read ${c.project.repo}#${target} (${e.message}); his answer is relayed next run`); continue; }
     if (!list.some(x => String(x.body || "").includes(`:${idOf(q.key)} -->`) && /^[\s#>*_`~]*owner decision\b/i.test(firstLine(x.body)))) {
       const at = new Date(reply.at || now).toISOString().slice(0, 16).replace("T", " ") + " UTC";
-      const meaning = handleMeaning(rest, t) || "He answered in his own words, quoted above.";
       io.post(c.project.repo, target, answerBody({ number: q.number, heading: q.heading, text: words, meaning, marker: markerOf(reply.id, q.key), at, byHandle: true, via: reply.via }));
     }
     t.answered = { at: new Date(now).toISOString(), message: reply.id, via: reply.via };
