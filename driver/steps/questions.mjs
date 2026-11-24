@@ -12,6 +12,7 @@
 import path from "node:path";
 import { run as askRun, genericProject } from "./questions/factory-owner-questions.mjs";
 import { readEnvFile } from "../facts.mjs";
+import { trustedFor } from "./trust.mjs";
 
 export const STEP = { name: "questions", everyMinutes: 5, maxMinutes: 15, inRound: false };
 export const SETTINGS = [
@@ -50,7 +51,9 @@ export function envFor(ctx) {
   const test = Object.fromEntries(Object.entries(ctx.env || {}).filter(([k]) => /^OQ_(ISSUES_FILE|MODEL_CMD|MESSAGES_FILE|COMMENTS_FILE|POST_CMD|LABEL_CMD)$/.test(k)));
   const stateDir = get(s, "server.state_dir");
   return {
-    PROJECTS: ordered.map(p => ({ ...genericProject(p.repository), ...(p.questions || {}), repo: p.repository, main: p === main || p.repository === main.repository })),
+    // trusted: who may decide a question on GitHub (the owner and the project's own Apps, as the trust step has it), so a
+    // decision of theirs ends a page and keeps one from starting
+    PROJECTS: ordered.map(p => ({ ...genericProject(p.repository), ...(p.questions || {}), repo: p.repository, main: p === main || p.repository === main.repository, trusted: trustedFor(s, p) })),
     MAIN_REPO: main.repository,
     FORGE_USER: need("server.factory_user"), FORGE_HOME: need("server.factory_home"),
     GODSPEED_DIR: godspeedDir, HERMES_HOME: need("steps.questions.hermes_home"),

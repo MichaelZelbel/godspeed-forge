@@ -34,6 +34,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { mintAppToken } from "../owner-guard.mjs";
 import { isTrusted, loginOf, loopWords, verifierBlocked, ownerLogin } from "./release-driver-owner-steps.mjs";
 
 const HOUR = 3600 * 1000;
@@ -258,10 +259,25 @@ export function cutSentence({ plan, cuts, names }) {
 
 // ---------------------------------------------------------------- the records in the records repository
 // The same writer auto-stage uses (the records repository scripts/release/staging.mjs Records): one commit on
-// the records repository's main, pushed with that checkout's own git credential.
-export async function devRecords(env) {
+// the records repository's main, pushed as the builder App (never root's own login, the owner's).
+// The App keys never enter this process's environment, so the token is made for the one child that needs it.
+// -> a builder-App token for the records checkout's own repository, "" when there is none
+export function recordsToken(env, spawn) {
+  const url = spawnSync("git", ["-C", env.DEV_CHECKOUT, "config", "--get", "remote.origin.url"], { encoding: "utf8" }).stdout || "";
+  const slug = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(url.trim());
+  return slug ? mintAppToken({ tokenScript: env.TOKEN_SCRIPT, keysFile: env.KEYS_FILE, app: "builder", repos: [slug[1]] }, spawn) : "";
+}
+// The token is made when the first record is written, not for a look that only reads.
+export async function devRecords(env, deps = {}) {
   const mod = await import(pathToFileURL(path.join(env.DEV_CHECKOUT, "scripts", "release", "staging.mjs")).href);
-  return new mod.Records({ ...process.env, RELEASE_RECORDS_ROOT: env.DEV_CHECKOUT });
+  const recordsEnv = { ...process.env, RELEASE_RECORDS_ROOT: env.DEV_CHECKOUT };
+  const records = new mod.Records(recordsEnv);
+  const write = records.write.bind(records);
+  records.write = (files, message) => {
+    recordsEnv.RECORDS_PUSH_TOKEN ||= (deps.token || recordsToken)(env);
+    return write(files, message);
+  };
+  return records;
 }
 
 // ---------------------------------------------------------------- one look's cut
