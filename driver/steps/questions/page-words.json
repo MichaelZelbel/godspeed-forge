@@ -1,0 +1,57 @@
+{
+  "_about": "The only questions from the factory that stop anything and page the owner (2026-11-24, the owner's standing instruction: 'only do this for life-or-death questions'). A question pages only when the action Mission Control would take for it (the manager's recommendation, or with none the most reversible option) matches a pattern below. Everything else (scope, mission, look and feel, product behaviour, wording, privacy-facing behaviour, tests, checks, laps) is decided by Mission Control at once. Patterns are JavaScript regular expressions, matched case-insensitively. Publishing legal or privacy text is already behind the owner's release go, so wording is not here.",
+  "money": {
+    "why": "it would spend money or raise a spending limit, subscription or paid plan",
+    "patterns": [
+      "\\bspend(?:s|ing)?\\b",
+      "\\bpay(?:s|ing|ment|ments)?\\b",
+      "\\bpaid (?:plan|tier|account|version|service|subscription)",
+      "\\bpurchas",
+      "\\bbuy(?:s|ing)?\\b",
+      "\\bbilling\\b",
+      "\\binvoice",
+      "\\bsubscri(?:be|bes|bing|ption|ptions)\\b",
+      "\\b(?:monthly|spend(?:ing)?|key|credit|usage|account|budget)(?:'s)? (?:monthly )?limit",
+      "\\braise (?:the |its |a )?(?:\\w+ )?(?:limit|budget|quota|plan|tier)",
+      "\\b(?:upgrade|raise) (?:the |our |to a )?(?:paid |bigger |higher )?(?:plan|tier)\\b",
+      "\\btop(?:-| )?up\\b",
+      "\\bbuy (?:more )?credits\\b",
+      "\\bmoney\\b",
+      "[$€£]\\s?\\d",
+      "\\d\\s?(?:usd|eur|dollars?|euros?)\\b"
+    ]
+  },
+  "publish": {
+    "why": "it would publish something, put it live, or send something to people other than the owner",
+    "patterns": [
+      "\\bpublish(?:es|ed|ing)?\\b",
+      "\\bgo(?:es)? live\\b",
+      "\\bput (?:it |this |them )?live\\b",
+      "\\bmake (?:it |this |them |the \\w+ )?public\\b",
+      "\\bpublic release\\b",
+      "\\breleased? (?:it |this )?publicly\\b",
+      "\\bpost(?:s|ed|ing)? (?:it |this |them )?(?:publicly|in public|on (?:social media|linkedin|x|twitter|facebook|instagram|reddit|youtube|tiktok|mastodon|bluesky|hacker news))",
+      "\\bannounce(?:s|d|ment)?\\b",
+      "\\bnewsletter\\b",
+      "\\bpress release\\b",
+      "\\bsocial media\\b",
+      "\\b(?:email|e-mail|mail|message|notify|write to|text) (?:all |the |our |every |each )?(?:users|customers|subscribers|members|clients|mailing list|list)\\b",
+      "\\bdeploy(?:s|ed|ing)? (?:it |this )?(?:to|on) (?:production|the public|the live)",
+      "\\b(?:app|play) store\\b",
+      "\\bsubmit (?:it |this )?(?:to|for) (?:review|the store|app review)"
+    ]
+  },
+  "delete": {
+    "why": "it would irreversibly delete people's data or accounts",
+    "patterns": [
+      "\\b(?:permanently|irreversibly|for good) (?:delete|remove|erase|destroy)",
+      "\\b(?:delete|remove|erase|destroy)s? (?:\\w+ )?(?:permanently|irreversibly|for good)\\b",
+      "\\birreversibl",
+      "\\berase\\b",
+      "\\bwipe\\b",
+      "\\bpurge\\b",
+      "\\bdelete (?:all|every|the|old|inactive|existing) (?:people's |users'? |persons'? )?(?:data|accounts|records|users|profiles|notes|messages|chats|backups)\\b",
+      "\\bdrop (?:the )?(?:table|database|tables)\\b"
+    ]
+  }
+}
