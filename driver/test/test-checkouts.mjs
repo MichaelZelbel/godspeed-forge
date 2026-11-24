@@ -35,10 +35,20 @@ test("issue #157: git as root in the factory user's home is refused however it n
     ["git", ["-C", "/var/lib/x", "worktree", "add", `${HOME}/lap`], {}],
     ["git", ["-C", "/var/lib/x", "diff", `--output=${HOME}/out.diff`], {}],
     ["git", ["clone", "-q", CHECKOUT, "/var/lib/x/repo"], { cwd: "/" }], // root's git names nothing there, not even to read it
+    // through the programs that only run another command, as root still
+    ["env", ["-C", CHECKOUT, "git", "checkout", "main"], { cwd: "/" }],
+    ["env", [`--chdir=${CHECKOUT}`, "git", "status"], { cwd: "/" }],
+    ["/usr/bin/env", ["-S", `git -C ${CHECKOUT} fetch`], {}],
+    ["timeout", ["-s", "KILL", "60", "nice", "-n", "5", "git", "-C", CHECKOUT, "fetch"], {}],
+    ["nohup", ["setsid", "stdbuf", "-oL", "ionice", "-c", "3", "git", "pull"], { cwd: CHECKOUT }],
+    ["sudo", ["-D", CHECKOUT, "git", "checkout", "."], { cwd: "/" }],
+    ["runuser", ["-u", "root", "--", "git", "-C", CHECKOUT, "fetch"], {}],
   ]) assert.match(rootGitRefusal(file, args, opts, AS_ROOT), /^refused: git .* as root in \/home\/godspeed-forge.*it runs as godspeed-forge \(runuser -u godspeed-forge --\), never as root/, `${file} ${args.join(" ")}`);
   for (const [file, args, opts] of [
     ["runuser", ["-u", "godspeed-forge", "--", "git", "-C", CHECKOUT, "fetch"], {}], // wrapped: the factory user's own git
     ["ip", ["netns", "exec", "godspeed-forge", "runuser", "-u", "godspeed-forge", "--", "git", "-C", CHECKOUT, "fetch"], {}],
+    ["timeout", ["60", "sudo", "-u", "godspeed-forge", "git", "-C", CHECKOUT, "fetch"], {}], // as the factory user, through wrappers
+    ["timeout", ["60", "git", "-C", "/var/lib/x", "fetch"], { cwd: CHECKOUT }], // -C takes it out of the home
     ["git", ["-C", "/usr/local/lib/godspeed-forge/godspeed-dev", "pull", "--ff-only"], {}], // the release records: root's own clone
     ["git", ["-C", "/var/lib/godspeed-keep-main-green/product.git", "fetch"], {}], // a step's own clone
     ["git", ["-C", "/var/lib/x", "push", "origin", "HEAD:refs/heads/fix/a-b", "https://github.com/o/r.git"], {}], // refs and addresses are no folders

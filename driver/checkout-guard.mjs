@@ -84,21 +84,49 @@ export function gitFolders(args, cwd = process.cwd(), env = {}) {
   return out;
 }
 
-// `env [-i] [-u NAME] [NAME=value ...] cmd ...` -> { cmd, args, vars } (anything else is returned as it is)
-function unwrapEnv(cmd, args) {
+// The programs that only run another command, as the same user: their options (those that take a value, and the one that
+// changes the folder), and how many plain words come before the command (timeout's duration).
+const WRAPPERS = {
+  env: { value: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string"], chdir: ["-C", "--chdir"], split: ["-S", "--split-string"], assigns: true },
+  nice: { value: ["-n", "--adjustment"] },
+  ionice: { value: ["-c", "--class", "-n", "--classdata"] },
+  nohup: {}, setsid: {},
+  stdbuf: { value: ["-i", "-o", "-e", "--input", "--output", "--error"] },
+  timeout: { value: ["-s", "--signal", "-k", "--kill-after"], words: 1 },
+  sudo: { value: ["-u", "--user", "-g", "--group", "-D", "--chdir", "-C", "--close-from", "-h", "--host", "-p", "--prompt", "-T", "--command-timeout"], chdir: ["-D", "--chdir"], user: ["-u", "--user"] },
+  runuser: { value: ["-u", "--user", "-g", "--group", "-G", "--supp-group", "-w", "--whitelist-environment"], user: ["-u", "--user"] },
+};
+// `env -C dir X=1 nice -n 5 git ...` -> { cmd: "git", args, vars, cwd, as } with the folder it starts in and the user it runs as
+// ("" while still root). A wrapper that runs it as someone else ends the reading: that is no longer root's git.
+function unwrap(cmd, args, cwd) {
   const vars = {};
-  if (!/(^|\/)env$/.test(cmd)) return { cmd, args, vars };
-  let i = 0;
-  for (; i < args.length; i++) {
-    const a = String(args[i]);
-    if (a === "-i" || a === "--ignore-environment" || a === "-") continue;
-    if (a === "-u" || a === "--unset" || a === "-C" || a === "--chdir") { i++; continue; }
-    if (a === "--") { i++; break; }
-    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(a);
-    if (m) { vars[m[1]] = m[2]; continue; }
-    break;
+  let as = "";
+  for (let depth = 0; depth < 8; depth++) {
+    const name = Object.keys(WRAPPERS).find(n => new RegExp(`(^|/)${n}$`).test(cmd));
+    if (!name) break;
+    const w = WRAPPERS[name], value = new Set(w.value || []);
+    let i = 0, words = w.words || 0, next = null;
+    for (; i < args.length; i++) {
+      const a = String(args[i]);
+      if (a === "--") { i++; break; }
+      const long = /^(--[a-z-]+)=(.*)$/s.exec(a), short = /^(-[a-zA-Z])(.+)$/s.exec(a);
+      const [opt, val] = long ? [long[1], long[2]] : value.has(a) ? [a, String(args[++i] ?? "")] : short && value.has(short[1]) ? [short[1], short[2]] : [a, null];
+      if (val !== null || a.startsWith("-")) {
+        if ((w.chdir || []).includes(opt) && val !== null) cwd = abs(cwd || process.cwd(), val);
+        if ((w.user || []).includes(opt) && val !== null) as = val;
+        if ((w.split || []).includes(opt) && val !== null) next = val.trim().split(/\s+/);
+        continue;
+      }
+      const m = w.assigns && /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(a);
+      if (m) { vars[m[1]] = m[2]; continue; }
+      if (words > 0) { words--; continue; }
+      break;
+    }
+    const rest = [...(next || []), ...args.slice(i).map(String)];
+    if (as && as !== "root" && as !== "0") return { cmd: "", args: [], vars, cwd, as };
+    cmd = String(rest[0] || ""); args = rest.slice(1);
   }
-  return { cmd: String(args[i] || ""), args: args.slice(i + 1), vars };
+  return { cmd, args, vars, cwd, as };
 }
 
 // A shell command line (bash -c, sh -c, shell: true, execSync): it runs git as root in the factory user's home when it calls git
@@ -136,12 +164,12 @@ export function rootGitRefusal(file, args, opts = {}, { account = factoryAccount
   const o = opts && typeof opts === "object" ? opts : {};
   const list = Array.isArray(args) ? args.map(String) : [];
   if (o.shell) return scriptRefusal([file, ...list].join(" "), o.cwd, account, o.env || process.env);
-  const u = unwrapEnv(String(file || ""), list);
+  const u = unwrap(String(file || ""), list, o.cwd);
   const env = { ...(o.env || process.env), ...u.vars };
   const script = shellScript(u.cmd, u.args);
-  if (script !== null) return scriptRefusal(script, o.cwd, account, env);
+  if (script !== null) return scriptRefusal(script, u.cwd, account, env);
   if (!/(^|\/)git$/.test(u.cmd)) return "";
-  const folders = gitFolders(u.args, o.cwd, env);
+  const folders = gitFolders(u.args, u.cwd, env);
   // and any argument that names a path there (git config --file, worktree add, a clone's source or target, -o, --output=...):
   // root's git names nothing in the factory user's home, not even to read it
   const named = u.args.map(a => (a.startsWith("-") && a.includes("=") ? a.slice(a.indexOf("=") + 1) : a)).filter(a => a.includes("/")).map(a => abs(folders[0], a));
