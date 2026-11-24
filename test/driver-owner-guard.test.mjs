@@ -44,6 +44,7 @@ testCase('the finding: the same item in the same state, whatever "last touched" 
   const other = { ...a, evidence: [...a.evidence, 'required failed on PR #895 since 2026-11-24T07:00:00Z'] };
   assert.notEqual(findingOf(other), findingOf(a), 'a new fact is a new state');
   assert.equal(findingOf(other).split(' ')[0], findingOf(a).split(' ')[0], 'the item part stays');
+  assert.notEqual(findingOf({ ...a, backlog: false }), findingOf(a), 'taken into a release, with no event on the item itself: a new state');
   const ob = { id: 'a146e21b33', kind: 'stale-process', evidence: ['process 41 (root) running 45 min: node x'] };
   assert.equal(findingOf(ob), findingOf({ ...ob, evidence: ['process 41 (root) running 50 min: node x'] }), 'a running count is not a new state');
   assert.deepEqual(findingsIn(`x\n${findingMarker(findingOf(a))}\n`), [findingOf(a)]);
@@ -128,6 +129,15 @@ testCase('with a finding, only gh\'s own commands go through; the head of a pull
   fs.writeFileSync(gh.stateFile, JSON.stringify(s));
   const events = itemHistory({ env, realGh: gh.realGh })(REPO, 895);
   assert.deepEqual(events.filter(e => e.event === 'head-arrived'), [{ event: 'head-arrived', at: '2026-11-24T06:10:00Z', body: '' }], 'the first suite on its own branch, not one from before on another');
+  assert.deepEqual(events.filter(e => e.event === 'checks'), [], 'no check ran: nothing about checks');
+  s.runs = { abc: [{ started_at: '2026-11-24T06:11:00Z', completed_at: '2026-11-24T06:15:00Z' }, { started_at: '2026-11-24T07:40:00Z', completed_at: '2026-11-24T07:52:00Z' }] };
+  s.statuses = { abc: [{ updated_at: '2026-11-24T07:45:00Z' }] };
+  fs.writeFileSync(gh.stateFile, JSON.stringify(s));
+  const later = itemHistory({ env, realGh: gh.realGh })(REPO, 895);
+  assert.deepEqual(later.filter(e => e.event === 'checks'), [{ event: 'checks', at: '2026-11-24T07:52:00Z', body: '' }], 'a rerun that ended after the note is a new state');
+  const f2 = findingOf(prEntry('x')), m2 = findingMarker(f2);
+  const noted = [{ event: 'commented', at: '2026-11-24T07:00:00Z', body: `green, parked\n${m2}` }];
+  assert.deepEqual(findingWhy({ repo: REPO, number: 895, body: `now red\n${m2}` }, { finding: f2 }, () => [...noted, ...later.filter(e => e.event === 'checks')]), { why: '' }, 'so its note goes through');
   assert.equal(events.filter(e => e.event === 'commented').length, loadFixture().before.length);
   assert.deepEqual(gitSplit(['-c', 'remote.origin.pushurl=x', '-C', '/r', '--no-pager', 'push', 'origin', 'b']), { pre: ['-c', 'remote.origin.pushurl=x', '-C', '/r', '--no-pager'], cmd: 'push', rest: ['origin', 'b'] });
 }

@@ -39,8 +39,9 @@ const ROOT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 // An item's state is what the driver knows about it, without what changes while nothing happens: "last touched <time>" (every
 // comment touches a pull request, our own too) and running counts of minutes, hours or rounds.
 const VOLATILE = [/\blast touched \S+/gi, /\b\d+(?:\.\d+)?\s*(?:min|mins|minutes?|hours?|rounds?|seconds?)\b/gi];
-export const stateText = o => [o.kind || "", o.obstacleKind || "", o.title || "", ...(Array.isArray(o.evidence) ? o.evidence : [])]
-  .map(s => VOLATILE.reduce((t, re) => t.replace(re, "~"), String(s))).join("\n");
+// Whether it is backlog or part of a release, and which one, is its state too: it decides who drives it and how.
+export const stateText = o => [o.kind || "", o.obstacleKind || "", o.title || "", o.backlog ? "backlog" : "", o.release || "", o.ticketKey || "", o.owner || "",
+  ...(Array.isArray(o.evidence) ? o.evidence : [])].map(s => VOLATILE.reduce((t, re) => t.replace(re, "~"), String(s))).join("\n");
 // An inventory entry or an obstacle -> "<the item, 10 hex> <its state, 12 hex>"
 export const findingOf = o => `${sha1(o && o.id).slice(0, 10)} ${sha1(stateText(o || {})).slice(0, 12)}`;
 export const FINDING_SHAPE = /^[0-9a-f]{10} [0-9a-f]{12}$/;
@@ -244,6 +245,15 @@ export const itemHistory = ({ env = process.env, realGh = "/usr/bin/gh" } = {}) 
       const mine = suites.filter(s => s.head_branch === head.ref);
       const first = (mine.length ? mine : suites).map(s => s.created_at).sort()[0];
       if (first) out.push({ event: "head-arrived", at: first, body: "" });
+      // a check that started or ended since (a rerun, a new suite, a status): a new pass or failure is a new state
+      const runs = head.sha ? run(realGh, ["api", `repos/${repo}/commits/${head.sha}/check-runs?per_page=100`], { env }) : { status: 1 };
+      const st = head.sha ? run(realGh, ["api", `repos/${repo}/commits/${head.sha}/status`], { env }) : { status: 1 };
+      const times = [
+        ...(runs.status === 0 ? (JSON.parse(runs.stdout || "{}").check_runs || []).flatMap(r => [r && r.started_at, r && r.completed_at]) : []),
+        ...suites.flatMap(s => [s.updated_at]),
+        ...(st.status === 0 ? (JSON.parse(st.stdout || "{}").statuses || []).map(s => s && (s.updated_at || s.created_at)) : []),
+      ].filter(Boolean).sort();
+      if (times.length) out.push({ event: "checks", at: times.at(-1), body: "" });
     } catch { /* the timeline alone */ }
   }
   return out;

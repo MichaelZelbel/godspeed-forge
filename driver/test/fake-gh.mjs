@@ -65,6 +65,8 @@ if (group === "api") {
   }
   if ((m = /^repos\/([^/]+\/[^/]+)\/pulls\/(\d+)$/.exec(ep))) { const p = (s.pulls || {})[`${m[1]}#${m[2]}`]; if (!p) fail("HTTP 404: Not Found"); out(JSON.stringify(p)); }
   if ((m = /^repos\/[^/]+\/[^/]+\/commits\/(\w+)\/check-suites\?/.exec(ep))) out(JSON.stringify({ check_suites: (s.suites || {})[m[1]] || [] }));
+  if ((m = /^repos\/[^/]+\/[^/]+\/commits\/(\w+)\/check-runs\?/.exec(ep))) out(JSON.stringify({ check_runs: (s.runs || {})[m[1]] || [] }));
+  if ((m = /^repos\/[^/]+\/[^/]+\/commits\/(\w+)\/status$/.exec(ep))) out(JSON.stringify({ statuses: (s.statuses || {})[m[1]] || [] }));
   out("{}");
 }
 if (group === "repo" && sub === "view") out(`${s.repo}\n`);
