@@ -113,6 +113,9 @@ export function nextStep(obstacle, history = [], ctx = {}) {
   if (obstacle.kind === "dead-end" && !history.some(h => h.helper === "cut")) return { do: "cut", approachNote: "The ticket's issue was closed and no merged change closed it: under the plan's rule it leaves the release, the rest ships." };
   // a hidden check's tool is missing: the cause is known (our own checking setup), so no diagnosis first
   if (obstacle.kind === "tools-missing") return step("tests", history, ctx, "A hidden check has no tool that can run: restore it (look in the tools folder first) or build it.");
+  // a call refused because it would have acted as the owner (owner-guard.mjs): the refusal already stopped it, so no helper is
+  // sent; it stays on the record for an hour after the last refusal, and only refusals that go on for longer reach the chain
+  if (obstacle.kind === "as-owner") return { do: "wait-external", approachNote: "The guard refused the call, so nothing was posted or pushed under the owner's account; the run signs in only as the Apps." };
   if (machineLike(obstacle.kind)) {
     if (!history.some(h => h.helper === "housekeeping")) return { do: "housekeeping", approachNote: "" };
     // the ops helper traced it to our own checking setup (a missing hidden-check tool, the test machine):

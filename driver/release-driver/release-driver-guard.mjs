@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { decide } from "../owner-guard.mjs";
 
 export const PROTECTED_DEFAULT = ["MISSION.md", "FACTORY.md", "FACTORY_RULES.md", "harness/**", ".factory/**", "factory/**", ".claude/settings.json", ".ignore",
   "engineering.md", "AGENTS.md", "CLAUDE.md", ".github/**", ".archon/**", "stage.json"];
@@ -37,7 +38,7 @@ const sameRepo = (a, b) => String(a || "").toLowerCase() === String(b || "").toL
 const READ_GROUPS = { issue: ["view", "list", "status"], pr: ["view", "list", "diff", "checks", "status", "checkout"], run: ["view", "list", "watch", "download"],
   repo: ["view"], search: null, label: ["list"], status: null, browse: [] };
 
-function flagValue(args, names) {
+export function flagValue(args, names) {
   for (let i = 0; i < args.length; i++) {
     for (const n of names) {
       if (args[i] === n) return args[i + 1] ?? "";
@@ -52,14 +53,14 @@ const readMaybe = (p, cwd) => { try { return fs.readFileSync(path.resolve(cwd ||
 
 // The text a body-carrying command would post: --body/-b, --body-file/-F, or (for gh api) every
 // field and the --input file. null when it cannot be read.
-function bodyOf(args, cwd) {
+export function bodyOf(args, cwd) {
   const b = flagValue(args, ["--body", "-b"]);
   if (b !== null) return b;
   const f = flagValue(args, ["--body-file", "-F"]);
   if (f !== null) return f === "-" ? null : readMaybe(f, cwd);
   return "";
 }
-function apiPayload(args, cwd) {
+export function apiPayload(args, cwd) {
   const parts = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -82,7 +83,7 @@ function apiPayload(args, cwd) {
 }
 // The "body" a REST write would post: its -f/-F body field, or the body of a JSON --input file.
 // null when it cannot be read (stdin, a missing file, input that is not JSON), "" when there is none.
-function apiBody(args, cwd) {
+export function apiBody(args, cwd) {
   let body = "";
   // with --input the file is the request body and the fields go into the address (gh api's help)
   const input = args.some(a => a === "--input" || a.startsWith("--input="));
@@ -284,9 +285,9 @@ export function gitCommand(args) {
 }
 
 // ---------------------------------------------------------------- the shim entry
-function refuse(why, tool, args) {
+function refuse(why, tool, args, extra = {}) {
   process.stderr.write(`release-driver guard: refused: ${why}\n`);
-  try { if (process.env.RD_GUARD_LOG) fs.appendFileSync(process.env.RD_GUARD_LOG, JSON.stringify({ at: new Date().toISOString(), tool, args: args.join(" ").slice(0, 400), why }) + "\n"); } catch {}
+  try { if (process.env.RD_GUARD_LOG) fs.appendFileSync(process.env.RD_GUARD_LOG, JSON.stringify({ at: new Date().toISOString(), tool, args: args.join(" ").slice(0, 400), why, ...extra }) + "\n"); } catch {}
   process.exit(3);
 }
 
@@ -298,6 +299,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   const real = tool === "gh" ? (process.env.RD_REAL_GH || "/usr/bin/gh") : (process.env.RD_REAL_GIT || "/usr/bin/git");
   if (tool !== "gh" && tool !== "git") refuse("unknown tool", String(tool), args);
   if (!ctx.repo || !ctx.marker) refuse("the guard has no repository or marker set", tool, args);
+  // never as the owner (issue #152): a call whose login is the owner's own is refused before anything else and logged with
+  // owner: true, which the factory driver turns into an obstacle; a note whose finding is already on its item is refused as
+  // unchanged (owner-guard.mjs, the same check the acting runs' gh and git go through)
+  if (process.env.RD_OWNER_LOGIN || process.env.RD_FINDING) {
+    const d = decide(tool, args, { owner: process.env.RD_OWNER_LOGIN || "", finding: process.env.RD_FINDING || "", repo: ctx.repo, realGh: process.env.RD_REAL_GH || "/usr/bin/gh", realGit: real,
+      cache: process.env.RD_GUARD_LOG ? path.join(path.dirname(process.env.RD_GUARD_LOG), "guard-cache") : "" });
+    if (d.why) refuse(d.why, tool, args, { ...(d.owner ? { owner: true } : {}), ...(d.unchanged ? { unchanged: true, finding: process.env.RD_FINDING } : {}) });
+  }
   if (tool === "gh") { const why = checkGh(args, ctx); if (why) refuse(why, tool, args); }
   else {
     const { pre, cmd, rest, why: preWhy } = gitCommand(args);
