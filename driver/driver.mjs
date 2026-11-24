@@ -540,6 +540,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       // before it says so), and the release then waits for him.
       const relObj = (world.releases || []).find(r => r.id === rel.id) || null;
       let bld = null; try { bld = relObj ? buildingState({ release: relObj, world, now, activity, prevTokens: (prev && prev.buildTokens) || ((jv.clocks || {})[rel.id] || {}).buildTokens || null }) : null; } catch (e) { record({ kind: "release clock: tickets unreadable", release: rel.id, why: String(e.message).slice(0, 160) }); }
+      if (bld && !bld.open) bld = null; // nothing unfinished (the read may only have been partial): no ticket part, as before
       // the owner's go: this round's look says so, or (the look cannot be read now) the last round's did
       state.waitingGo ||= {};
       const waitingGo = (about && lookKnown && /^Already staged and announced at /m.test(stageText)) || (!lookKnown && !!state.waitingGo[rel.id]);
@@ -576,12 +577,37 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     if (!dry && clockEvents.length) { try { appendEvents(journalFile, clockEvents); } catch (e) { record({ kind: "release clock not journaled", why: String(e.message).slice(0, 160) }); } }
     out.standstill = Object.values(clocks);
     if (!dry) (deps.writeClockPage || writeClockPage)(process.env.FD_WATCH_STATUS_DIR || CLOCK_STATUS_DIR, out.standstill, now); // what the owner sees on the Forge's page
+    const confirmStandstill = async (k, sc) => {
+      // the same rules as the clock: what cannot be read is unchanged (so the hour is never missed), what has changed holds it
+      let text2 = null, known2 = false; try { text2 = await (deps.stageLook || stageLookReal)(env); known2 = typeof text2 === "string"; } catch { known2 = false; }
+      let freshWorld = null, freshActivity = null;
+      try { freshWorld = await (deps.readWorld || readWorld)(env, { gh, sh: deps.sh || shFor(env), ...(deps.worldDeps || {}) }); freshActivity = await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, freshWorld); } catch { freshWorld = null; }
+      if (!freshWorld) return "the tickets could not be read again";
+      const freshRel = (freshWorld.releases || []).find(r => r.id === k.id) || null;
+      const freshBld = (() => { try { return freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity, prevTokens: sc.buildTokens || ((jv.clocks || {})[k.id] || {}).buildTokens || null }) : null; } catch { return null; } })();
+      if (freshBld && freshBld.unread) return "a ticket could not be read in the fresh read, so it did not confirm the standstill";
+      if (freshRel && (() => { try { return pageNamesRelease(freshWorld.deliveredPages, freshRel); } catch { return false; } })()) return "a question of money, publishing or deleting that names this release reached the owner since the round began";
+      const about = !!(text2 && parseStage(text2).id === k.id);
+      const fresh = stateNow(k.id, sc, text2 || "", known2, about, null, freshBld && freshBld.open ? freshBld : null);
+      const gone = fresh.files.staging && fresh.files.staging.status === "installed" ? "it is installed now" : !(deps.planApproved || planStillApproved)(env, k.id) ? "its plan is no longer approved" : null;
+      if (fresh.fp !== sc.fp || gone) return gone || "the release moved in the fresh read";
+      const running = workFor({ id: k.id, activity: freshActivity, autoStage: fresh.files.autoStage, about, named: [], now, repo: env.REPO, extra: freshBld ? freshBld.work : [] });
+      if (running.length) return `something checkable runs now: ${running[0].what}`;
+      return null;
+    };
     // ---- the release clock's steps, in this round, whatever else runs (each counted in the day's acting runs)
     if (!dry) for (const k of Object.values(clocks)) {
       if (!k.inStep || !k.due.length) continue;
       const sc = state.standstill[k.id];
       const doneBefore = { ...sc.done };
-      for (const d of k.due) {
+      // THE GATE for the repair request and the notice, once, before either: the release's own sources are read again right now (the stage
+      // look, the tickets, the activity) and must agree that nothing moved and nothing checkable runs; a read that fails holds them
+      let due = k.due;
+      if (due.includes("repair") || due.includes("notice")) {
+        const why = await confirmStandstill(k, sc);
+        if (why) { record({ kind: "message held", entry: `standstill:${k.id}`, why }); due = due.filter(d => d !== "repair" && d !== "notice"); }
+      }
+      for (const d of due) {
         if (d === "helper" || d === "other-ai") clockLaunch(k, sc, d === "helper" ? 1 : 2);
         else if (d === "repair") {
           try {
@@ -591,22 +617,6 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
             try { (deps.startDeadman || startDeadmanReal)(); } catch { /* its own timer reads the spool within five minutes */ }
           } catch (e) { record({ kind: "repair request failed", release: k.id, minutes: k.minutes, why: String(e.message).slice(0, 300) }); } // asked again next round
         } else if (d === "notice") {
-          // THE GATE by construction: the same state was read in every round for an hour (far more than 3 readings 10 minutes
-          // apart); the release's own sources are read again right now and must agree, and none may be unreadable
-          // the same rules as the clock: what cannot be read is unchanged (so the hour is never missed), what has changed holds it
-          let text2 = null, known2 = false; try { text2 = await (deps.stageLook || stageLookReal)(env); known2 = typeof text2 === "string"; } catch { known2 = false; }
-          // the tickets are read again too (a ticket closing, a pull request's new commit or comment, a new claim or a run since this round's
-          // first read is progress); a read that fails holds the message
-          let freshWorld = null, freshActivity = null;
-          try { freshWorld = await (deps.readWorld || readWorld)(env, { gh, sh: deps.sh || shFor(env), ...(deps.worldDeps || {}) }); freshActivity = await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, freshWorld); } catch { freshWorld = null; }
-          if (!freshWorld) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "the tickets could not be read again" }); continue; }
-          const freshRel = (freshWorld.releases || []).find(r => r.id === k.id) || null;
-          const freshBld = (() => { try { return freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity, prevTokens: sc.buildTokens || ((jv.clocks || {})[k.id] || {}).buildTokens || null }) : null; } catch { return null; } })();
-          if (freshBld && freshBld.unread) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "a ticket could not be read in the fresh read, so it did not confirm the standstill" }); continue; }
-          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null, freshBld);
-          if (freshRel && (() => { try { return pageNamesRelease(freshWorld.deliveredPages, freshRel); } catch { return false; } })()) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "a question of money, publishing or deleting that names this release reached the owner since the round began" }); continue; }
-          const gone = fresh.files.staging && fresh.files.staging.status === "installed" ? "it is installed now" : !(deps.planApproved || planStillApproved)(env, k.id) ? "its plan is no longer approved" : null;
-          if (fresh.fp !== sc.fp || gone) { record({ kind: "message held", entry: `standstill:${k.id}`, why: gone || "the release moved in the fresh read" }); continue; }
           const words = versionWords(k.version || "");
           const text = noticeText(words, sc.launches, !!sc.done.repair), nid = `n:standstill:${k.id}:${sc.since}`, title = `${words} has not moved for about an hour`;
           const a2 = await applyReport(env, { id: `standstill:${k.id}` }, { text, key: `tell:${nid}`, about: title }, { kind: "tell-michael", state, gated: true });

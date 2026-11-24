@@ -146,7 +146,7 @@ export function buildingState({ release, world, now, activity = null, prevTokens
     const at = Date.parse(r.createdAt);
     if (Number.isFinite(at) && ((r.headSha && heads.has(r.headSha)) || (r.headBranch && branches.has(r.headBranch)))) work.push({ what: `a GitHub run (${r.name || "a workflow"}) on a ticket's pull request`, until: at + STANDSTILL.runHours * H });
   }
-  if (!open) return null;
+  if (!open && !unread) return null;
   const merged = Object.fromEntries(tickets.map(t => [t.issue, tokens[t.issue] ?? (prevTokens && prevTokens[t.issue]) ?? "unread"]));
   return { fp: h(["build", ...tickets.map(t => `${t.issue}:${merged[t.issue]}`)]), tokens: merged, work, lines, unread, open, total: tickets.length };
 }
@@ -160,7 +160,7 @@ export function pageNamesRelease(pages, release) {
   return (pages || []).some(p => {
     const text = `${p.key || ""} ${p.heading || ""}`.toLowerCase();
     if (p.repo && release && release.repo && String(p.repo).toLowerCase() !== String(release.repo).toLowerCase()) return false; // another project's question
-    return nums.some(n => new RegExp(`#${n}(?![0-9])`).test(text)) || words.some(w => text.includes(w));
+    return nums.some(n => new RegExp(`#${n}(?![0-9])`).test(text)) || words.some(w => new RegExp(`(?<![a-z0-9.])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9])`).test(text));
   });
 }
 

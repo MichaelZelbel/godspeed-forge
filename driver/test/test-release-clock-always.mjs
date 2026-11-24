@@ -286,3 +286,24 @@ test("what the owner sees: one line per release on the Forge's own page, rewritt
   await s.round(0);
   assert.match(written[0][0], /^Beta 32: 1 of 8 tickets unfinished \(#616: open, no live claim and no run on it, no pull request\); no progress for 0 minutes; next: an acting run \(rung 1\) at minute 20\.$/);
 });
+
+test("the minute-60 gate also holds the repair request, and a run that began since the round's first read holds both", async () => {
+  let ci = false;
+  const s = server({ worldAt: (now, m) => world32(now, m, { prHead: () => "a".repeat(40) }), runsAt: (now) => (ci ? [{ headBranch: "fix", headSha: "a".repeat(40), createdAt: iso(now - 1 * MIN), name: "required" }] : []), look: () => LOOK32 });
+  for (let m = 0; m <= 50; m += 5) await s.round(m);
+  const before = { told: s.told.length, requests: s.requests.length };
+  const act0 = s.deps.activity; const calls = [];
+  s.deps.activity = async (...a) => { calls.push(1); if (calls.length >= 2) ci = true; return act0(...a); };
+  await s.round(55);
+  assert.equal(s.requests.length, before.requests, "no repair request while a ticket's checks run");
+  assert.equal(s.told.length, before.told, "and no notice");
+  assert.ok(s.log().some(e => e.kind === "message held" && /checkable runs now/.test(e.why)));
+});
+
+test("a question naming beta.31 does not pause beta.3; and an empty open list with an unreadable ticket still holds the notice", async () => {
+  const { pageNamesRelease, buildingState } = await import("../standstill.mjs");
+  assert.equal(pageNamesRelease([{ key: "k", heading: "Delete the data of beta.31 users?", repo: REPO }], { id: "godspeed-2.0.0-beta.3-x", label: "beta.3", version: "2.0.0-beta.3", repo: REPO, tickets: [] }), false);
+  const w = world32(T0, 0); delete w.items[616]; for (let n = 609; n <= 615; n++) w.items[n].state = "closed";
+  const b = buildingState({ release: w.releases[0], world: w, now: T0 });
+  assert.ok(b && b.unread && b.open === 0, "the unreadable flag survives when no ticket is known to be open");
+});
