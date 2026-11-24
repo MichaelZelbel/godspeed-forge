@@ -38,6 +38,7 @@ import { severityOf } from "./severity.mjs";
 import { itemsOf } from "./choices.mjs";
 import { pageStep, realChannels, receipts as pageReceipts, urgentIssue, ref as pageRef } from "./pager.mjs";
 import { appendEvents } from "../../journal.mjs";
+import { isTrusted } from "../../release-driver/release-driver-owner-steps.mjs";
 
 export const TITLE = "Owner decisions needed";
 const DAY = 24 * 3600 * 1000;
@@ -646,6 +647,49 @@ const DECISION_HEAD = /^[\s#>*_`~]*(?:manager decision \(mission control|owner d
 const firstLine = body => (String(body || "").split("\n").find(l => l.trim()) || "").trim();
 // a comment that decides the question with this key: headed as a decision and carrying the question's marker
 export const decidesQuestion = (body, key) => DECISION_HEAD.test(firstLine(body)) && String(body || "").includes(`:${idOf(key)} -->`);
+// a comment that decides it by its marker or by its title: the question accountant's rule, and since #166 the pages' too,
+// so the two never disagree about a question
+export function names(body, key) {
+  if (!DECISION_HEAD.test(firstLine(body))) return false;
+  const b = String(body || "");
+  return b.includes(`:${idOf(key)} -->`) || ` ${keyOf(b)} `.includes(` ${key} `);
+}
+
+// A decision on GitHub that names a question (names()) from a login that may decide it: the owner, or the project's own
+// Apps (the trust step's list; the owner's answers this step relays come from the builder App). It is looked for on the
+// owner issue and on every item the question names, as the accountant does. -> the comment, or null. A comment list
+// that cannot be read proves nothing; each list is read once per run (c.read).
+function decisionOnGitHub(env, c, q, io, log) {
+  const trusted = c.project.trusted || env.TRUSTED_LOGINS || [];
+  if (!trusted.length) return null;
+  const where = [...new Set([...(c.issue ? [c.issue.number] : []), ...(q.driver ? [q.issue] : itemsOf(q.heading))])];
+  for (const n of where) {
+    if (!c.read.has(n)) {
+      try { c.read.set(n, io.comments(c.project.repo, n)); }
+      catch (e) { log(`cannot read ${c.project.repo}#${n} for a decision on "${q.heading}" (${e.message}); looked at again next run`); c.read.set(n, []); }
+    }
+    const hit = c.read.get(n).find(x => x && names(x.body, q.key) && isTrusted(x.user && x.user.login, trusted));
+    if (hit) return { ...hit, url: hit.html_url || `https://github.com/${c.project.repo}/issues/${n}` };
+  }
+  return null;
+}
+
+// The one message when a page that reached him ends without his answer (#166), always these words.
+export const noLongerNeeded = ({ handle, label = "", decision = "" }) => `Question "${handle}"${label ? ` for ${label}` : ""} no longer needs your answer: ` +
+  (decision ? `it was already decided, so you can leave it. The decision is here: ${decision}` : "the factory took it back, so you can leave it.");
+const NOTE_TRIES = 3;
+// Sends that message for a closed page that still owes it (closed.note, set only when it closed as withdrawn after reaching
+// him), until Telegram gives a receipt, NOTE_TRIES times at most. -> what was tried, or null
+async function sayNoLongerNeeded(c, t, ch, now, io) {
+  const note = t.page.closed && t.page.closed.note;
+  if (!note || note.receipt || (note.tries || 0) >= NOTE_TRIES) return null;
+  const r = await ch.telegram(note.text);
+  note.tries = (note.tries || 0) + 1; note.at = new Date(now).toISOString();
+  if (r && r.ok) { note.receipt = r.receipt; delete note.why; } else note.why = (r && r.why) || "no answer";
+  c.save();
+  io.journal([{ t: "page note", at: note.at, repo: c.project.repo, question: t.heading, ...(note.receipt ? { receipt: note.receipt } : { why: note.why }) }]);
+  return { channel: "telegram", ok: !!note.receipt, ...(note.receipt ? { receipt: note.receipt } : { why: note.why }) };
+}
 
 // One question decided at once under the standing instruction: posted on its items (or, with none named, on the
 // owner issue), recorded in the state and in the driver's journal. -> true when it is decided (now or before)
@@ -789,7 +833,7 @@ async function runLocked(env, now, log, deps) {
     const file = stateFileOf(env, project);
     const state = loadState(file);
     const own = file === env.STATE;
-    return { project, file, state, own, ok: true, issues: [], issue: null, questions: [], link: "",
+    return { project, file, state, own, ok: true, issues: [], issue: null, questions: [], link: "", read: new Map(),
       suffix: own ? "" : "-" + repoSlug(project.repo),
       save() { if (!env.DRY) saveState(file, state); } };
   });
@@ -866,7 +910,10 @@ async function runLocked(env, now, log, deps) {
         if (await decideNow(env, c, q, sev, now, log, io)) decided.push(multi ? `For ${project.label}: ${q.heading}` : q.heading);
         continue;
       }
-      // a page: the model words it for him; after WORDING_TRIES runs that did not pass, the fixed plain template
+      // a page, unless someone who may decide has already decided it on GitHub (#166): then it is never started
+      const decision = decisionOnGitHub(env, c, q, io, log);
+      if (decision) { log(`not paging (${project.repo}) "${q.heading}": already decided on GitHub (${decision.url})`); continue; }
+      // the model words it for him; after WORDING_TRIES runs that did not pass, the fixed plain template
       let rejected = "";
       const accept = r => {
         const h = uniqueHandle(r.handle.trim().toLowerCase().replace(/\s+/g, " "), state, ctxs.filter(o => o !== c).map(o => o.state));
@@ -919,19 +966,31 @@ async function runLocked(env, now, log, deps) {
 
   // the pages: an answered or withdrawn one ends (its urgent issue closes); every other one sends what is due
   // (a page holds all it needs, so it goes on escalating while its project's list cannot be read; only "withdrawn"
-  // needs the list)
+  // needs the list). Withdrawn: its heading left the list, or someone who may decide decided it on GitHub (#166), which
+  // is looked at before every send. A withdrawn page that reached him tells him once that it is no longer needed.
   const pageNotes = [];
   for (const c of ctxs) {
-    const open = c.ok ? new Set(c.questions.map(q => q.key)) : null;
+    const open = c.ok ? new Map(c.questions.map(q => [q.key, q])) : null;
     for (const [k, t] of Object.entries(c.state.told)) {
-      if (!t.page || t.page.closed) continue;
-      if (t.answered || (open && !open.has(k))) {
-        if (env.DRY) continue;
+      if (!t.page) continue;
+      if (t.page.closed) {
+        const said = env.DRY ? null : await sayNoLongerNeeded(c, t, ch, now, io);
+        if (said) pageNotes.push(`telegram ${said.ok ? "sent" : `not sent (${said.why})`} (no longer needed)`);
+        continue;
+      }
+      const decision = !t.answered && open && open.has(k) ? decisionOnGitHub(env, c, open.get(k), io, log) : null;
+      if (t.answered || (open && !open.has(k)) || decision) {
+        if (env.DRY) { if (decision) log(`would end the page "${t.heading}": already decided on GitHub (${decision.url})`); continue; }
         const url = urgentIssue(t.page);
         if (url) { try { await ch.closeIssue(url); } catch (e) { log(`the urgent issue ${url} could not be closed (${e.message}); tried again next run`); continue; } }
-        t.page.closed = { at: nowIso, why: t.answered ? "answered" : "withdrawn" };
+        const why = t.answered ? "answered" : "withdrawn";
+        const note = why === "withdrawn" && pageReceipts(t.page).length ? { text: noLongerNeeded({ handle: t.handle, label: multi ? c.project.label : "", decision: decision ? decision.url : "" }), tries: 0 } : null;
+        t.page.closed = { at: nowIso, why, ...(decision ? { decision: decision.url } : {}), ...(note ? { note } : {}) };
         c.save();
-        io.journal([{ t: "page closed", at: nowIso, repo: c.project.repo, question: t.heading, why: t.page.closed.why, issue: url || null }]);
+        io.journal([{ t: "page closed", at: nowIso, repo: c.project.repo, question: t.heading, why, issue: url || null, ...(decision ? { decision: decision.url } : {}) }]);
+        const said = await sayNoLongerNeeded(c, t, ch, now, io);
+        if (said) pageNotes.push(`telegram ${said.ok ? "sent" : `not sent (${said.why})`} (no longer needed)`);
+        log(`ended the page "${t.heading}" (${why}${decision ? `: decided on GitHub, ${decision.url}` : ""})`);
         continue;
       }
       if (env.DRY) continue;
