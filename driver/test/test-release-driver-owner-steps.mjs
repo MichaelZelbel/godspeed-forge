@@ -3,7 +3,7 @@ import { TEST_ENV } from "./env.mjs";
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict"; import crypto from "node:crypto";
 import { isTrusted, HEADED, untrustedHeaded, neutralBody, NEUTRAL_PREFIX, blockerRefs, loopWords, verifierBlocked, holdoutIds, workflowJobs, additiveWorkflow, protectedOnlyRefusal, unifiedDiff,
   checksGreen, landingLook, capState, codexTrouble, checkPrompt, CHECK_RULES, secondCheck, MANAGER_HEADING, asManagerDecision, asQuestion, ownerHeaded, ownerHeadedCommit, ownerOnlyReason, technicalWords, KEEP_CHECKS_DECISION, landingBody, tell, askMichael, pruneQuestions, trustLook, genuineRelay, firstWithMarker } from "../release-driver/release-driver-owner-steps.mjs";
-import { pickPlan, releaseDone, stagingEntries, stagingRetry, decisionTargets, asDecision, findPrereqs } from "../release-driver/release-driver.mjs";
+import { ghRoot, pickPlan, releaseDone, stagingEntries, stagingRetry, decisionTargets, asDecision, findPrereqs } from "../release-driver/release-driver.mjs";
 import { isProtected } from "../release-driver/release-driver-guard.mjs";
 
 const HOUR = 3600 * 1000, NOW = Date.parse("2026-11-15T19:30:00Z");
@@ -339,6 +339,19 @@ assert.deepEqual(stagingEntries({ id: "r", version: "v", done: false, staging: {
   const st2 = { staging_retry: { release: "r" }, staging_reruns: { r: { count: 2, run: 5, done: true } } }; const said = [];
   stagingRetry({ REPO: R }, deps, plan, st2, NOW, () => {}, (k, t) => said.push(t));
   assert.ok(!st2.staging_retry && said.length === 1, "twice is the limit, and he hears it once");
+}
+
+// ---- issue #163: the rerun is the builder App's, never root's own login (the owner's)
+{
+  const keys = path.join(tmp, "keys"), script = path.join(tmp, "token.mjs");
+  fs.writeFileSync(keys, "APP_KEY=k\n"); fs.writeFileSync(script, 'console.log(process.argv[2] + "-token")\n');
+  let seen = null;
+  const out = ghRoot({ REPO: R, KEYS_FILE: keys, TOKEN_SCRIPT: script }, ["-X", "POST", "x"], undefined, (cmd, args, o) => { seen = { cmd, o, dirThere: fs.existsSync(o.env.GH_CONFIG_DIR) }; return { status: 0, stdout: "{}" }; });
+  assert.deepEqual(out, {});
+  assert.equal(seen.o.env.GH_TOKEN, "builder-token", "the builder App's token");
+  assert.ok(seen.dirThere && !fs.existsSync(seen.o.env.GH_CONFIG_DIR), "an empty gh folder of its own, removed afterwards");
+  assert.ok(!("HOME" in seen.o.env), "root's home, with its stored login, is not given");
+  assert.throws(() => ghRoot({ REPO: R, KEYS_FILE: keys, TOKEN_SCRIPT: "/none" }, ["x"], undefined, () => { throw new Error("must not run"); }), /no builder token/, "no token: no call at all");
 }
 
 // ---- the decision's targets

@@ -1167,7 +1167,7 @@ export function writeRecords(root, files, message) {
       const tree = must(gitIn(root, ["write-tree"], { extraEnv: e }), "Writing the tree");
       if (tree === baseTree) return null;
       const commit = must(gitIn(root, ["commit-tree", tree, "-p", base, "-m", message], { extraEnv: identity() }), "Writing the commit");
-      const push = gitIn(root, ["push", "-q", "origin", `${commit}:refs/heads/main`]);
+      const push = G.pushAsApp(root, commit);
       if (push.code === 0) {
         gitIn(root, ["update-ref", "refs/remotes/origin/main", commit]);
         return commit;

@@ -59,11 +59,11 @@ export function bases(env = process.env) {
 // The only credential these commands ever use: a release App token for this one repository,
 // narrowed to what the step needs. The maintainer's own login and any GH_TOKEN in the environment
 // are never read.
-export function mintToken(env, ownerRepo, permissions) {
+export function mintToken(env, ownerRepo, permissions, role = "release") {
   const script = env.RELEASE_TOKEN_SCRIPT || cfg.tokenScript;
   if (!script) refuse("The settings name no script that makes a release token (keys.token_script), so no release token can be made.");
   if (!fs.existsSync(script)) refuse(`${script} is not there, so no release token can be made.`);
-  const r = spawnSync(process.execPath, [script, "release", ownerRepo, "--permissions", permissions], { encoding: "utf8", env });
+  const r = spawnSync(process.execPath, [script, role, ownerRepo, "--permissions", permissions], { encoding: "utf8", env });
   const token = (r.stdout || "").trim();
   if (r.status !== 0 || !token) {
     const said = (r.stderr || "").trim().split("\n").pop() || `the token script exited ${r.status}`;

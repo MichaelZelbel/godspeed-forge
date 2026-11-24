@@ -49,7 +49,7 @@ test("rule 2: a stale status file, three failed rounds or a repair request make 
 
 test("a whole dead-man run: it says the release sentence once, and with the driver down it rolls back first and starts no AI at once", async () => {
   const w = world(); const calls = [];
-  const deps = { ref: "testref", health: () => ({ stdout: JSON.stringify({ ok: true, version: "2.0.0-beta.28" }) }), run: (c, a) => { calls.push([c, ...a]); return c === "git" ? { stdout: `${new Date(NOW - 80 * HOUR).toISOString()}\n` } : { status: 0, stdout: JSON.stringify([{ user: { login: "github-actions[bot]" }, body: "@MichaelZelbel x <!-- ref:testref -->", html_url: "https://github.com/o/w/issues/1" }]) }; }, fetch: async () => ({ json: async () => ({}) }), sleep: async () => {}, polls: 1, gateCfg: { reads: 1, gapMs: 0, toleranceMs: 0 } };
+  const deps = { mint: () => "tok", ref: "testref", health: () => ({ stdout: JSON.stringify({ ok: true, version: "2.0.0-beta.28" }) }), run: (c, a) => { calls.push([c, ...a]); return c === "git" ? { stdout: `${new Date(NOW - 80 * HOUR).toISOString()}\n` } : { status: 0, stdout: JSON.stringify([{ user: { login: "github-actions[bot]" }, body: "@MichaelZelbel x <!-- ref:testref -->", html_url: "https://github.com/o/w/issues/1" }]) }; }, fetch: async () => ({ json: async () => ({}) }), sleep: async () => {}, polls: 1, gateCfg: { reads: 1, gapMs: 0, toleranceMs: 0 } };
   const r1 = await run(w.cfg, NOW, () => {}, deps);
   assert.equal(r1.says.length, 1); assert.equal(r1.step, "rollback");
   assert.ok(calls.some(c => c[0] === "/opt/node/bin/node" && c.includes("repair")), "the keeper's repair ran first");
@@ -101,7 +101,7 @@ test("the dead-man tells only about Godspeed's own releases, and says nothing wh
 
 test("THE GATE in the dead-man: the same condition on 3 runs at least 10 minutes apart, fresh sources, none unreadable", async () => {
   const w = world();
-  const mkDeps = (health = { ok: true, version: "2.0.0-beta.28" }, over = {}) => ({ ref: "gref", health: () => ({ stdout: JSON.stringify(health) }), run: (c, a) => (c === "git" ? { stdout: `${new Date(NOW - 80 * HOUR).toISOString()}${String.fromCharCode(10)}` } : { status: 0, stdout: JSON.stringify([{ user: { login: "github-actions[bot]" }, body: "@MichaelZelbel x <!-- ref:gref -->", html_url: "https://github.com/o/w/issues/1" }]) }), fetch: async () => ({ json: async () => ({}) }), sleep: async () => {}, polls: 1, ...over });
+  const mkDeps = (health = { ok: true, version: "2.0.0-beta.28" }, over = {}) => ({ mint: () => "tok", ref: "gref", health: () => ({ stdout: JSON.stringify(health) }), run: (c, a) => (c === "git" ? { stdout: `${new Date(NOW - 80 * HOUR).toISOString()}${String.fromCharCode(10)}` } : { status: 0, stdout: JSON.stringify([{ user: { login: "github-actions[bot]" }, body: "@MichaelZelbel x <!-- ref:gref -->", html_url: "https://github.com/o/w/issues/1" }]) }), fetch: async () => ({ json: async () => ({}) }), sleep: async () => {}, polls: 1, ...over });
   const upd = t => fs.writeFileSync(w.cfg.STATUS, JSON.stringify({ at: new Date(t - 60000).toISOString() }));
   upd(NOW); const r1 = await run(w.cfg, NOW, () => {}, mkDeps()); assert.equal(r1.says.length, 0, "first reading: nothing");
   upd(NOW + 5 * MIN); const r2 = await run(w.cfg, NOW + 5 * MIN, () => {}, mkDeps()); assert.equal(r2.says.length, 0, "5 minutes later is not a second reading");
@@ -120,7 +120,7 @@ test("THE GATE in the dead-man: the same condition on 3 runs at least 10 minutes
 
 test("THE GATE in the dead-man holds the driver-down message too: three unhealthy runs and a fresh unhealthy re-read before it is sent", async () => {
   const w = world(); const sent = [];
-  const deps = { ref: "dref", health: () => ({ stdout: JSON.stringify({ ok: true, version: "2.0.0-beta.99" }) }), run: (c, a) => ({ status: 0, stdout: c === "gh" ? JSON.stringify([{ user: { login: "github-actions[bot]" }, body: "@MichaelZelbel x <!-- ref:dref -->", html_url: "https://github.com/o/w/issues/2" }]) : "" }), fetch: async () => ({ json: async () => ({}) }), sleep: async () => {}, polls: 1, gateCfg: { reads: 3, gapMs: 10 * MIN, toleranceMs: 60000 } };
+  const deps = { mint: () => "tok", ref: "dref", health: () => ({ stdout: JSON.stringify({ ok: true, version: "2.0.0-beta.99" }) }), run: (c, a) => ({ status: 0, stdout: c === "gh" ? JSON.stringify([{ user: { login: "github-actions[bot]" }, body: "@MichaelZelbel x <!-- ref:dref -->", html_url: "https://github.com/o/w/issues/2" }]) : "" }), fetch: async () => ({ json: async () => ({}) }), sleep: async () => {}, polls: 1, gateCfg: { reads: 3, gapMs: 10 * MIN, toleranceMs: 60000 } };
   fs.writeFileSync(w.cfg.STATE, JSON.stringify({ messages: {}, repair: { since: NOW - 5 * HOUR, rollbackAt: NOW - 4 * HOUR, codexAt: NOW - 3 * HOUR, claudeAt: NOW - 2 * HOUR } })); // the ladder is at its end: the next step is to tell
   const counts = [];
   for (const k of [0, 10, 20]) { const r = await run(w.cfg, NOW + k * MIN, () => {}, deps); counts.push((r.done || []).filter(x => String(x.say).startsWith("driver")).length); }
@@ -143,7 +143,7 @@ test("the dead-man: an unreadable status file is no verdict; different failures 
 
 test("the keeper runs with the configured node, and its rung counts as attempted only when it exits 0: a failed keeper is asked again at the next run", async () => {
   const w = world(); const calls = []; let keeperStatus = 1;
-  const deps = { ref: "testref", health: () => ({ stdout: JSON.stringify({ ok: true, version: "2.0.0-beta.28" }) }), run: (c, a) => { calls.push([c, ...a]); return c === "git" ? { stdout: `${new Date(NOW - 80 * HOUR).toISOString()}
+  const deps = { mint: () => "tok", ref: "testref", health: () => ({ stdout: JSON.stringify({ ok: true, version: "2.0.0-beta.28" }) }), run: (c, a) => { calls.push([c, ...a]); return c === "git" ? { stdout: `${new Date(NOW - 80 * HOUR).toISOString()}
 ` } : c === "/opt/node/bin/node" ? { status: keeperStatus, stderr: "keeper: cannot restore" } : { status: 0, stdout: "" }; }, fetch: async () => ({ json: async () => ({ ok: false }) }) };
   const r1 = await run(w.cfg, NOW, () => {}, deps);
   assert.equal(r1.step, "rollback");
@@ -171,3 +171,48 @@ test("ticket 04: the repair run's sign-in links: a plain file in a link's place 
   assert.equal(linkLogin(target, link), "kept");
 });
 
+
+// issue #163: nothing the dead-man or its repair run sends to GitHub goes out as the owner (root's own gh login)
+test("#163: githubEnv hands out an App token and no stored login; without a token there is no GitHub login at all", async () => {
+  const { githubEnv } = await import("../deadman/deadman.mjs");
+  const e = githubEnv({ ghDir: "/acts/gh", token: "tok" });
+  assert.equal(e.GH_TOKEN, "tok"); assert.equal(e.GH_CONFIG_DIR, "/acts/gh"); assert.equal(e.GIT_SSH_COMMAND, "/bin/false");
+  assert.equal(e.GIT_CONFIG_KEY_0, "credential.helper"); assert.equal(e.GIT_CONFIG_VALUE_0, "", "root's helpers are emptied first");
+  assert.match(e.GIT_CONFIG_VALUE_1, /GH_TOKEN/);
+  const none = githubEnv({ ghDir: "/acts/gh" });
+  assert.ok(!("GH_TOKEN" in none) && none.GIT_CONFIG_COUNT === "1" && !("GIT_CONFIG_KEY_1" in none));
+});
+
+test("#163: the repair run's AI, Claude and Codex, runs with the App token the unit minted from job.json", async () => {
+  const { runJob } = await import("../deadman/deadman.mjs");
+  for (const provider of ["claude", "codex"]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dm-job-")); const acts = path.join(dir, "acts");
+    const github = { tokenScript: "/t.mjs", keysFile: "/k", repos: ["o/r", "o/d"] };
+    fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify({ provider, model: "m", brain: dir, factoryHome: path.join(dir, "home"), claudeBin: "/bin/claude", prompt: "p", actsDir: acts, minutes: 1, github }));
+    let spawned = null, minted = null;
+    runJob(dir, { mint: a => { minted = a; return "apptok"; }, spawn: (cmd, args, o) => { spawned = o; return { stdout: "RESULT: resolved" }; } });
+    assert.deepEqual(minted, { ...github, app: "release" });
+    assert.equal(spawned.env.GH_TOKEN, "apptok", provider); assert.equal(spawned.env.GH_CONFIG_DIR, path.join(acts, "gh"));
+    assert.equal(spawned.env.GIT_CONFIG_VALUE_0, "");
+  }
+});
+
+test("#163: the notify dispatch goes out with the builder App's token and an empty gh folder; with no token nothing is sent as the owner but the queue still gets it", async () => {
+  const w = world(); const { tell } = await import("../deadman/deadman.mjs");
+  const seen = [];
+  const run = (c, a, o) => { seen.push({ c, a, env: o && o.env }); return { status: 0, stdout: "[]" }; };
+  await tell(w.cfg, "x", { run, mint: a => { seen.push({ minted: a }); return "apptok"; }, polls: 0 });
+  assert.deepEqual(seen[0].minted, { tokenScript: w.cfg.TOKEN_SCRIPT, keysFile: w.cfg.KEYS_FILE, app: "builder", repos: ["o/w"] });
+  const gh = seen.filter(s => s.c === "gh"); assert.ok(gh.some(s => s.a[0] === "workflow"), "dispatched");
+  for (const s of gh) { assert.equal(s.env.GH_TOKEN, "apptok"); assert.ok(!s.env.GH_CONFIG_DIR.startsWith("/root")); assert.ok(!("HOME" in s.env)); }
+  const w2 = world(); const calls = [];
+  await tell(w2.cfg, "x", { run: (c) => { calls.push(c); return { status: 0, stdout: "[]" }; }, mint: () => "" });
+  assert.deepEqual(calls, [], "no gh call without an App token");
+  assert.equal(JSON.parse(fs.readFileSync(w2.cfg.NOTICES, "utf8")).notices.length, 1);
+});
+
+test("#163: the dead-man still shares no code with the driver", () => {
+  const src = fs.readFileSync(new URL("../deadman/deadman.mjs", import.meta.url), "utf8");
+  const imports = [...src.matchAll(/^import .* from "([^"]+)"/gm)].map(m => m[1]);
+  assert.ok(imports.every(i => i.startsWith("node:")), imports.join(", "));
+});
