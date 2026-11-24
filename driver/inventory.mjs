@@ -262,7 +262,8 @@ function buildEntries(world, ledger, obstacles, ctx) {
       owner: KNOWN_OBSTACLES.has(o.kind) ? OWNERS.obstacle : null, evidence: o.evidence || [] }));
   return out;
 }
-export const KNOWN_OBSTACLES = new Set(["parked", "check-failed", "no-progress", "dead-end", "factory-idle", "factory-stopped", "factory-restarts", "main-red", "unreadable", "unit-failed", "disk", "memory", "stale-process", "login", "no-ai", "tools-missing"]);
+export const KNOWN_OBSTACLES = new Set(["parked", "check-failed", "no-progress", "dead-end", "factory-idle", "factory-stopped", "factory-restarts", "main-red", "unreadable", "unit-failed", "disk", "memory", "stale-process", "login", "no-ai", "tools-missing",
+  "as-owner"]);
 
 // ---------------------------------------------------------------- the chain
 // chain[id] = { rung, rungSince (ms), milestone (ms), launched (bool: the acting run of this rung started), told (bool), toldAt, tries: [{rung, at, result, summary}] }
@@ -310,6 +311,10 @@ export function advance(entries, chain0, now, opts = {}) {
     // next budget window. It never goes to Michael, however long it waits or whatever the budget says; after both actors tried, the cycle
     // starts again after a day. Only an approved release and the machinery's own entries may reach him.
     if (e.backlog) {
+      // a rung 1 run that told the owner itself (a notice) climbs to rung 2, the other provider told what rung 1 found; it never
+      // starts rung 1 again (2026-11-24, issue #152: that restarted the same acting run on one parked pull request every five
+      // minutes, 23 times in two hours, each posting the same finding)
+      if (c.rung === 3 && tried(1) && !tried(2)) { c.rung = 2; c.rungSince = now; c.launched = false; c.told = false; moved = true; }
       if (c.rung === 3) { if (tried(1) && tried(2)) c.cooldownUntil = now + 24 * H; c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; c.tries = []; moved = true; }
       if (c.rung === 2 && tried(2)) { c.rung = 1; c.rungSince = now; c.launched = false; c.tries = []; c.cooldownUntil = now + 24 * H; moved = true; }
     }
