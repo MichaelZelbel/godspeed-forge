@@ -1,0 +1,73 @@
+{
+  "release": "godspeed-2.0.0-beta.23-side-by-side",
+  "repository": "MichaelZelbel/godspeed-mission-control",
+  "version": "2.0.0-beta.23",
+  "tag": "candidate/2.0.0-beta.23",
+  "stageCommit": "f3122821fbdcdaecb5e142bf9eb7d7850a1ce353",
+  "productCommit": "690266d10c753ed9fa15586a7e900a88b245c419",
+  "machine": "godspeed-archon",
+  "installLog": "/root/godspeed-staging/2.0.0-beta.23/install.log",
+  "healthBefore": {
+    "ok": true,
+    "format": 1,
+    "version": "2.0.0-beta.20",
+    "instance": "d3be7cc8af6f875f61613305",
+    "scheduler_heartbeat": "2026-11-12T23:40:52.249Z"
+  },
+  "commitBefore": "e5b2e542e5c8ffd359187f505c2d7ec313b58c36",
+  "installedAt": "2026-11-12T23:42:00Z",
+  "backup": "/root/godspeed/.godspeed/integrated-runtime/backups/20261112-234132-e5b2e542e5c8ffd359187f505c2d7ec313b58c36",
+  "healthAfter": {
+    "ok": true,
+    "format": 1,
+    "version": "2.0.0-beta.23",
+    "instance": "d3be7cc8af6f875f61613305",
+    "scheduler_heartbeat": "2026-11-12T23:41:44.626Z",
+    "chat": null
+  },
+  "addonAi": {
+    "at": "2026-11-12T23:41:59Z",
+    "state": "ok",
+    "command": "/root/.hermes/bin/godspeed-model",
+    "provider": "openai-codex",
+    "model": "gpt-5.6-terra",
+    "backup": false,
+    "tries": 1
+  },
+  "status": "installed",
+  "failures": [],
+  "scenarios": {
+    "result": "failed",
+    "conclusion": "failure",
+    "tag": "candidate/2.0.0-beta.23",
+    "tagCommit": "f3122821fbdcdaecb5e142bf9eb7d7850a1ce353",
+    "run": 43330861435,
+    "url": "https://github.com/MichaelZelbel/godspeed-mission-control/actions/runs/43330861435",
+    "at": "2026-11-13T00:27:54Z",
+    "failedJobs": [
+      "a talk says when its preparation did not pass, and opens from one that did",
+      "the Charm Challenge, start to finish",
+      "the verdict"
+    ],
+    "seenAt": "2026-11-13T05:02:19Z"
+  },
+  "lastCheck": {
+    "at": "2026-11-13T05:02:19Z",
+    "serverClock": "2026-11-13T05:02:07Z",
+    "result": "scenariosFailed",
+    "checked": [
+      "Your server runs 2.0.0-beta.23 (product commit 690266d), healthy, as instance d3be7cc8af6f875f61613305, the one it was installed as; its scheduler beat 0 minute(s) before the server's clock.",
+      "The add-ons reach the AI: /root/.hermes/bin/godspeed-model names openai-codex gpt-5.6-terra, and a one-word request through it answered."
+    ],
+    "failures": [],
+    "scenarios": "failed",
+    "addonAi": {
+      "state": "ok",
+      "command": "/root/.hermes/bin/godspeed-model",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-terra",
+      "backup": false,
+      "tries": 1
+    }
+  }
+}

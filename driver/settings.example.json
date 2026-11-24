@@ -1,0 +1,34 @@
+{
+  "_about": "Placeholders only. Copy the two parts into the settings folder (root on Linux: /etc/godspeed-forge): the value of \"driver.json\" as driver.json, the value of \"projects/owner--repository.json\" as projects/<owner>--<repository>.json (one such file per repository). godspeed-forge driver install checks them and names anything missing.",
+  "driver.json": {
+    "owner": { "github_login": "your-github-login", "name": "Your Name", "telegram_user_ids": ["123456789"] },
+    "server": {
+      "factory_user": "factory", "factory_uid": 1000, "factory_gid": 1000, "factory_home": "/home/factory", "netns": "",
+      "must_run_units": [], "state_dir": "/var/lib/godspeed/forge/driver", "spool_dir": "/var/lib/godspeed/forge/spool",
+      "deadman_state_dir": "/var/lib/godspeed/forge/deadman", "keeper_dir": "/usr/local/lib/godspeed/forge/keeper",
+      "driver_dir": "/usr/local/lib/godspeed/forge/driver", "questions_dir": "/var/lib/godspeed/forge/questions", "node": "/usr/bin/node", "name_in_messages": "Your Name"
+    },
+    "keys": { "env_file": "/etc/godspeed-forge/keys-file", "token_script": "/usr/local/bin/gh-app-token.mjs" },
+    "notices": { "godspeed_notices_file": "/root/brain/.godspeed/notices.json", "telegram_env_file": "/root/brain/telegram.env", "watch_repo": "owner/records" },
+    "ai": { "bins": { "claude": "/home/factory/.local/bin/claude", "codex": "/usr/local/bin/codex" }, "models": { "strong": "the-stronger-model" }, "openrouter_allow": [], "act_brain_dir": "/root/brain" },
+    "budget": { "act_runs_per_day": 8, "reserved": 4 },
+    "forge": { "state_dir": "/var/lib/godspeed/forge", "config": "/etc/godspeed-forge/config.json" },
+    "legacy_units": [],
+    "steps": {
+      "questions": { "godspeed_dir": "/root/brain", "hermes_home": "/root/chat-program", "to_owner_file": "to-owner.json" },
+      "test-machine": { "holdout": "H-1" },
+      "owner-questions": { "enabled": true, "agent": "claude", "model": "haiku", "agent_tries": 3 },
+      "owner-releases": { "enabled": true, "check_minutes": 25, "work_dir": "/home/factory/factory-driver/candidates" }
+    }
+  },
+  "projects/owner--repository.json": {
+    "repository": "owner/repository", "project": "repository", "checkout": "/home/factory/repository",
+    "apps": { "builder": "your-builder-app", "release": "your-release-app" }, "trust": true, "agent": "claude",
+    "profile": { "staging_url": "https://staging.example.com", "deploy": "a command that puts the candidate on the staging copy", "health": "a command that prints the running commit" },
+    "questions": { "label": "the product", "name": "the product", "product": "what the software is, in a few words", "seat": "as a person who uses it", "example": "When you use it to do an everyday thing, it sometimes does something else." },
+    "releases": {
+      "records_repo": "owner/records", "records_checkout": "/var/lib/godspeed/forge/records", "plan_pattern": "^release-\\d", "scenarios_workflow": "scenarios.yml",
+      "tools_dir": "/home/factory/holdout-tools", "holdouts_dir": "/home/factory/holdouts", "engine_repo": "", "health_url": "http://127.0.0.1:8080/health", "version_file": "/root/brain/version"
+    }
+  }
+}

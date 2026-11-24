@@ -1,0 +1,84 @@
+{
+  "release": "godspeed-2.0.0-beta.26-steady",
+  "version": "2.0.0-beta.26",
+  "decidedBy": "release-driver",
+  "authority": "plan-rule",
+  "words": "Caps: three attempts or\ntwo send-backs per item, then `needs-owner`; an item that reaches a dead end leaves the release,\nthe rest ships.",
+  "approvalRef": "releases/godspeed-2.0.0-beta.26-steady/plan.md: Status: approved by Michael on 2026-11-16 (\"\"go\" for beta 25, and \"yes\" for beta 26, with keep for the Hostinger button.\").",
+  "approvedAt": "2026-11-16T00:00:00Z",
+  "decidedAt": "2026-11-17T10:06:11.746Z",
+  "deferredTickets": [
+    "01-restart-answers-at-once.md",
+    "02-chat-says-refused-key.md",
+    "07-coaching-talk-ready.md"
+  ],
+  "reason": "Under the approved plan's rule (an item that reaches a dead end leaves the release, the rest ships), Mission Control's release driver moved these tickets to the next release: 01-restart-answers-at-once.md (#679: Michael moved it to a later release himself); 02-chat-says-refused-key.md (#590: the release driver authorized it 2 times, the last at 2026-11-16 21:32 UTC, and nothing of it merged in the 12 hours since); 07-coaching-talk-ready.md (#670: the release driver authorized it 2 times, the last at 2026-11-16 17:01 UTC, and nothing of it merged in the 17 hours since). Everything else ships as planned.",
+  "reasons": {
+    "01-restart-answers-at-once.md": {
+      "item": 1,
+      "issue": 679,
+      "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/679",
+      "title": "Right after a restart the server takes over 15 seconds to answer, so the sign-in screen says \"Let's reconnect\"",
+      "rule": "owner-moved",
+      "why": "Michael moved it to a later release himself",
+      "decidedAt": "2026-11-17T10:06:11.746Z",
+      "evidence": [
+        {
+          "at": "2026-11-16T16:50:47Z",
+          "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/679#issuecomment-6922953201",
+          "words": "Owner decision: **move this startup sign-in investigation to a later release and let the current release ship without changing sign-in behavior.** The intermittent startup delay is not part of this release. Keep the issue open for a later release with its existing evidence requirement."
+        }
+      ]
+    },
+    "02-chat-says-refused-key.md": {
+      "item": 2,
+      "issue": 590,
+      "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/590",
+      "title": "Holdouts H-19..H-26 and H-29 (the AI's state in the chats, pickers and card) fail on main",
+      "rule": "a",
+      "why": "the release driver authorized it 2 times, the last at 2026-11-16 21:32 UTC, and nothing of it merged in the 12 hours since",
+      "decidedAt": "2026-11-17T10:06:11.746Z",
+      "evidence": [
+        {
+          "at": "2026-11-16T15:31:43.372Z",
+          "kind": "decided",
+          "run": "202611161528-29dbb2",
+          "what": "Authorize one bounded correction lap on PR #660 for the recorded refused-key wording, mixed transition reply, missing Dashboard state, and clipped picker labels. All required browser-visible observations remain required and must be repeated in a working verifier.",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/590",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/660"
+          ]
+        },
+        {
+          "at": "2026-11-16T21:32:34.704Z",
+          "kind": "decided",
+          "run": "202611162128-43a261",
+          "what": "Authorize the second and final bounded correction: make all visible refused-key, outage, and no-AI wording consistent, then repeat the unchanged browser observations."
+        }
+      ]
+    },
+    "07-coaching-talk-ready.md": {
+      "item": 7,
+      "issue": 670,
+      "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/670",
+      "title": "Make the installed coaching preparation route produce a ready talk",
+      "rule": "a",
+      "why": "the release driver authorized it 2 times, the last at 2026-11-16 17:01 UTC, and nothing of it merged in the 17 hours since",
+      "decidedAt": "2026-11-17T10:06:11.746Z",
+      "evidence": [
+        {
+          "at": "2026-11-16T14:46:52.227Z",
+          "kind": "decided",
+          "run": "202611161443-5a72b3",
+          "what": "Authorize a fresh diagnostic run using the supported fixture and configured provider, retaining redacted run evidence before changing the fixture, runner, or recipe. This keeps the ready/draft gate and coaching holdouts intact."
+        },
+        {
+          "at": "2026-11-16T17:01:32.807Z",
+          "kind": "decided",
+          "run": "202611161658-18489e",
+          "what": "Authorize a bounded correction so an independently uncovered adopted goal can never be sealed ready or opened, while the supported clean preparation remains ready. This is the exact plan-defined quality boundary and keeps every holdout blocking."
+        }
+      ]
+    }
+  }
+}

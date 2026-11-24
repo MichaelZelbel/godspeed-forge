@@ -1,0 +1,42 @@
+# Transport B for the software factory's messages (architecture 8.11): opens an issue authored by github-actions[bot] that names the
+# owner, so GitHub notifies him (GitHub sends no notification for a person's own activity, so an issue opened with his token proves
+# nothing). The driver and the dead-man dispatch this; the issue's URL is read back by its ref.
+name: factory-notify
+run-name: factory-notify ${{ inputs.ref }}
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "one line"
+        required: true
+      body:
+        description: "the message"
+        required: true
+      ref:
+        description: "a unique id of the message (the receipt is looked up by it)"
+        required: true
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: factory-notify-${{ inputs.ref }}
+  cancel-in-progress: false
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Open the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ inputs.title }}
+          BODY: ${{ inputs.body }}
+          REF: ${{ inputs.ref }}
+          OWNER: ${{ vars.FACTORY_OWNER }}
+        run: |
+          # idempotent: a QUALIFYING issue (authored by this workflow's token, naming the owner) with this ref is never opened twice. The ref is
+          # passed to jq as data, never as program text.
+          if gh api "repos/$GITHUB_REPOSITORY/issues?state=all&per_page=100" | jq -e --arg marker "<!-- ref:$REF -->" --arg owner "@$OWNER" '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | startswith($owner)) and ((.body // "") | contains($marker)))] | length > 0' >/dev/null; then echo "already opened"; exit 0; fi
+          gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" --body "@$OWNER $BODY
+
+          <!-- ref:$REF -->"

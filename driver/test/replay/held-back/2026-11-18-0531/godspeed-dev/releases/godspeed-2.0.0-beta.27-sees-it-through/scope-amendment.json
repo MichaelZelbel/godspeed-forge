@@ -1,0 +1,72 @@
+{
+  "release": "godspeed-2.0.0-beta.27-sees-it-through",
+  "version": "2.0.0-beta.27",
+  "decidedBy": "release-driver",
+  "authority": "plan-rule",
+  "words": "Caps: three attempts or two send-backs per item, then `needs-owner`; an item that reaches a dead end leaves the release, the rest ships.",
+  "approvalRef": "releases/godspeed-2.0.0-beta.27-sees-it-through/plan.md: Status: approved by standing decision (Michael, 2026-11-17: \"Yes, build those three And roll them out.\"; bug-fix-only releases start without his yes) Proposed by Mission Control as godspeed-2.0.0-beta.27-sees-it-through; refreshed against the open issues and started by auto-plan on 2026-11-17, once 2.0.0-beta.26 was on his server and ready.",
+  "approvedAt": "2026-11-17T00:00:00Z",
+  "decidedAt": "2026-11-18T02:13:12.192Z",
+  "deferredTickets": [
+    "03-keep-failure-ahead-of-stale-ready.md"
+  ],
+  "reason": "Under the approved plan's rule (an item that reaches a dead end leaves the release, the rest ships), Mission Control's release driver moved this ticket to the next release: 03-keep-failure-ahead-of-stale-ready.md (#667: the last 4 release driver runs each found it stuck, with no new commit, merge or review in between). Everything else ships as planned.",
+  "reasons": {
+    "03-keep-failure-ahead-of-stale-ready.md": {
+      "item": 3,
+      "issue": 667,
+      "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/667",
+      "title": "Overlapping AI availability reads can briefly show ready after the health check fails",
+      "rule": "c",
+      "why": "the last 4 release driver runs each found it stuck, with no new commit, merge or review in between",
+      "decidedAt": "2026-11-18T02:13:12.192Z",
+      "evidence": [
+        {
+          "at": "2026-11-17T18:15:29.852Z",
+          "kind": "left",
+          "run": "202611171813-5d2e3e",
+          "what": "The PR is clean and all checks pass, but the required rendered Dashboard/chat observation is incomplete solely because the maintained verifier has no browser executable, driver, or automation tool. The unchanged browser observation remains blocking.",
+          "routed": "referee-repair",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/667",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671"
+          ]
+        },
+        {
+          "at": "2026-11-17T21:45:00.487Z",
+          "kind": "left",
+          "run": "202611172143-c37877",
+          "what": "The required exact-head browser observation cannot run because the maintained verifier lacks browser capability. The requirement remains blocking and must be retried after the verifier is repaired.",
+          "routed": "referee-repair",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/667",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671"
+          ]
+        },
+        {
+          "at": "2026-11-17T23:44:49.215Z",
+          "kind": "left",
+          "run": "202611172343-d7f42e",
+          "what": "The implementation and all repository checks are green, but the maintained verifier has no browser capability to perform the required H-34 visible Dashboard-and-open-chat observation. This is an environment repair, not a reason to weaken or replace that observation.",
+          "routed": "referee-repair",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/667",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671#issuecomment-6943620989"
+          ]
+        },
+        {
+          "at": "2026-11-18T02:00:09.255Z",
+          "kind": "left",
+          "run": "202611180158-5fa563",
+          "what": "PR #671 is CI-green and its scope was already narrowed by Michael; the remaining exact-head browser observation cannot run because the maintained verifier lacks browser capability. Repair that verifier and repeat the same observation without weakening it.",
+          "routed": "referee-repair",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/667",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/671"
+          ]
+        }
+      ]
+    }
+  }
+}

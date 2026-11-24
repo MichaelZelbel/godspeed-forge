@@ -35,7 +35,7 @@ Cole Medin's factory.
 
 **Setting up**
 - Installing Cole Medin's factory for a repository from his own repository at one pinned revision
-  (and the Archon revision his installer pins), on the owner's Godspeed server.
+  (and Archon from the Forge's public copy of it, at one pinned revision), on the owner's Godspeed server.
 - Guiding the owner through creating their own two GitHub Apps (one to build, one to release) on
   GitHub's own pages, and asking only what the software is for and who uses it.
 - Finding which coding agent (Claude Code or Codex) is signed in and saying what a release will cost.
@@ -53,6 +53,10 @@ Cole Medin's factory.
   putting it on staging, and sending one message: on staging, or which tests failed and why.
 - On the owner's go, making it public; on "take it back", returning the public to the version before.
 
+**Watching**
+- A page on the owner's server, at an address of its own behind a sign-in, where they watch the factory at work:
+  Archon's own pages, read-only, built from the same Archon the factory runs there.
+
 **Project profiles**
 - A plain profile that works for any project, and a way for a project to add its own steps (how it
   is installed, how its staging copy is updated) as settings beside it.
@@ -61,7 +65,7 @@ Cole Medin's factory.
 
 **Other people's code**
 - Carrying, copying or editing Cole Medin's factory or Archon inside this repository. They are
-  installed from their own repositories at a pinned revision; moving the pin is a Forge release.
+  installed from Cole's repository and the public copy of Archon at pinned revisions; moving a pin is a Forge release.
 - A builder loop, review or AI workflow of the Forge's own beside Cole Medin's. All AI work runs
   through Archon's shared SDLC workflows.
 
