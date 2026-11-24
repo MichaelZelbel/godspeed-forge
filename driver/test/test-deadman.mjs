@@ -197,6 +197,38 @@ test("#163: the repair run's AI, Claude and Codex, runs with the App token the u
   }
 });
 
+test("#163: launchRepair's job.json, read by runJob, carries the token settings into the repair AI's environment", async () => {
+  const { launchRepair, runJob } = await import("../deadman/deadman.mjs");
+  const w = world(); w.cfg.TOKEN_SCRIPT = "/t.mjs"; w.cfg.KEYS_FILE = "/k"; w.cfg.REPO = "o/r"; w.cfg.DEV_REPO = "o/d"; w.cfg.CLAUDE_BIN = "/bin/claude";
+  for (const provider of ["claude", "codex"]) {
+    const unit = `factory-repair-${provider}-1`;
+    launchRepair(w.cfg, unit, provider, "why", "", () => ({ status: 0 }));
+    let minted = null, spawned = null;
+    runJob(path.join(w.cfg.ACTS, unit), { mint: a => { minted = a; return "apptok"; }, spawn: (c, a, o) => { spawned = o; return { stdout: "" }; } });
+    assert.deepEqual(minted, { tokenScript: "/t.mjs", keysFile: "/k", repos: ["o/r", "o/d"], app: "release" }, provider);
+    assert.equal(spawned.env.GH_TOKEN, "apptok", provider);
+  }
+});
+
+test("#163: the dead-man's App token minting and GitHub environment agree with the driver's guard", async () => {
+  const { mintToken, githubEnv } = await import("../deadman/deadman.mjs");
+  const { mintAppToken, appVars } = await import("../owner-guard.mjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dm-conf-")), keysFile = path.join(dir, "keys");
+  fs.writeFileSync(keysFile, 'export APP_ID="1"\nAPP_KEY=abc\n');
+  for (const repos of [["o/r"], ["o/r", "o/d"], ["o/r", "bad repo"], []]) for (const out of [{ status: 0, stdout: "tok\n" }, { status: 1, stdout: "" }]) {
+    const seen = [[], []];
+    const a = mintToken({ tokenScript: "/t.mjs", keysFile, app: "builder", repos }, (c, args, o) => { seen[0].push([args, o.env]); return out; });
+    const b = mintAppToken({ tokenScript: "/t.mjs", keysFile, app: "builder", repos }, (c, args, o) => { seen[1].push([args, o.env.APP_ID, o.env.APP_KEY]); return out; });
+    assert.equal(a, b); assert.deepEqual(seen[0].map(([x, e]) => [x, e.APP_ID, e.APP_KEY]), seen[1]);
+  }
+  assert.equal(mintToken({ tokenScript: "/t.mjs", keysFile: "/nope", app: "release", repos: ["o/r"] }, () => ({ status: 0, stdout: "t" })), mintAppToken({ tokenScript: "/t.mjs", keysFile: "/nope", repos: ["o/r"] }, () => ({ status: 0, stdout: "t" })));
+  for (const token of ["", "apptok"]) {
+    const { GIT_CONFIG_VALUE_1: x, ...mine } = githubEnv({ ghDir: "/g", token }), { GIT_CONFIG_VALUE_1: y, ...theirs } = appVars({ ghDir: "/g", token });
+    const { GIT_SSH_COMMAND, ...rest } = mine;
+    assert.deepEqual(rest, theirs, `token=${JSON.stringify(token)}`); assert.equal(!!x, !!y);
+  }
+});
+
 test("#163: the notify dispatch goes out with the builder App's token and an empty gh folder; with no token nothing is sent as the owner but the queue still gets it", async () => {
   const w = world(); const { tell } = await import("../deadman/deadman.mjs");
   const seen = [];
