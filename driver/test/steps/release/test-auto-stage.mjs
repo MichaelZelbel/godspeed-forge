@@ -883,6 +883,75 @@ test("a close with the builder's 'Delivered by' comment counts when the pull req
   assert.equal((await run(say("godspeed-dev-builder", "Delivered by https://github.com/other/repo/pull/688"), pr())).calls, 0, "another repository's pull request");
 });
 
+// ---------- "Already delivered on main by #N" (the Forge 0.3.1, ticket 03) ----------
+
+// Godspeed 2.0.0-beta.31, 2026-11-23: ticket 01's issue (#783 in the product) was closed as completed by the builder App with
+// "Already delivered on main by #861 with #590 and #795". #861 was an issue, closed by the merged pull request #876.
+const MERGE_876 = "5d29db0" + "4".repeat(33);
+const issue861 = (over = {}) => ({ __typename: "Issue", number: 861, state: "CLOSED", closedByPullRequestsReferences: { nodes: [{ number: 876, merged: true, mergedAt: "2026-11-21T10:00:00Z", baseRefName: "main", mergeCommit: { oid: MERGE_876 }, repository: { nameWithOwner: REPO } }] }, ...over });
+const alreadySaid = (login = "godspeed-dev-builder", __typename = "Bot", body = "Already delivered on main by #861 with #590 and #795.") => ({ 783: [{ author: { __typename, login }, body }] });
+async function already(comments, node) {
+  const issues = { 783: { state: "CLOSED", stateReason: "COMPLETED", merges: [] } };
+  const queries = [];
+  await A.addDeliveredByComment({ repo: REPO, issues, comments, api: async (m, p, b) => { queries.push(b.query); return { ok: true, json: { data: { repository: { a861: node } } } }; } });
+  return { issues, queries, verdict: A.judgeCompleteness({ tickets: [ticket(1)], plan: "- Issues: 1 #783\n", repo: REPO, issues }) };
+}
+
+test("ticket 03: beta.31's ticket 01 counts as done: the builder App's 'Already delivered on main by #861' names an issue closed by the merged #876, whose merge is the ticket's", async () => {
+  const r = await already(alreadySaid(), issue861());
+  assert.equal(r.issues[783].merges[0].number, 876);
+  assert.equal(r.verdict.state, "complete", "no dead end: nothing waits for the driver");
+  assert.deepEqual(r.verdict.deadEnds, []);
+  assert.equal(r.verdict.marks[0].merge, MERGE_876, "the merge of #876 becomes the ticket's merge, for its Status line");
+  assert.match(r.queries[0], /a861: issueOrPullRequest\(number: 861\)/);
+  assert.equal((await already(alreadySaid("godspeed-dev-release[bot]"), issue861())).verdict.marks[0].merge, MERGE_876, "the release App counts too");
+  const pr = { __typename: "PullRequest", number: 861, merged: true, mergedAt: "2026-11-21T09:00:00Z", baseRefName: "main", mergeCommit: { oid: "c".repeat(40) }, repository: { nameWithOwner: REPO } };
+  assert.equal((await already(alreadySaid(), pr)).verdict.marks[0].merge, "c".repeat(40), "#N may be the merged pull request itself, and the App's comment is the link (no 'names the issue' check)");
+  const two = issue861({ closedByPullRequestsReferences: { nodes: [{ number: 870, mergedAt: "2026-11-20T10:00:00Z", baseRefName: "main", mergeCommit: { oid: "7".repeat(40) }, repository: { nameWithOwner: REPO } }, { number: 876, mergedAt: "2026-11-21T10:00:00Z", baseRefName: "main", mergeCommit: { oid: MERGE_876 }, repository: { nameWithOwner: REPO } }] } });
+  assert.equal((await already(alreadySaid(), two)).verdict.marks[0].merge, MERGE_876, "the newest merge wins");
+});
+
+test("ticket 03: the same words by a person, or naming something not merged into main of this repository, do not count: the ticket stays a dead end", async () => {
+  assert.equal((await already(alreadySaid("godspeed-dev-builder", "Bot"), issue861())).verdict.deadEnds.length, 0, "the App's own comment does count");
+  const person = await already(alreadySaid("godspeed-dev-builder", "User"), issue861());
+  assert.equal(person.queries.length, 0, "a person who took the App's name is not the App: nothing is even looked up");
+  assert.equal(person.verdict.deadEnds.length, 1);
+  assert.equal((await already(alreadySaid("someone-else"), issue861())).verdict.deadEnds.length, 1, "anyone else");
+  const pr = (over) => ({ __typename: "PullRequest", number: 861, mergedAt: "2026-11-21T09:00:00Z", baseRefName: "main", mergeCommit: { oid: "c".repeat(40) }, repository: { nameWithOwner: REPO }, ...over });
+  for (const [node, why] of [[pr({ mergedAt: null, mergeCommit: null }), "a pull request not merged"], [pr({ baseRefName: "beta" }), "merged elsewhere than main"], [pr({ repository: { nameWithOwner: "other/repo" } }), "another repository"],
+    [issue861({ state: "OPEN" }), "an issue still open"], [issue861({ closedByPullRequestsReferences: { nodes: [{ number: 876, mergedAt: null, baseRefName: "main", mergeCommit: null }] } }), "an issue closed by nothing merged"], [null, "nothing by that number"]])
+    assert.equal((await already(alreadySaid(), node)).verdict.deadEnds.length, 1, why);
+  const unreadable = { 783: { state: "CLOSED", stateReason: "COMPLETED", merges: [] } };
+  await A.addDeliveredByComment({ repo: REPO, issues: unreadable, comments: alreadySaid(), api: async () => ({ ok: false, status: 502, json: null }) });
+  assert.deepEqual(unreadable[783].merges, [], "GitHub not answering proves nothing; the next look reads it again");
+});
+
+test("ticket 03: a whole look writes the already-delivered ticket's Status line itself and goes on instead of waiting for the driver", async () => {
+  const rule = "an item that reaches a dead end leaves the release, the rest ships";
+  const issues = { ...closedBoth, 102: { state: "CLOSED", stateReason: "COMPLETED", merges: [] } };
+  const look = (comments) => {
+    const made = world({ issues, scenarioSeq: [{ result: "none" }, passed], planText: planFor(`The plan's rule: ${rule}.\n`) });
+    const plain = made.ctx.api;
+    made.ctx.api = async (method, p, body) => {
+      if (p === "/graphql" && /issueOrPullRequest/.test(body.query)) return { ok: true, json: { data: { repository: { a861: issue861() } } } };
+      const r = await plain(method, p, body);
+      for (const k of ["i102"]) r.json.data.repository[k].comments = { nodes: comments };
+      r.json.data.repository.labelled.nodes = r.json.data.repository.labelled.nodes.map((n) => (n.number === 102 ? { ...n, comments: { nodes: comments } } : n));
+      return r;
+    };
+    return made;
+  };
+  const before = look([]);
+  const waited = await A.autoStage(before.ctx);
+  assert.equal(waited.outcome, "waiting", "with nothing named, the ticket is a dead end the driver moves");
+  assert.ok(before.w.log.some((l) => /Waiting for the factory driver to move/.test(l)));
+  const after = look([{ author: { __typename: "Bot", login: "godspeed-dev-builder" }, body: "Already delivered on main by #861 with #590 and #795." }]);
+  const went = await A.autoStage(after.ctx);
+  assert.notEqual(went.why, "dead ends");
+  assert.ok(!after.w.log.some((l) => /Waiting for the factory driver/.test(l)), "it never waits on the driver for it");
+  assert.ok(after.w.files.get(`releases/${after.w.id}/tickets/02-b.md`).startsWith(`Status: done (merge ${MERGE_876})`), "the step wrote the Status line itself");
+});
+
 // ---------- a failed candidate is taken apart and rebuilt (auto-drive.mjs) ----------
 
 const RULE_LINE = "an item that reaches a dead end leaves the release, the rest ships";

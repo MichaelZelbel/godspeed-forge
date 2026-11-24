@@ -131,7 +131,8 @@ export function slotsReached(world, release, sealed, staging) {
     if (prs.some(p => p.requiredState === "success")) out.push({ slot: `${k}:green`, at: at((prs.find(p => p.requiredState === "success") || {}).requiredSince) });
     const merged = prs.find(p => p.merged);
     if (merged) out.push({ slot: `${k}:merged`, at: at(merged.mergedAt), commit: merged.mergeSha || null });
-    const closedWithMerge = item.state === "closed" && (!!merged || (item.mergedRefs || []).length > 0);
+    else if (item.delivered) out.push({ slot: `${k}:merged`, at: at(item.delivered.mergedAt), commit: item.delivered.commit || null }); // an App named where it is on main (delivery.mjs)
+    const closedWithMerge = item.state === "closed" && (!!merged || (item.mergedRefs || []).length > 0 || !!item.delivered);
     if (closedWithMerge) out.push({ slot: `${k}:closed`, at: at(item.closedAt) });
     if (closedWithMerge || (planned && planned.deferred)) out.push({ slot: `${k}:resolved`, at: at(item.closedAt) }); // a D-427 cut fills "resolved"
   }

@@ -190,10 +190,12 @@ export async function rung0(env, world, state, now, run = sysRun, writeTicket = 
       done[`rerun:${p.headSha}`] = now;
       const e = run("gh", ["api", "-X", "POST", `repos/${env.REPO}/actions/runs/${id}/rerun-failed-jobs`]); out.push({ did: `re-ran the failed checks of pull request ${p.number}`, ok: e.status === 0 });
     }
-    // a ticket whose issue GitHub shows closed by a merged pull request, with no done line in its file: write it
-    const merged = (item.prs || []).find(p => p.merged && p.mergeSha);
-    if (writeTicket && item.state === "closed" && merged && once(`done:${rel.id}#${t.item}`)) {
-      try { const did = await writeTicket(rel, t, merged.mergeSha); if (did) out.push({ did: `wrote the done line of item ${t.item} (merge ${merged.mergeSha.slice(0, 7)})`, ok: true }); } catch (e) { out.push({ did: `could not write the done line of item ${t.item}: ${String(e.message).slice(0, 120)}`, ok: false }); }
+    // a ticket whose issue GitHub shows closed by a merged pull request, or whose App comment names a delivery GitHub confirms
+    // (delivery.mjs), with no done line in its file: write it
+    const pr = (item.prs || []).find(p => p.merged && p.mergeSha);
+    const sha = pr ? pr.mergeSha : item.delivered && item.delivered.commit;
+    if (writeTicket && item.state === "closed" && sha && once(`done:${rel.id}#${t.item}`)) {
+      try { const did = await writeTicket(rel, t, sha); if (did) out.push({ did: `wrote the done line of item ${t.item} (merge ${sha.slice(0, 7)})`, ok: true }); } catch (e) { out.push({ did: `could not write the done line of item ${t.item}: ${String(e.message).slice(0, 120)}`, ok: false }); }
     }
   }
   // the dead-man's timer stays enabled (it does the same for the driver's)

@@ -92,6 +92,7 @@ import * as R from "./release-api.mjs";
 import * as G from "./staging.mjs";
 import { cfg as RELEASE, need, configText, configureFromEnv } from "./config.mjs";
 import { makeHalt, plainHaltWords, OWNER_YES_KEYS } from "./halts.mjs";
+import { deliveryClaims, alreadyQuery, alreadyMerges, namesIssue } from "../../delivery.mjs";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const HERE = path.dirname(THIS_FILE);
@@ -622,26 +623,21 @@ export async function readIssues({ api, repo, label, numbers }) {
 // a GitHub closing reference. Such a close counts as done only when all three hold: the comment is by
 // the builder or release App, the pull request it names is merged into main of this repository, and
 // that pull request's body or branch names the issue. Its merge commit is then the ticket's merge.
+// The Apps also close an issue whose work was on main before the release was filed with "Already delivered
+// on main by #N" (Godspeed beta.31's ticket 01, 2026-11-23): #N is a pull request merged into main of this
+// repository, or an issue closed by one, and the App's comment on the closed issue is itself the link (no
+// "names the issue" check). The newest such merge is the ticket's merge (../../delivery.mjs reads both kinds).
 export const deliveryAuthors = () => RELEASE.deliveryAuthors;
-const namesIssue = (pr, n, repo) => {
-  const [owner, name] = repo.split("/");
-  return new RegExp(String.raw`(?:^|[^\w])#${n}(?!\d)|github\.com/${esc(owner)}/${esc(name)}/issues/${n}(?!\d)`, "i").test(pr.body || "") ||
-    new RegExp(String.raw`(?:^|[/_-])(?:issue-?)?${n}(?=$|[/_-])`).test(pr.headRefName || "");
-};
-const esc = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export async function addDeliveredByComment({ api, repo, issues, comments }) {
   const [owner, name] = repo.split("/");
   const wanted = {}; // pull request number -> [issue numbers that name it in a delivery comment]
+  const already = {}; // number an "Already delivered on main by #N" comment names -> [issue numbers]
   for (const [n, issue] of Object.entries(issues)) {
     if (issue.state !== "CLOSED" || (issue.stateReason && issue.stateReason !== "COMPLETED") || (issue.merges || []).some((m) => m.mergedAt && m.commit && (!m.repo || m.repo.toLowerCase() === repo.toLowerCase()) && (!m.base || m.base === "main"))) continue;
-    for (const c of comments[n] || []) {
-      const by = String((c.author && c.author.login) || "").replace(/\[bot\]$/, "");
-      // Only the Apps: a person can register the same name, but GitHub types his comment User, not Bot.
-      if (!deliveryAuthors().includes(by) || !c.author || c.author.__typename !== "Bot") continue;
-      const m = String(c.body || "").match(new RegExp(String.raw`Delivered by https://github\.com/${esc(owner)}/${esc(name)}/pull/(\d+)`, "i"));
-      if (m) (wanted[m[1]] ||= []).push(Number(n));
-    }
+    // Only the Apps: a person can register the same name, but GitHub types his comment User, not Bot.
+    for (const claim of deliveryClaims(comments[n], { repo, apps: deliveryAuthors() })) ((claim.kind === "url" ? wanted : already)[claim.number] ||= []).push(Number(n));
   }
+  await addAlreadyDelivered({ api, repo, issues, already });
   const numbers = Object.keys(wanted);
   if (!numbers.length) return;
   const aliases = numbers.map((k) => `p${k}: pullRequest(number: ${Number(k)}) { number merged mergedAt baseRefName headRefName body mergeCommit { oid } }`).join("\n");
@@ -654,6 +650,21 @@ export async function addDeliveredByComment({ api, repo, issues, comments }) {
     for (const n of wanted[k]) {
       if (!namesIssue(pr, n, repo)) continue;
       issues[n].merges = [...(issues[n].merges || []), { number: pr.number, mergedAt: pr.mergedAt, commit: pr.mergeCommit.oid, repo, base: pr.baseRefName, viaComment: true }];
+    }
+  }
+}
+// The "Already delivered on main by #N" claims: what each #N is (a pull request, or an issue and what closed it), in one read.
+async function addAlreadyDelivered({ api, repo, issues, already }) {
+  const numbers = Object.keys(already);
+  if (!numbers.length) return;
+  const r = await api("POST", "/graphql", { query: alreadyQuery(repo, numbers) });
+  const data = r.ok && r.json && r.json.data && r.json.data.repository;
+  if (!data) return; // unreadable: the ticket stays "closed but no merged change", and the next look reads it again
+  for (const k of numbers) {
+    const merges = alreadyMerges(data[`a${Number(k)}`], repo);
+    for (const n of already[k]) {
+      const have = new Set((issues[n].merges || []).map((m) => m.commit));
+      issues[n].merges = [...(issues[n].merges || []), ...merges.filter((m) => !have.has(m.commit))];
     }
   }
 }

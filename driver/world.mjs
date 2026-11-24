@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { GODSPEED_RELEASE } from "./journal.mjs";
 import { readReleases, pickPlans, itemIssues, releaseLabel, planRepository, excludedIssues, requiredState, compareVersions, releaseVersion } from "./release-driver/release-driver.mjs";
+import { deliveryClaims, alreadyQuery, claimMerges } from "./delivery.mjs";
 
 // a unit this driver replaced (settings legacy_units, with or without .service/.timer) belongs to the old program, not to the factory
 // ONE predicate, used wherever a unit is started, restarted, re-enabled or turned into an obstacle: an entry with .service or .timer
@@ -40,6 +41,8 @@ export const defaultsFor = (e = process.env) => ({
   // The test machine's own module: its toolCoverage() says which hidden checks have no tool that can run
   // (2026-11-18: the driver never saw a missing tool; only Michael was told, by the test machine).
   TM_MODULE: e.FD_TM_MODULE || "",
+  // the builder and release Apps, whose comment on a closed issue may name where its work is on main (delivery.mjs)
+  APPS: [e.FD_BUILDER_APP, e.FD_RELEASE_APP].filter(Boolean),
 });
 
 const realDeps = env => ({
@@ -85,7 +88,7 @@ export function readTickets(rel, deps) {
 }
 
 // ------------------------------------------------------------ GitHub
-const comments = rows => (Array.isArray(rows) ? rows : []).map(c => ({ author: c.user ? c.user.login : "", body: String(c.body || ""), at: iso(c.created_at) }));
+const comments = rows => (Array.isArray(rows) ? rows : []).map(c => ({ author: c.user ? c.user.login : "", type: c.user ? c.user.type || "" : "", body: String(c.body || ""), at: iso(c.created_at) }));
 const labelNames = x => ((x && x.labels) || []).map(l => (typeof l === "string" ? l : l.name));
 
 function readPr(env, deps, n, unreadable) {
@@ -125,7 +128,24 @@ function readItem(env, deps, n, unreadable) {
     item.mergedRefs = [...new Set(((i.refs && i.refs.nodes) || []).filter(e => e && e.source && e.source.__typename === "PullRequest" && e.source.merged).map(e => e.source.number))];
   } catch (e) { unreadable.push({ part: `issue#${n}/prs`, error: e.message }); item.partial = true; }
   for (const pn of nums) { const p = readPr(env, deps, pn, unreadable); if (p) item.prs.push(p); else item.partial = true; }
+  readDelivery(env, deps, item, unreadable);
   return item;
+}
+// An issue closed as completed with no merged change linked to it: the builder or release App's comment may name where its work
+// is on main ("Delivered by <pull request URL>", "Already delivered on main by #N"), read exactly as the release step reads it
+// (delivery.mjs), so the two never disagree. item.claims: how many such comments; item.delivered: the newest merge they prove.
+function readDelivery(env, deps, item, unreadable) {
+  if (item.state !== "closed" || (item.stateReason && item.stateReason !== "completed") || item.prs.some(p => p.merged) || item.mergedRefs.length) return;
+  const claims = deliveryClaims(item.comments, { repo: env.REPO, apps: env.APPS });
+  item.claims = claims.length;
+  if (!claims.length) return;
+  try {
+    const d = deps.gh(["graphql", "-f", `query=${alreadyQuery(env.REPO, claims.map(c => c.number))}`]);
+    const data = d && d.data && d.data.repository;
+    if (!data) throw new Error("GitHub gave no answer about the delivery the App named");
+    const merges = claims.flatMap(c => claimMerges(c, data[`a${c.number}`], env.REPO, item.number)).sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt));
+    if (merges.length) item.delivered = merges[0];
+  } catch (e) { unreadable.push({ part: `issue#${item.number}/delivery`, error: e.message }); item.partial = true; }
 }
 
 // ------------------------------------------------------------ factory and server
