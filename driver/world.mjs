@@ -120,16 +120,19 @@ function readItem(env, deps, n, unreadable) {
   let nums = [], appComments;
   try {
     // the issue's newest 30 comments with their authors' type: the same window and shape the release step reads (auto-stage.mjs)
-    const q = `query { repository(owner: ${JSON.stringify(env.REPO.split("/")[0])}, name: ${JSON.stringify(env.REPO.split("/")[1])}) { issue(number: ${n}) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number } } timelineItems(last: 40, itemTypes: [CONNECTED_EVENT]) { nodes { ... on ConnectedEvent { subject { __typename ... on PullRequest { number } } } } } refs: timelineItems(last: 60, itemTypes: [CROSS_REFERENCED_EVENT]) { nodes { ... on CrossReferencedEvent { source { __typename ... on PullRequest { number merged mergedAt baseRefName mergeCommit { oid } } } } } } comments(last: 30) { nodes { body author { __typename login } } } } } }`;
+    const q = `query { repository(owner: ${JSON.stringify(env.REPO.split("/")[0])}, name: ${JSON.stringify(env.REPO.split("/")[1])}) { issue(number: ${n}) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number } } timelineItems(last: 40, itemTypes: [CONNECTED_EVENT]) { nodes { ... on ConnectedEvent { subject { __typename ... on PullRequest { number } } } } } refs: timelineItems(last: 60, itemTypes: [CROSS_REFERENCED_EVENT]) { nodes { ... on CrossReferencedEvent { source { __typename ... on PullRequest { number merged mergedAt baseRefName mergeCommit { oid } repository { nameWithOwner } } } } } } comments(last: 30) { nodes { body author { __typename login } } } } } }`;
     const d = deps.gh(["graphql", "-f", `query=${q}`]);
     const i = d.data.repository.issue;
     nums = [...new Set([...i.closedByPullRequestsReferences.nodes.map(x => x.number), ...i.timelineItems.nodes.filter(e => e && e.subject && e.subject.number).map(e => e.subject.number)])];
     // a merged pull request that only mentions the issue (seen live: #679 closed by #714, which does not
-    // close it by keyword): the item's change is on main, so it is never a dead end
-    const refs = ((i.refs && i.refs.nodes) || []).filter(e => e && e.source && e.source.__typename === "PullRequest" && e.source.merged).map(e => e.source);
+    // close it by keyword): the item's change is on main, so it is never a dead end. Only one of this repository merged into
+    // main counts: one merged elsewhere is not the item on main, and the release step would wait for a cut the driver never makes
+    const same = p => !p.repository || String(p.repository.nameWithOwner || "").toLowerCase() === String(env.REPO).toLowerCase();
+    const refs = ((i.refs && i.refs.nodes) || []).filter(e => e && e.source && e.source.__typename === "PullRequest" && e.source.merged).map(e => e.source)
+      .filter(p => same(p) && (!p.baseRefName || p.baseRefName === "main"));
     item.mergedRefs = [...new Set(refs.map(p => p.number))];
     // their merges into main, newest first: rung 0 writes the ticket's done line from one, so the release step counts it done too
-    item.mergedRefMerges = refs.filter(p => p.mergeCommit && p.mergeCommit.oid && p.baseRefName === "main").map(p => ({ number: p.number, commit: p.mergeCommit.oid, mergedAt: p.mergedAt })).sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt));
+    item.mergedRefMerges = refs.filter(p => p.mergeCommit && p.mergeCommit.oid && p.baseRefName === "main" && p.repository).map(p => ({ number: p.number, commit: p.mergeCommit.oid, mergedAt: p.mergedAt })).sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt));
     appComments = i.comments && Array.isArray(i.comments.nodes) ? i.comments.nodes : undefined;
   } catch (e) { unreadable.push({ part: `issue#${n}/prs`, error: e.message }); item.partial = true; }
   for (const pn of nums) { const p = readPr(env, deps, pn, unreadable); if (p) item.prs.push(p); else item.partial = true; }

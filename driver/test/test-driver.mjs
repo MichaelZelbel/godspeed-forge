@@ -712,7 +712,7 @@ test("ticket 03: rung 0 writes the done line of a ticket the App delivered, from
 });
 
 test("ticket 03: a ticket closed as completed that a merged pull request into main only mentions is done for the driver, and rung 0 writes its done line from that merge, so the release step counts it done too", async () => {
-  const f = closedTicketFixture({ closedAgoMin: 120, refs: [{ number: 876, mergedAt: "2026-11-17T10:00:00Z", baseRefName: "main", mergeCommit: { oid: MERGE_876 } }] });
+  const f = closedTicketFixture({ closedAgoMin: 120, refs: [{ number: 876, mergedAt: "2026-11-17T10:00:00Z", baseRefName: "main", mergeCommit: { oid: MERGE_876 }, repository: { nameWithOwner: REPO } }] });
   const wrote = [];
   const { rung0 } = await import("../duties.mjs");
   f.deps.rung0 = (env, world, state, now, run, write) => rung0(env, world, state, now, () => ({ status: 0, stdout: "enabled" }), write);
@@ -722,3 +722,17 @@ test("ticket 03: a ticket closed as completed that a merged pull request into ma
   for (const w of f.records.writes) for (const [file, text] of Object.entries(w.files)) if (/tickets\//.test(file)) wrote.push([file, text.split("\n")[0]]);
   assert.deepEqual(wrote, [[`releases/${ID}/tickets/${TICKETS[0]}`, `Status: done (merge ${MERGE_876})`]], "the done line, which the release step honours, so it never waits for a cut");
 });
+
+test("ticket 03: a mention by a pull request merged elsewhere than this repository's main is not the item on main: the driver cuts it, as the release step expects, and never writes a foreign merge as its done line", async () => {
+  for (const ref of [{ number: 877, mergedAt: "2026-11-17T10:00:00Z", baseRefName: "beta", mergeCommit: { oid: "b".repeat(40) }, repository: { nameWithOwner: REPO } },
+    { number: 12, mergedAt: "2026-11-17T10:00:00Z", baseRefName: "main", mergeCommit: { oid: "c".repeat(40) }, repository: { nameWithOwner: "someone/else" } }]) {
+    const f = closedTicketFixture({ closedAgoMin: 120, refs: [ref] });
+    const { rung0 } = await import("../duties.mjs");
+    f.deps.rung0 = (env, world, state, now, run, write) => rung0(env, world, state, now, () => ({ status: 0, stdout: "enabled" }), write);
+    const out = await round(f.env, f.deps);
+    assert.ok(out.obstacles.some(o => o.kind === "dead-end"), `${ref.repository.nameWithOwner}#${ref.number} into ${ref.baseRefName}: a dead end`);
+    assert.equal(amendmentWrites(f).length, 1, "moved by the cut");
+    assert.ok(!f.records.writes.some(w => Object.keys(w.files).some(k => /tickets\//.test(k))), "no done line from it");
+  }
+});
+
