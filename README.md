@@ -95,9 +95,9 @@ releases) are now steps of the driver.
 A release never stands still for an hour. Once its tickets are built, the driver keeps one clock for it, set by the
 release's own state: what the release step says about it, its stage and its staging record. Work it can check (a GitHub
 run on the release, the release step's own programs) pauses the clock while it runs; a helper saying "someone is on it"
-does not, unless it names that work and the driver sees it running. After 20 minutes without a change an AI helper
-starts, after 40 the other AI, and after 60 the repair program, and you get one message saying what was tried. The
-minutes are fixed in the code, and `godspeed-forge driver round --dry-run` shows each release's clock and its next step.
+does not, unless it names that work and the driver sees it running. Before 20 minutes pass without a change an AI helper
+starts, before 40 the other AI, and before 60 the repair program, and you get one message saying what was tried. The
+minutes are fixed in the code (each step comes in the driver's last five-minute round before its minute, never late), and `godspeed-forge driver round --dry-run` shows each release's clock and its next step.
 
 Setup installs it when it finishes as root on a Linux server with systemd. You can also install or upgrade it any
 time with `godspeed-forge driver install` (add `--switch` to turn off the older timers it replaces; they are switched

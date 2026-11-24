@@ -109,7 +109,7 @@ test("ticket 01: driver.mjs --dry-run says, for each release, the clock's minute
   for (let m = 0; m <= 25; m += 5) await s.round(m);
   const out = await round({ ...s.env, DRY: true }, { ...s.deps, now: () => T0 + 30 * MIN });
   const text = describe(out);
-  assert.match(text, new RegExp(`release ${ID}: the release clock: still for 30 minutes; next step: the other AI \\(rung 2\\) at minute 40`));
+  assert.match(text, new RegExp(`release ${ID}: the release clock: still for 30 minutes; next step: the other AI \\(rung 2\\) by minute 40`));
   assert.equal(s.launched.length, 1, "the dry run launched nothing");
   const fresh = server({ look: () => `Release ${ID} (2.0.0-beta.31): x.\nNot complete yet: waiting on #783.\nResult: waiting.\n` });
   const out2 = await round({ ...fresh.env, DRY: true }, fresh.deps);

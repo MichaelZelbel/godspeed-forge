@@ -1060,7 +1060,7 @@ export function describe(out) {
   lines.push(`inventory (${(out.inventory || []).length} entries, ${out.violations || 0} rule violations, ${out.actRunsToday || 0} acting runs in the last 24 h):`);
   for (const r of out.inventory || []) lines.push(`  ${describeRow(r, Date.now())}`);
   for (const p of out.stepPlan || []) lines.push(`step ${p.name}: ${p.text}`);
-  for (const k of out.standstill || []) lines.push(k.inStep ? `release ${k.id}: the release clock: still for ${k.minutes} minutes${(k.held || []).length ? `, held by ${k.held.join("; ")}` : ""}; next step: ${k.next.what} at minute ${k.next.at}${k.due.length ? ` (due now: ${k.due.join(", ")})` : ""}` : `release ${k.id}: no release clock (${k.why})`);
+  for (const k of out.standstill || []) lines.push(k.inStep ? `release ${k.id}: the release clock: still for ${k.minutes} minutes${(k.held || []).length ? `, held by ${k.held.join("; ")}` : ""}; next step: ${k.next.what} by minute ${k.next.at}${k.due.length ? ` (due now: ${k.due.join(", ")})` : ""}` : `release ${k.id}: no release clock (${k.why})`);
   lines.push(`obstacles (${out.steps.length}):`);
   for (const s of out.steps) lines.push(`  ${s.kind} ${s.key} since ${s.since}: ${s.do}${s.provider ? ` on ${s.provider}/${s.model}` : ""}${s.note ? ` (${s.note})` : ""}`);
   return lines.join("\n");
