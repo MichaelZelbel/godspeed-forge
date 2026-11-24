@@ -338,3 +338,13 @@ test("GitHub's runs that cannot be read are not 'no runs': the fresh read holds 
   assert.equal(s.requests.length, before.req); assert.equal(s.told.length, before.told);
   assert.ok(s.log().some(e => e.kind === "message held" && /runs could not be read/.test(e.why)));
 });
+
+test("a halt's rung that ended on the clock remembers which AI it ran on, so rung 2 is the other one", async () => {
+  const { advance } = await import("../inventory.mjs");
+  const entry = { id: "halt:test-machine:repair-halted", kind: "halt", step: "test-machine", owner: null, title: "halt", milestoneAt: T0 - 60 * MIN, limitH: 0, evidence: ["halted"] };
+  let a = advance([entry], {}, T0);
+  a.actions.launch.c.launched = true; a.actions.launch.c.launchedAt = T0; a.actions.launch.c.launchedProvider = "claude"; // rung 1 ran on Claude, still working
+  a = advance([entry], a.chain, T0 + 21 * MIN, { slotFree: false });
+  assert.equal(a.actions.launch.rung, 2);
+  assert.deepEqual(a.actions.launch.c.tries.map(t => [t.rung, t.provider]), [[1, "claude"]], "the driver picks the other provider from this try");
+});

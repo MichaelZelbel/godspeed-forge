@@ -795,7 +795,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       if (!provider && ["codex", "claude"].some(signedOut)) { record({ kind: "acting run waits", entry: L.entry.id, rung: L.rung, why: `its AI cannot sign in right now (${Object.keys(state.actLogin).join(", ")}); housekeeping links the sign-in again first` }); L = null; }
     }
     if (L && !dry) {
-      L.c.launched = true; L.c.launchedAt = now; // one launch per rung, whatever happens
+      L.c.launched = true; L.c.launchedAt = now; L.c.launchedProvider = provider; // one launch per rung, whatever happens
 
       const unit = nextActUnit(L.entry.id);
       try {
