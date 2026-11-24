@@ -234,7 +234,9 @@ export function tick(prev, { fp, work, now, lastRoundAt, journal = null }) {
   if (m >= STANDSTILL.otherAiMinutes && !c.done.other) due.push("other-ai");
   if (m >= STANDSTILL.repairMinutes && !c.done.repair) due.push("repair");
   if (m >= STANDSTILL.repairMinutes && !c.done.notice) due.push("notice");
-  return { clock: c, due };
+  // while live work holds the clock nothing is launched or sent, whatever was left due before (a rung that could not start earlier, a clock
+  // recovered from the journal): the steps come when the work ends
+  return { clock: c, due: held.length ? [] : due };
 }
 export const stillMinutes = c => Math.floor((c ? c.stillMs : 0) / MIN);
 // The next step and the minute it comes at (the clock's own minutes). -> {what, at}

@@ -357,3 +357,13 @@ test("the release is missing from a round's read (the records checkout could not
   assert.equal(s.requests.length, 1, "and the repair request still comes by minute 60, the gate judging it the same way");
   assert.equal(s.told.filter(t => /has not moved for about an hour/.test(t.text)).length, 1, "with its one notice");
 });
+
+test("a rung left due is not launched while live work holds the clock: the steps come when the work ends", async () => {
+  const { tick } = await import("../standstill.mjs");
+  const now = T0 + 30 * MIN;
+  const clock = { fp: "f", since: T0, stillMs: 30 * MIN, lastAt: now - 5 * MIN, cycleFrom: 0, done: {}, tries: [], launches: [] }; // 30 minutes still, nothing launched (a provider was signed out)
+  const held = tick(clock, { fp: "f", work: [{ what: "a run is building #616", until: now + 10 * MIN }], now, lastRoundAt: now - 5 * MIN });
+  assert.deepEqual(held.due, [], "nothing while a run is writing");
+  const after = tick(held.clock, { fp: "f", work: [], now: now + 15 * MIN, lastRoundAt: now });
+  assert.ok(after.due.includes("helper") && after.due.includes("other-ai"), "and both rungs when it ends");
+});
