@@ -3,6 +3,7 @@
 // the tickets it covers (no "no-progress", no "nothing to do").
 import crypto from "node:crypto";
 import { isWorking, ticketKeyOf } from "./progress.mjs";
+import { onMain } from "./delivery.mjs";
 
 export const KINDS = ["parked", "check-failed", "no-progress", "dead-end", "factory-idle", "factory-stopped", "factory-restarts", "main-red", "unreadable", "unit-failed", "disk", "memory", "stale-process", "login", "no-ai", "tools-missing"];
 export const TICKET_KINDS = ["parked", "check-failed", "no-progress", "dead-end"];
@@ -37,8 +38,9 @@ export function findObstacles(world, ledger = {}, now = Date.now(), cfg0 = {}) {
       const item = (world.items || {})[ticket.issue];
       if (!item) continue; // unreadable: its own obstacle says so
       const prs = item.prs || [];
-      // done: a merged pull request closed it or names it, or the builder or release App's comment names a delivery GitHub confirms
-      if (item.state === "closed" && (prs.some(p => p.merged) || (item.mergedRefs || []).length || item.delivered)) continue;
+      // done: a pull request merged into main closed it or names it, or the builder or release App's comment names a delivery
+      // GitHub confirms; a merge into another branch is not the item on main, as the release step judges it too
+      if (item.state === "closed" && (prs.some(onMain) || (item.mergedRefs || []).length || item.delivered)) continue;
       const base = { ticketKey: key, issue: ticket.issue };
       // closed without its change reaching main: the plan's dead-end rule (what auto-stage did until 2026-11-18). When the reading
       // of its comments found nothing at all named (item.claims === 0, world.mjs), it waits one round, not an hour, so the release

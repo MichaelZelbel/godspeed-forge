@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { GODSPEED_RELEASE } from "./journal.mjs";
 import { readReleases, pickPlans, itemIssues, releaseLabel, planRepository, excludedIssues, requiredState, compareVersions, releaseVersion } from "./release-driver/release-driver.mjs";
-import { deliveryClaims, alreadyQuery, claimMerges } from "./delivery.mjs";
+import { deliveryClaims, alreadyQuery, claimMerges, onMain } from "./delivery.mjs";
 
 // a unit this driver replaced (settings legacy_units, with or without .service/.timer) belongs to the old program, not to the factory
 // ONE predicate, used wherever a unit is started, restarted, re-enabled or turned into an obstacle: an entry with .service or .timer
@@ -104,7 +104,7 @@ function readPr(env, deps, n, unreadable) {
       requiredSt = requiredState(runs);
     }
     return {
-      number: n, state: String(p.state || "").toLowerCase(), merged: !!p.merged_at, mergedAt: iso(p.merged_at), mergeSha: p.merge_commit_sha || null, createdAt: iso(p.created_at), labels: labelNames(p),
+      number: n, state: String(p.state || "").toLowerCase(), merged: !!p.merged_at, mergedAt: iso(p.merged_at), mergeSha: p.merge_commit_sha || null, base: (p.base && p.base.ref) || null, createdAt: iso(p.created_at), labels: labelNames(p),
       headSha: sha || null, lastCommitAt, requiredState: requiredSt.state, requiredSince: iso(requiredSt.at),
       comments: comments(deps.gh([`repos/${env.REPO}/issues/${n}/comments?per_page=50`])),
     };
@@ -144,7 +144,7 @@ function readItem(env, deps, n, unreadable) {
 // (delivery.mjs), from the same comments, so the two never disagree. item.claims: how many such comments (left unset when the
 // comments were not read: then nothing is concluded from their absence); item.delivered: the newest merge they prove.
 function readDelivery(env, deps, item, comments, unreadable) {
-  if (item.state !== "closed" || (item.stateReason && item.stateReason !== "completed") || item.prs.some(p => p.merged) || item.mergedRefs.length || !comments) return;
+  if (item.state !== "closed" || (item.stateReason && item.stateReason !== "completed") || item.prs.some(onMain) || item.mergedRefs.length || !comments) return;
   const claims = deliveryClaims(comments, { repo: env.REPO, apps: env.APPS });
   item.claims = claims.length;
   if (!claims.length) return;

@@ -3,6 +3,7 @@
 // containment check, the goal between releases, and the rung 0 fixes that need no AI. Every outside call goes
 // through a `run` parameter, so each duty is tested offline.
 import fs from "node:fs";
+import { onMain } from "./delivery.mjs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { containment, containmentCommits, GODSPEED_RELEASE } from "./journal.mjs";
@@ -193,7 +194,7 @@ export async function rung0(env, world, state, now, run = sysRun, writeTicket = 
     // a ticket whose issue GitHub shows closed by a merged pull request, or closed as completed with an App comment naming a delivery
     // GitHub confirms (delivery.mjs) or a merged pull request into main that mentions it, with no done line in its file: write it.
     // The driver counts such a ticket as done, so the release step must too, or it waits for a cut that never comes (beta.31).
-    const pr = (item.prs || []).find(p => p.merged && p.mergeSha);
+    const pr = (item.prs || []).find(p => onMain(p) && p.mergeSha);
     const completed = item.state === "closed" && (!item.stateReason || item.stateReason === "completed");
     const ref = completed ? (item.mergedRefMerges || [])[0] : null;
     const sha = pr ? pr.mergeSha : item.delivered ? item.delivered.commit : ref ? ref.commit : null;

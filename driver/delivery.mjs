@@ -9,6 +9,8 @@
 // here, so they never disagree about whether a ticket is done. Only the Apps count: a person can register an App's name,
 // but GitHub types his comment User, not Bot. Pure: the comments and the GraphQL answers come in, merges go out.
 
+// A pull request linked to the item (world.mjs readPr) that delivered it to main. A reading without the base branch counts as main.
+export const onMain = p => !!p && !!p.merged && (!p.base || p.base === "main");
 const esc = t => String(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // A comment's author as both readers have it: GraphQL ({author: {login, __typename}}) or the REST shape the driver keeps
 // ({author: "<login>", type: "Bot"}).
