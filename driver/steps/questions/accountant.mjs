@@ -10,7 +10,7 @@
 //   nobody     none of these: a driver obstacle "factory question reached nobody", and after ALARM_MIN minutes one
 //              fixed message to the owner per question, never repeated
 import crypto from "node:crypto";
-import { keyOf, idOf, numberAndKey } from "./factory-owner-questions.mjs";
+import { numberAndKey, names } from "./factory-owner-questions.mjs";
 import { itemsOf } from "./choices.mjs";
 import { receipts } from "./pager.mjs";
 
@@ -30,14 +30,9 @@ export function headingsOf(body) {
   return numberAndKey(out).map(q => ({ title: q.heading, key: q.key, items: itemsOf(q.heading) }));
 }
 
-const HEAD = /^[\s#>*_`~]*(?:manager decision \(mission control|owner decision)\b/i;
-const firstLine = body => (String(body || "").split("\n").find(l => l.trim()) || "").trim();
-// a comment that decides this question: headed as a decision, and naming it by marker or by title
-export function names(body, key) {
-  if (!HEAD.test(firstLine(body))) return false;
-  const b = String(body || "");
-  return b.includes(`:${idOf(key)} -->`) || ` ${keyOf(b)} `.includes(` ${key} `);
-}
+// a comment that decides this question: headed as a decision, and naming it by marker or by title (one rule, kept beside
+// the questions step's own marker rule; the step reads its pages' decisions with it too)
+export { names };
 
 // The questions step's own record of a page: delivered while it holds a receipt and is not answered.
 export function deliveredKeys(questionsState) {
