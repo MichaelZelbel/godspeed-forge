@@ -692,8 +692,11 @@ export function writeLogin(env, ghDir, token) {
 export const guardedPaths = work => ({ work, ghDir: path.posix.join(work, "gh"), bin: path.posix.join(work, "bin"), repoDir: path.posix.join(work, "repo"), guardLog: path.posix.join(work, "guard.log") });
 // The environment the AI runs with (pure): the guard's shims first on its PATH, the run's own login,
 // and what the guard reads (the repository, the run's marker, the owner issue, the protected paths).
-export const guardedEnv = (env, p, { marker, ownerIssue = "", protectedPaths = [] }) => [`PATH=${p.bin}:${CLEAN_PATH}`, `GH_CONFIG_DIR=${p.ghDir}`, "GH_PROMPT_DISABLED=1", "GH_NO_UPDATE_NOTIFIER=1", "GIT_TERMINAL_PROMPT=0",
-  `RD_REPO=${env.REPO}`, `RD_MARKER=${marker}`, `RD_OWNER_ISSUE=${ownerIssue || ""}`, `RD_PROTECTED=${(protectedPaths || []).join(",")}`, `RD_GUARD_LOG=${p.guardLog}`];
+// The owner's login (RD_OWNER_LOGIN) makes the guard refuse any call made with it, and a finding (RD_FINDING, the obstacle in its
+// present state) makes it refuse a note already on its item (owner-guard.mjs, issue #152).
+export const guardedEnv = (env, p, { marker, ownerIssue = "", protectedPaths = [], owner = env.OWNER_LOGIN || process.env.FD_OWNER_LOGIN || "", finding = "" }) => [`PATH=${p.bin}:${CLEAN_PATH}`, `GH_CONFIG_DIR=${p.ghDir}`, "GH_PROMPT_DISABLED=1", "GH_NO_UPDATE_NOTIFIER=1", "GIT_TERMINAL_PROMPT=0",
+  `RD_REPO=${env.REPO}`, `RD_MARKER=${marker}`, `RD_OWNER_ISSUE=${ownerIssue || ""}`, `RD_PROTECTED=${(protectedPaths || []).join(",")}`, `RD_GUARD_LOG=${p.guardLog}`,
+  ...(owner ? [`RD_OWNER_LOGIN=${owner}`] : []), ...(finding ? [`RD_FINDING=${finding}`] : [])];
 // Sets up the guarded run in `work` (emptied first): a token-backed login, the gh and git shims that
 // call the guard, and a fresh clone of the product at origin/main. -> guardedPaths(work)
 export function prepareGuardedRun(env, work, { gitName = "Godspeed release driver", gitEmail = DRIVER_EMAIL } = {}) {

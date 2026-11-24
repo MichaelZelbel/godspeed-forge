@@ -41,6 +41,7 @@ import { countRescues } from "./rescues.mjs";
 import { forgeArgv } from "./release-driver/release-driver-owner-steps.mjs";
 import { gh as ghForge, SYSTEM_PATH } from "./release-driver/release-driver.mjs";
 import { devRecords, versionWords } from "./release-driver/release-driver-cut.mjs";
+import { asOwnerObstacles, findingOf } from "./owner-guard.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MIN = 60000, HOUR = 60 * MIN;
@@ -293,7 +294,7 @@ export async function round(env, deps = {}) {
       const r = (deps.helperResult || helperResult)(env, h.unit);
       if (r.state === "running") continue;
       const rep = r.report || {};
-      push(id, { at: r.endedAt || nowIso, helper: h.kind, provider: h.provider, model: h.model, unit: h.unit, outcome: r.state === "done" ? "ok" : (r.reason || "failed"),
+      push(id, { at: r.endedAt || nowIso, helper: h.kind, provider: h.provider, model: h.model, unit: h.unit, outcome: r.unchanged ? "unchanged" : r.state === "done" ? "ok" : (r.reason || "failed"),
         ...(rep.cause ? { cause: rep.cause } : {}), summary: String(rep.summary || r.reason || "").slice(0, 600),
         ...(rep.buildable !== undefined ? { buildable: rep.buildable } : {}), ...(rep.approach ? { approach: String(rep.approach).slice(0, 300) } : {}) });
       out.collected.push({ unit: h.unit, state: r.state, reason: r.reason || "" });
@@ -328,6 +329,9 @@ export async function round(env, deps = {}) {
         catch (e) { obstacles.push(...findObstacles({ ...world, releases: [], unreadable: [{ part: `release ${rel.id}`, error: String(e.message).slice(0, 200) }], factories: [], tools: null, server: null, main: null }, ledger, now, fcfg).filter(o => o.kind === "unreadable")); }
       }
     }
+    // a call a guard refused because it would have acted as the owner (owner-guard.mjs, issue #152) is an obstacle: on the record,
+    // in the status, and in the chain when the refusals go on
+    try { obstacles.push(...asOwnerObstacles({ actDir: env.ACT && env.ACT.ACT_DIR, helpersDir: path.join(env.STATE_DIR, "helpers") }, now, state.firstSeen)); } catch { /* an unreadable guard log hides nothing else */ }
     out.obstacles = obstacles;
     const ids = new Set(obstacles.map(o => o.id));
     for (const o of obstacles) {
@@ -805,7 +809,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       try {
         const h = await (deps.launchHelper || launchHelper)(henv, { unit, kind: s.do, provider: s.provider, model: s.model, briefFile: path.join(env.HELPERS_DIR, `${s.do}.md`),
           context: contextFor(env, ob, s, world, state.history[ob.id] || [], (deps.worldDeps && deps.worldDeps.readFile) || undefined),
-          ownerIssue: deps.ownerIssue !== undefined ? deps.ownerIssue : ownerIssueOf(gh, henv.REPO) });
+          ownerIssue: deps.ownerIssue !== undefined ? deps.ownerIssue : ownerIssueOf(gh, henv.REPO), finding: findingOf(ob) });
         state.seq[ob.id] = n;
         state.helpers[ob.id] = { unit, kind: s.do, provider: s.provider, model: s.model, startedAt: nowIso, obstacle: ob, title: title(ob) };
         running++;

@@ -32,6 +32,7 @@ import { codexTrouble, forgeArgv } from "./release-driver/release-driver-owner-s
 import { PROTECTED_DEFAULT } from "./release-driver/release-driver-guard.mjs";
 import { prepareGuardedRun, cleanupGuardedRun, guardedPaths, guardedEnv, writeLogin, mintToken, auditEvents, asForgeSh, FORGE_PATH, SYSTEM_PATH } from "./release-driver/release-driver.mjs";
 import { FREE_MODEL_ALLOWLIST } from "./ladder.mjs";
+import { findingMarker, FINDING_SHAPE } from "./owner-guard.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MIN = 60 * 1000, HOUR = 60 * MIN;
@@ -342,7 +343,9 @@ function freeSlot(env, deps) {
 
 // Writes the prompt and starts the helper's unit; returns at once. A unit name is used once.
 // context: values for the brief's {{PLACEHOLDERS}} (an object), or a text added under "Context".
-export async function launchHelper(env, { unit, kind, provider, model, briefFile, context = {}, cwd, runtimeMaxSec, protectedPaths = PROTECTED_DEFAULT, ownerIssue = "" }, deps = {}) {
+// finding: the obstacle in its present state (owner-guard.mjs findingOf): every note carries it, and one already on the item is
+// refused as unchanged (issue #152).
+export async function launchHelper(env, { unit, kind, provider, model, briefFile, context = {}, cwd, runtimeMaxSec, protectedPaths = PROTECTED_DEFAULT, ownerIssue = "", finding = "" }, deps = {}) {
   if (!UNIT_RE.test(String(unit))) throw new Error(`not a helper unit name: ${unit}`);
   if (!RUNTIME_MIN[kind]) throw new Error(`unknown helper kind: ${kind}`);
   if (!["codex", "claude", "openrouter"].includes(provider)) throw new Error(`unknown provider: ${provider}`);
@@ -360,12 +363,13 @@ export async function launchHelper(env, { unit, kind, provider, model, briefFile
   const seconds = Math.max(60, Math.round(Number(runtimeMaxSec) || RUNTIME_MIN[kind] * 60));
   const work = freeSlot(env, deps);
   const marker = markerOf(unit);
+  const found = FINDING_SHAPE.test(String(finding || "")) ? finding : "";
   const guarded = GUARDED_KINDS.includes(kind);
   let envList, runCwd;
   if (guarded) {
     const p = (deps.prepare || prepareGuardedRun)(env, work, { gitName: "Godspeed factory driver", gitEmail: DRIVER_EMAIL });
     // the guard's log lives with the helper's record, so it outlives the run folder
-    envList = guardedEnv(env, { ...p, guardLog: path.posix.join(dir, "guard.log") }, { marker, ownerIssue, protectedPaths });
+    envList = guardedEnv(env, { ...p, guardLog: path.posix.join(dir, "guard.log") }, { marker, ownerIssue, protectedPaths, finding: found });
     runCwd = cwd || p.repoDir;
   } else {
     (deps.prepareScratch || (w => asForgeSh(env, `set -eu; umask 077; rm -rf "${w}"; mkdir -p "${w}/tmp" "${w}/no-gh"`)))(work);
@@ -377,7 +381,7 @@ export async function launchHelper(env, { unit, kind, provider, model, briefFile
   // Claude Code lives in the factory user's own bin folder
   envList = envList.map(v => (v.startsWith("PATH=") ? `PATH=/home/${env.FORGE_USER}/.local/bin:${v.slice(5)}` : v));
   const vars = { RUN_ID: unit, NOW: `${iso(now).slice(0, 16).replace("T", " ")} UTC`, DATE: iso(now).slice(0, 10), MINUTES: String(Math.round(seconds / 60)), MODEL: `${provider} ${model}`,
-    MARKER: marker, RUN_DIR: work, REPO: env.REPO, ...serverVars(), OWNER_ISSUE: String(ownerIssue || "?"), PROTECTED: (protectedPaths || []).join(", "), ...(typeof context === "object" && context ? context : {}) };
+    MARKER: guarded && found ? `${marker} ${findingMarker(found)}` : marker, RUN_DIR: work, REPO: env.REPO, ...serverVars(), OWNER_ISSUE: String(ownerIssue || "?"), PROTECTED: (protectedPaths || []).join(", "), ...(typeof context === "object" && context ? context : {}) };
   let prompt = renderBrief(fs.readFileSync(briefFile, "utf8"), vars);
   if (typeof context === "string" && context.trim()) prompt += `\n\n## Context\n\n${context.trim()}\n`;
   fs.writeFileSync(path.join(dir, "prompt.md"), prompt, { mode: 0o600 }); own(path.join(dir, "prompt.md"));
@@ -442,7 +446,9 @@ export function helperResult(env, unit, deps = {}) {
   const refusals = read("guard.log").split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   const limit = !report && (run.forceExhausted || exhausted(errorText));
   const result = { state: report && !breaches.length ? "done" : "failed", provider: run.provider, model: run.model, kind: run.kind, startedAt: run.startedAt, endedAt: (exit && exit.at) || iso(now),
-    exhausted: !!limit, trouble: report ? "" : codexTrouble(errorText), breaches, refusals };
+    exhausted: !!limit, trouble: report ? "" : codexTrouble(errorText), breaches, refusals,
+    // its note was already on the item for the obstacle in this same state: the driver records "unchanged" (issue #152)
+    ...(refusals.some(r => r && r.unchanged) ? { unchanged: true } : {}) };
   if (report && !breaches.length) result.report = report;
   else if (breaches.length) result.reason = `audit: ${[...new Set(breaches.map(b => b.why))].join("; ")}`;
   else if (!exit) result.reason = "no report: the helper ended without finishing (killed, timed out or crashed)";
