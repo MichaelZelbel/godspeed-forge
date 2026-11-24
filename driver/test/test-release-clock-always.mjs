@@ -173,16 +173,53 @@ test("the dry run says, for each release, where it is, the minutes without progr
   assert.match(text, new RegExp(`release ${ID32}: the release clock: still for 30 minutes; next step: the other AI \\(rung 2\\) by minute 40.*where it is: 1 of 8 tickets unfinished \\(#616: open, no live claim and no run on it, no pull request\\)`));
 });
 
-test("the loop's claims on a ticket: a claim that was released or withdrawn is no claim, one in both comment windows counts once", async () => {
+test("the loop's claims on a ticket: a claim that was released or withdrawn is no claim, one in both comment windows counts once, and only the factory's own accounts can make one", async () => {
   const { loopClaimsOf } = await import("../world.mjs");
+  const bot = "godspeed-dev-builder[bot]";
   const got = loopClaimsOf([
-    { body: "Loop claim: run abc123\nArea: x", at: "2026-11-24T20:00:00Z" },
-    { body: "Loop claim released", at: "2026-11-24T19:00:00Z" },
-    { body: "Loop claim withdrawn", at: "2026-11-24T19:10:00Z" },
-    { body: "Loop claim: run abc123\nArea: x", at: "2026-11-24T20:00:00Z" },
-    { body: "Manager decision: start now", at: "2026-11-24T20:30:00Z" },
-  ]);
+    { body: "Loop claim: run abc123\nArea: x", at: "2026-11-24T20:00:00Z", author: bot },
+    { body: "Loop claim released", at: "2026-11-24T19:00:00Z", author: bot },
+    { body: "Loop claim withdrawn", at: "2026-11-24T19:10:00Z", author: bot },
+    { body: "Loop claim: run abc123\nArea: x", at: "2026-11-24T20:00:00Z", author: bot },
+    { body: "Loop claim: run fake-run", at: "2026-11-24T20:10:00Z", author: "a-stranger" }, // the repository is public
+    { body: "Manager decision: start now", at: "2026-11-24T20:30:00Z", author: bot },
+  ], [bot.toLowerCase(), "boss"]);
   assert.deepEqual(got, [{ run: "abc123", at: "2026-11-24T20:00:00Z" }]);
+});
+
+test("a claim whose run cannot be checked holds the clock for half an hour at most, not three hours", async () => {
+  const unreadable = (now, m) => ({ ...world32(now, m, { claim: "run-616" }), unreadable: [{ part: "factory/x/runs", error: "no CLI" }] });
+  const s = server({ worldAt: unreadable, look: () => LOOK32 });
+  for (let m = 0; m <= 90; m += 5) await s.round(m);
+  const first = s.launched.find(l => l.entry === `standstill:${ID32}`);
+  assert.ok(first && first.minute >= 30 && first.minute <= 55, `held until 31, then the 20 minutes count (first step at ${first && first.minute})`);
+});
+
+test("the owner's go survives a stage look that cannot be read for a round: the release does not wake up and page", async () => {
+  let readable = true;
+  const s = server({ look: m => (readable ? `${HEAD(ID, "2.0.0-beta.31")}Already staged and announced at 2026-11-23T20:00:00Z; nothing to do.\n` : null) });
+  s.deps.stageLook = async () => { if (!readable) throw new Error("the look cannot be read"); return `${HEAD(ID, "2.0.0-beta.31")}Already staged and announced at 2026-11-23T20:00:00Z; nothing to do.\n`; };
+  for (let m = 0; m <= 30; m += 5) await s.round(m);
+  readable = false;
+  for (let m = 35; m <= 150; m += 5) await s.round(m);
+  assert.deepEqual(s.launched, [], "waiting for the go, whether or not this round could read the look");
+});
+
+test("the minute-60 notice is held when the tickets, read again, show progress since the round began", async () => {
+  let progressed = false;
+  const s = server({ worldAt: (now, m) => world32(now, m, { prHead: () => (progressed ? "c".repeat(40) : "a".repeat(40)) }), look: () => LOOK32 });
+  const first = s.deps.readWorld; let reads = 0;
+  s.deps.readWorld = async (...a) => { reads++; return first(...a); };
+  for (let m = 0; m <= 50; m += 5) await s.round(m);
+  const before = s.told.length;
+  // the round at minute 55 reads the world once with no progress, and the fresh read (second call) sees a new commit
+  s.deps.readWorld = async (...a) => { reads++; const w = await first(...a); if (reads % 2 === 0) { progressed = true; } return w; };
+  progressed = false;
+  const calls = []; const orig = s.deps.readWorld;
+  s.deps.readWorld = async (...a) => { calls.push(1); if (calls.length >= 2) progressed = true; return orig(...a); };
+  await s.round(55);
+  assert.equal(s.told.length, before, "no notice: the fresh read of the tickets showed a new commit");
+  assert.ok(s.log().some(e => e.kind === "message held"), "recorded as held");
 });
 
 test("the test machine's repair halt of 2026-11-22, built from the live record: a halt is a standstill, an acting run at once, the other AI by minute 40, the owner told by minute 60", async () => {

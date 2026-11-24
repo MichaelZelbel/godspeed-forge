@@ -124,7 +124,8 @@ export function buildingState({ release, world, now, activity = null }) {
     let held = false;
     for (const c of claims) {
       const r = runs.get(c.run);
-      if (!runsRead) { work.push({ what: `a live claim on #${t.issue} (the factory's runs could not be read)`, until: Date.parse(c.at) + STANDSTILL.claimHours * H }); held = true; }
+      // no evidence the run still writes: a claim holds no longer than a silent run does
+      if (!runsRead) { work.push({ what: `a live claim on #${t.issue} (the factory's runs could not be read)`, until: Math.min(Date.parse(c.at) + STANDSTILL.claimHours * H, Date.parse(c.at) + STANDSTILL.silentMinutes * MIN) }); held = true; }
       else if (r) {
         const last = Date.parse(r.lastOutputAt || r.startedAt);
         const until = Math.min(Date.parse(c.at) + STANDSTILL.claimHours * H, (Number.isFinite(last) ? last : now) + STANDSTILL.silentMinutes * MIN);

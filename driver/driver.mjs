@@ -540,7 +540,10 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       // before it says so), and the release then waits for him.
       const relObj = (world.releases || []).find(r => r.id === rel.id) || null;
       let bld = null; try { bld = relObj ? buildingState({ release: relObj, world, now, activity }) : null; } catch (e) { record({ kind: "release clock: tickets unreadable", release: rel.id, why: String(e.message).slice(0, 160) }); }
-      const waitingGo = about && lookKnown && /^Already staged and announced at /m.test(stageText);
+      // the owner's go: this round's look says so, or (the look cannot be read now) the last round's did
+      state.waitingGo ||= {};
+      const waitingGo = (about && lookKnown && /^Already staged and announced at /m.test(stageText)) || (!lookKnown && !!state.waitingGo[rel.id]);
+      if (lookKnown) { if (waitingGo) state.waitingGo[rel.id] = true; else delete state.waitingGo[rel.id]; }
       let step = waitingGo ? { yes: false, why: "the release is staged and announced, and waits for the owner's go" }
         : relObj && (() => { try { return pageNamesRelease(world.deliveredPages, relObj); } catch { return false; } })() ? { yes: false, why: "a question of money, publishing or deleting that names this release was delivered to the owner (receipt), and waits for his answer" }
         : rel.unread ? { yes: true, why: "this round's read does not list it, and the journal holds it open; the clock goes on" }
@@ -586,8 +589,13 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
           // apart); the release's own sources are read again right now and must agree, and none may be unreadable
           // the same rules as the clock: what cannot be read is unchanged (so the hour is never missed), what has changed holds it
           let text2 = null, known2 = false; try { text2 = await (deps.stageLook || stageLookReal)(env); known2 = typeof text2 === "string"; } catch { known2 = false; }
-          const freshRel = (worldNow.releases || []).find(r => r.id === k.id) || null;
-          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null, (() => { try { return freshRel ? buildingState({ release: freshRel, world: worldNow, now, activity }) : null; } catch { return null; } })());
+          // the tickets are read again too (a ticket closing, a pull request's new commit or comment, a new claim or a run since this round's
+          // first read is progress); a read that fails holds the message
+          let freshWorld = null, freshActivity = null;
+          try { freshWorld = await (deps.readWorld || readWorld)(env, { gh, sh: deps.sh || shFor(env), ...(deps.worldDeps || {}) }); freshActivity = await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, freshWorld); } catch { freshWorld = null; }
+          if (!freshWorld) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "the tickets could not be read again" }); continue; }
+          const freshRel = (freshWorld.releases || []).find(r => r.id === k.id) || null;
+          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null, (() => { try { return freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity }) : null; } catch { return null; } })());
           const gone = fresh.files.staging && fresh.files.staging.status === "installed" ? "it is installed now" : !(deps.planApproved || planStillApproved)(env, k.id) ? "its plan is no longer approved" : null;
           if (fresh.fp !== sc.fp || gone) { record({ kind: "message held", entry: `standstill:${k.id}`, why: gone || "the release moved in the fresh read" }); continue; }
           const words = versionWords(k.version || "");

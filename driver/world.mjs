@@ -115,11 +115,14 @@ function readPr(env, deps, n, unreadable) {
 // "withdrawn", so the ones that still start that way are the live ones). The first 50 comments and the newest 30 are read, and a
 // comment in both is counted once. -> [{run, at}], newest last
 export const CLAIM_PREFIX = /^Loop claim: run (\S+)/;
-export function loopClaimsOf(comments) {
+// Only a claim written by one of the accounts that may decide (the owner and the two Apps, FD_TRUSTED_LOGINS; the loop's claims come from
+// the builder App) counts: anyone can write "Loop claim" on a public repository. With no list configured every claim counts.
+export function loopClaimsOf(comments, trusted = String(process.env.FD_TRUSTED_LOGINS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean)) {
   const seen = new Set(), out = [];
   for (const c of comments || []) {
     const m = CLAIM_PREFIX.exec(String(c.body || ""));
     if (!m || !c.at) continue;
+    if (trusted.length && !trusted.includes(String(c.author || "").toLowerCase())) continue;
     const k = `${m[1]}@${c.at}`;
     if (seen.has(k)) continue;
     seen.add(k); out.push({ run: m[1], at: c.at });
@@ -151,7 +154,7 @@ function readItem(env, deps, n, unreadable) {
     // their merges into main, newest first: rung 0 writes the ticket's done line from one, so the release step counts it done too
     item.mergedRefMerges = refs.filter(p => p.mergeCommit && p.mergeCommit.oid && p.baseRefName === "main" && p.repository).map(p => ({ number: p.number, commit: p.mergeCommit.oid, mergedAt: p.mergedAt })).sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt));
     appComments = i.comments && Array.isArray(i.comments.nodes) ? i.comments.nodes : undefined;
-    item.loopClaims = loopClaimsOf([...item.comments.map(c => ({ body: c.body, at: c.at })), ...(appComments || []).map(c => ({ body: c.body, at: iso(c.createdAt) }))]);
+    item.loopClaims = loopClaimsOf([...item.comments.map(c => ({ body: c.body, at: c.at, author: c.author })), ...(appComments || []).map(c => ({ body: c.body, at: iso(c.createdAt), author: c.author && c.author.login }))]);
   } catch (e) { unreadable.push({ part: `issue#${n}/prs`, error: e.message }); item.partial = true; }
   for (const pn of nums) { const p = readPr(env, deps, pn, unreadable); if (p) item.prs.push(p); else item.partial = true; }
   readDelivery(env, deps, item, appComments, unreadable);
