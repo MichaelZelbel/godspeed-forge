@@ -265,5 +265,9 @@ testCase("any app store counts, serving someone instead of the current people is
   for (const t of ["launching in an app store", "listing it in an app store"]) assert.equal((categoryOf(t) || {}).category, "publish", t);
   const p = pickOption({ heading: "h", body: "Options: (a) keep it for individual users; (b) serve teams instead of individual users. Recommendation: (b)." });
   assert.equal(p.how, "keeps the mission"); assert.equal(p.option.label, "a");
+  for (const b of ["target teams instead of individuals", "built for teams instead of individuals", "made for teams instead of individuals"]) {
+    const x = pickOption({ heading: "h", body: `Options: (a) keep it for individuals; (b) ${b}. Recommendation: (b).` });
+    assert.equal(x.option.label, "a", b);
+  }
   assert.equal(pickOption({ heading: "h", body: "- **A.** Rewrite.\n- **B.** Keep it.\n\nNOT recommended: A" }).option.label, "b");
 }

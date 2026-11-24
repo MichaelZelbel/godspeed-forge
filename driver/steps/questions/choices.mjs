@@ -74,7 +74,7 @@ const score = t => (String(t).match(UNDOABLE) || []).length - 2 * (String(t).mat
 // what the project is: its mission, its purpose, who it is for. An option that changes one of these is never taken for
 // him; the option that keeps it is.
 const MISSION = /\b(?:mission|purpose|audience|target (?:group|users|market)|(?:new|different|another|other) (?:kind of users|market)|who (?:it|the (?:\w+ )?(?:product|app|project|site|service)) (?:is for|serves|is meant for)|whom (?:it|the \w+) serves|what the (?:product|app|project) is|(?:serve|serves|serving|target|targets|targeting|built for|made for|meant for) (?:\w+ ){0,3}instead of)\b/i;
-const CHANGES = /\b(?:amend|amends|amendment|change|changes|changing|new|different|another|widen|widens|narrow|narrows|redefine|redefines|replace|replaces|pivot|serve|serves)\b/i;
+const CHANGES = /\b(?:amend|amends|amendment|change|changes|changing|new|different|another|widen|widens|narrow|narrows|redefine|redefines|replace|replaces|pivot|serve|serves|serving|target|targets|targeting|instead of)\b/i;
 
 // The option Mission Control takes for a question the owner is not asked.
 // -> {how: "recommended" | "keeps the mission" | "most reversible", label, option, text, recommendation} | null (nothing to pick
