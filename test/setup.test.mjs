@@ -249,6 +249,17 @@ for (const [answers, action, retries] of [
   assert.deepEqual(said, Array(retries).fill('Setup expects yes or no here, so it asks again.'));
 }
 
+for (const [env, base] of [[{}, 'https://api.github.com'], [{ FORGE_GITHUB_API_URL: '' }, 'https://api.github.com'], [{ FORGE_GITHUB_API_URL: 'http://127.0.0.1:9/' }, 'http://127.0.0.1:9']]) {
+  testCase(`the GitHub adapter asks ${base} when FORGE_GITHUB_API_URL is ${JSON.stringify(env.FORGE_GITHUB_API_URL)}`);
+  const asked = [];
+  const github = createGithubAdapter({
+    input: { question: async () => 'yes' }, env,
+    fetch: async url => { asked.push(url); return { status: 200, ok: true, json: async () => ({}) }; }
+  });
+  await github.exchange('a code');
+  assert.deepEqual(asked, [`${base}/app-manifests/a%20code/conversions`]);
+}
+
 testCase('a typed y then yes at the organization question opens the organization App page');
 {
   const typed = new PassThrough();

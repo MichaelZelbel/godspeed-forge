@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 . scenarios/support/common.sh
 
 owner_requests_setup() {
-  scenario_fail "Forge setup cannot run offline yet: creating its GitHub Apps calls https://api.github.com directly (lib/github-adapter.mjs)"
+  scenario_fail "Forge setup cannot finish offline yet: the stand-in GitHub lacks gh repo clone, gh auth and gh api, and setup downloads the factory and Archon from github.com (lib/setup.mjs)"
 }
 
 assert_setup_result() {

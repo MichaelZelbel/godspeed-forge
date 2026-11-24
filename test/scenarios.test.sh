@@ -40,7 +40,7 @@ python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["remote"] == "
 [ "$(git --git-dir="$scenario_root/remote.git" symbolic-ref HEAD)" = refs/heads/main ]
 printf '%s\n' "$scenario_root" >>"$FAKE_DOCKER_LOG"
 case "$script" in
-  forge-setup.sh) echo "Forge setup cannot run offline yet: creating its GitHub Apps calls https://api.github.com directly (lib/github-adapter.mjs)" ;;
+  forge-setup.sh) echo "Forge setup cannot finish offline yet: the stand-in GitHub lacks gh repo clone, gh auth and gh api, and setup downloads the factory and Archon from github.com (lib/setup.mjs)" ;;
   forge-one-release.sh) echo "The owner's go did not publish the release" ;;
   forge-questions.sh) echo "A build question reached the owner" >&2 ;;
   *) exit 64 ;;
@@ -65,7 +65,7 @@ set -e
 [ "$one_status" -ne 0 ]
 [ "$two_status" -ne 0 ]
 test_case "each run reports the same three named failures and 0 of 3 pass"
-expected='FAIL forge-setup: Forge setup cannot run offline yet: creating its GitHub Apps calls https://api.github.com directly (lib/github-adapter.mjs)
+expected='FAIL forge-setup: Forge setup cannot finish offline yet: the stand-in GitHub lacks gh repo clone, gh auth and gh api, and setup downloads the factory and Archon from github.com (lib/setup.mjs)
 FAIL forge-one-release: The owner'"'"'s go did not publish the release
 FAIL forge-questions: A build question reached the owner
 0 of 3 pass'
