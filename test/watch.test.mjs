@@ -1,7 +1,7 @@
 // The page where the owner watches the factory (lib/watch.mjs), its chat answer (lib/owner/watch.mjs) and the lines
 // setup ends with. The server is a stand-in: a folder of the test's own is its file system, and systemctl, docker, git,
 // bun, caddy and the page's answers are stand-ins, so nothing is installed and nothing reaches the network.
-// test cases: 20
+// test cases: 26
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -11,7 +11,7 @@ import { testCase } from './cases.mjs';
 import { assertPlain } from './forge-owner-fakes.mjs';
 import { ARCHON_REVISION, ARCHON_SOURCE } from '../lib/constants.mjs';
 import {
-  ADDON_DIR, CONTAINER, DOCKER_CADDYFILE, KEEP_UNIT, NOT_HERE, PAGES_DIR, SAY, SITE_FILE, UNIT, USER, WHY,
+  ADDON_DIR, CONTAINER, DOCKER_CADDYFILE, FORGE_CADDYFILE, FORGE_UNIT, KEEP_UNIT, NOT_HERE, PAGES_DIR, SAY, SITE_FILE, UNIT, USER, WHY,
   dockerCaddyfile, ensureWatchPage, factoryArchon, pageDir, readRecord, runWatchCommand, siteText, watchLines
 } from '../lib/watch.mjs';
 import { SAY as CHAT, watch as chatWatch } from '../lib/owner/watch.mjs';
@@ -43,15 +43,23 @@ function nativeGodspeed(root, { host = 'srv2.example.org', addons = true } = {})
 }
 
 // The stand-in server's commands and the page's answers.
-function server(root, { listening = '', validateFails = false, buildFails = false, answersOutside = true, active = [], refuse = null, badRevision = null } = {}) {
+function server(root, { tailnet = null, hostname = null, addresses = '', caddyInstalled = true, apt = true, restartFails = false, listening = '', validateFails = false, buildFails = false, answersOutside = true, active = [], refuse = null, badRevision = null } = {}) {
   const calls = [];
   // frontImage: the image Godspeed's own Caddy runs; an image in brokenImages does not start, one in stoppingImages stops at once.
-  const state = { active: new Set(active), container: null, restarts: 0, runs: 0, frontImage: 'caddy:2.10.2-alpine', brokenImages: new Set(), stoppingImages: new Set() };
+  const state = { caddy: caddyInstalled, active: new Set(active), container: null, restarts: 0, runs: 0, frontImage: 'caddy:2.10.2-alpine', brokenImages: new Set(), stoppingImages: new Set() };
   const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
   const run = async (command, args = [], options = {}) => {
     calls.push({ command, args, options });
+    if (command === 'tailscale') return tailnet ? ok(JSON.stringify({ BackendState: 'Running', Self: { DNSName: `${tailnet}.` } })) : { status: 127, stdout: '', stderr: 'not found' };
+    if (command === 'hostname') return hostname ? ok(`${hostname}\n`) : ok('localhost\n');
+    if (command === 'ip') return ok(addresses);
+    if (command === 'getent') return ok(args[1] === 'host.example.net' ? '203.0.113.7 STREAM host.example.net\n' : args[1] === 'elsewhere.example.net' ? '198.51.100.9 STREAM elsewhere.example.net\n' : '');
+    if (command === 'bash' && args[1] === 'command -v caddy') return state.caddy ? ok('/usr/bin/caddy\n') : { status: 1, stdout: '', stderr: '' };
+    if (command === 'bash' && args[1] === 'command -v apt-get') return apt ? ok('/usr/bin/apt-get\n') : { status: 1, stdout: '', stderr: '' };
+    if (command === 'bash' && args[1].includes('apt-get -o DPkg::Lock::Timeout=600 install -y -qq caddy')) { state.caddy = true; return ok(); }
     if (command === 'systemctl') {
       const [verb, ...rest] = args;
+      if (verb === 'restart' && restartFails && rest[0] === FORGE_UNIT) return { status: 1, stdout: '', stderr: 'Job for godspeed-forge-https.service failed' };
       if (verb === refuse) return { status: 1, stdout: '', stderr: 'Failed to enable unit: Access denied' };
       if (verb === 'is-active') return state.active.has(rest.at(-1)) ? ok() : { status: 3, stdout: '', stderr: '' };
       if (verb === 'restart' || verb === 'start') { state.active.add(rest[0]); if (rest[0] === `${UNIT}.service`) state.restarts++; }
@@ -90,7 +98,7 @@ function server(root, { listening = '', validateFails = false, buildFails = fals
     }
     if (command === 'chmod') return ok();
     if (command === 'ss') return ok(listening);
-    if (command === '/usr/local/bin/caddy') return validateFails ? { status: 1, stdout: '', stderr: 'Error: adapting config: unrecognized directive: basic_auth' } : ok();
+    if (command === '/usr/local/bin/caddy' || command === '/usr/bin/caddy') return validateFails ? { status: 1, stdout: '', stderr: 'Error: adapting config: unrecognized directive: basic_auth' } : ok();
     return { status: 127, stdout: '', stderr: 'not found' };
   };
   // The page's answers: Archon on this server while its service runs; over HTTPS, while a site is published, the request
@@ -100,7 +108,7 @@ function server(root, { listening = '', validateFails = false, buildFails = fals
     asked.push(question);
     if (!question.secure) return state.active.has(`${UNIT}.service`) && !(badRevision && read(at(root, `/etc/systemd/system/${UNIT}.service`)).includes(badRevision)) ? 200 : 0;
     if (!answersOutside) return 0;
-    return state.container || read(at(root, SITE_FILE)) ? 401 : 0;
+    return state.container || read(at(root, SITE_FILE)) || (state.active.has(FORGE_UNIT) && read(at(root, FORGE_CADDYFILE))) ? 401 : 0;
   };
   return { run, ask, calls, state, asked };
 }
@@ -254,7 +262,7 @@ testCase("without Godspeed's web address, or with a Godspeed too old to give add
 {
   const none = fresh();
   const s = server(none);
-  assert.deepEqual(await page(none, s).go(), { ok: false, why: WHY.noFront });
+  assert.deepEqual(await page(none, s).go(), { ok: false, why: WHY.noOwnName });
   assert.equal(read(at(none, `/etc/systemd/system/${UNIT}.service`)), null);
   assert.ok(!s.calls.some(c => c.command === 'git'), 'nothing downloaded');
   const old = fresh();
@@ -262,6 +270,115 @@ testCase("without Godspeed's web address, or with a Godspeed too old to give add
   const o = server(old);
   assert.deepEqual(await page(old, o).go(), { ok: false, why: WHY.oldGodspeed });
   assert.equal(read(at(old, `/etc/systemd/system/${UNIT}.service`)), null);
+}
+
+const ADDRESSES = '2: eth0    inet 203.0.113.7/24 brd 203.0.113.255 scope global eth0\n';
+
+testCase('with no Godspeed web address, a server on a tailnet gets the page through a Caddy of the Forge\'s own, signed in, and no firewall line');
+{
+  const root = fresh();
+  const s = server(root, { tailnet: 'forge-box.tail1234.ts.net' });
+  const p = page(root, s);
+  const r = await p.go();
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const record = readRecord(p.paths, fs);
+  assert.equal(record.front, 'forge');
+  assert.equal(record.host, 'forge-box.tail1234.ts.net');
+  const caddyfile = read(at(root, FORGE_CADDYFILE));
+  assert.equal(caddyfile, dockerCaddyfile(siteText({ host: record.host, port: record.port, upstream: record.upstream, user: USER, hash: HASH })));
+  const unit = read(at(root, `/etc/systemd/system/${FORGE_UNIT}`));
+  for (const line of ['ExecStart="/usr/bin/caddy" run --config "/opt/godspeed-forge/https/own.Caddyfile" --adapter caddyfile', 'ProtectSystem=strict', 'NoNewPrivileges=true', 'Restart=always', 'WantedBy=multi-user.target']) assert.ok(unit.includes(`${line}\n`), line);
+  const lines = commandLines(s);
+  const order = ['/usr/bin/caddy validate --config /opt/godspeed-forge/https/own.Caddyfile --adapter caddyfile', 'systemctl daemon-reload', `systemctl enable ${FORGE_UNIT}`, `systemctl restart ${FORGE_UNIT}`].map(l => lines.lastIndexOf(l));
+  assert.ok(order.every((i, k) => i >= 0 && (k === 0 || i > order[k - 1])), `published in order: ${lines.join('\n')}`);
+  assert.ok(!lines.some(l => l.includes('apt-get') || l === 'systemctl disable --now caddy.service'), 'Caddy was there: nothing installed, no service touched');
+  const said = await watchLines({ ensure: async () => r, platform: 'linux', uid: 0, systemd: () => true });
+  assert.equal(said.lines.length, 1, 'a tailnet name needs no word about the hosting company firewall');
+  assert.ok(said.lines[0].includes(`https://${record.host}:${record.port}`));
+  // the same again changes nothing
+  const calls = s.calls.length;
+  assert.equal((await page(root, s).go()).ok, true);
+  assert.ok(!commandLines({ calls: s.calls.slice(calls) }).some(l => l === `systemctl restart ${FORGE_UNIT}`), 'a web server that runs is not restarted');
+}
+
+testCase('with no Godspeed web address and no tailnet, a DNS name that points at this server with port 80 free gives the page its address; anything else is one sentence and nothing is written');
+{
+  const root = fresh();
+  const s = server(root, { hostname: 'host.example.net', addresses: ADDRESSES, listening: 'LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*\n' });
+  const r = await page(root, s).go();
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.record.host, 'host.example.net');
+  assert.equal(r.record.front, 'forge');
+  for (const [label, options] of [
+    ['port 80 is taken', { hostname: 'host.example.net', addresses: ADDRESSES, listening: 'LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\n' }],
+    ['the name points elsewhere', { hostname: 'elsewhere.example.net', addresses: ADDRESSES }],
+    ['the name has no dot', { hostname: null, addresses: ADDRESSES }],
+  ]) {
+    const other = fresh();
+    const o = server(other, options);
+    assert.deepEqual(await page(other, o).go(), { ok: false, why: WHY.noOwnName }, label);
+    assert.equal(read(at(other, FORGE_CADDYFILE)), null, label);
+    assert.equal(read(at(other, `/etc/systemd/system/${FORGE_UNIT}`)), null, label);
+    assert.ok(!o.calls.some(c => c.command === 'git'), `${label}: nothing downloaded`);
+  }
+}
+
+testCase("Caddy is installed from its own apt source only when it is missing, its packaged service is switched off at once, and a server without apt says so");
+{
+  const root = fresh();
+  const s = server(root, { tailnet: 'a.tail1.ts.net', caddyInstalled: false });
+  assert.equal((await page(root, s).go()).ok, true);
+  const lines = commandLines(s);
+  const install = lines.findIndex(l => l.includes('apt-get -o DPkg::Lock::Timeout=600 install -y -qq caddy'));
+  assert.ok(install >= 0 && lines.indexOf('systemctl disable --now caddy.service') > install, lines.join('\n'));
+  const none = fresh();
+  const o = server(none, { tailnet: 'a.tail1.ts.net', caddyInstalled: false, apt: false });
+  assert.deepEqual(await page(none, o).go(), { ok: false, why: WHY.noCaddy });
+  assert.equal(read(at(none, FORGE_CADDYFILE)), null);
+}
+
+testCase("a Caddy that refuses the site or does not start gives way to the files before, or to none");
+{
+  const bad = fresh();
+  const s = server(bad, { tailnet: 'a.tail1.ts.net', validateFails: true });
+  assert.deepEqual(await page(bad, s).go(), { ok: false, why: WHY.front });
+  assert.equal(read(at(bad, FORGE_CADDYFILE)), null);
+  assert.equal(read(at(bad, `/etc/systemd/system/${FORGE_UNIT}`)), null);
+  const good = fresh();
+  const g = server(good, { tailnet: 'a.tail1.ts.net' });
+  await page(good, g).go();
+  const config = read(at(good, FORGE_CADDYFILE)), unit = read(at(good, `/etc/systemd/system/${FORGE_UNIT}`));
+  fs.writeFileSync(at(good, FORGE_CADDYFILE), config.replace('basic_auth', '# older'));
+  const again = server(good, { tailnet: 'a.tail1.ts.net', restartFails: true });
+  assert.deepEqual(await page(good, again).go(), { ok: false, why: WHY.front });
+  assert.equal(read(at(good, FORGE_CADDYFILE)), config.replace('basic_auth', '# older'), 'the file before comes back');
+  assert.equal(read(at(good, `/etc/systemd/system/${FORGE_UNIT}`)), unit);
+}
+
+testCase("an address that does not answer on a tailnet name says what to turn on in Tailscale; elsewhere it says only that it does not answer");
+{
+  const root = fresh();
+  const s = server(root, { tailnet: 'a.tail1.ts.net', answersOutside: false });
+  assert.deepEqual(await page(root, s).go(), { ok: false, why: WHY.tailnetCert });
+  const dns = fresh();
+  assert.deepEqual(await page(dns, server(dns, { hostname: 'host.example.net', addresses: ADDRESSES, answersOutside: false })).go(), { ok: false, why: WHY.address });
+}
+
+testCase("once Godspeed has a web address, the Forge's own Caddy goes before the address moves to Godspeed's Caddy");
+{
+  const root = fresh();
+  const s = server(root, { tailnet: 'a.tail1.ts.net' });
+  assert.equal((await page(root, s).go()).ok, true);
+  dockerGodspeed(root);
+  const calls = s.calls.length;
+  const r = await page(root, s).go();
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const later = commandLines({ calls: s.calls.slice(calls) });
+  assert.ok(later.includes(`systemctl disable --now ${FORGE_UNIT}`));
+  assert.equal(read(at(root, `/etc/systemd/system/${FORGE_UNIT}`)), null);
+  assert.equal(read(at(root, FORGE_CADDYFILE)), null);
+  assert.equal(r.record.front, 'docker');
+  assert.ok(later.indexOf(`systemctl disable --now ${FORGE_UNIT}`) < later.findIndex(l => l.startsWith('docker run')));
 }
 
 testCase('a build that fails, or an address that does not answer, is never reported ready');

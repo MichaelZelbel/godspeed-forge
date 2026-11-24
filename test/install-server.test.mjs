@@ -212,9 +212,9 @@ testCase('not as root, the install leaves the server\'s tools and services alone
 
 testCase('a watching page that cannot be set up is said in one sentence and never fails the install; without root or systemd none is tried');
 {
-  const r = await rootInstall({ found: dockerFound(), page: { ok: false, why: WHY.noFront } });
+  const r = await rootInstall({ found: dockerFound(), page: { ok: false, why: WHY.noOwnName } });
   assert.equal(r.code, 0, r.warnings.join('\n'));
-  assert.equal(r.lines.at(-1), "The page where you watch the factory could not be set up: this server has no web address from Godspeed for it to share, because Godspeed's notebook has none yet. Run this line again to try once more.");
+  assert.equal(r.lines.at(-1), "The page where you watch the factory could not be set up: this server has no web address from Godspeed, no tailnet name and no DNS name that points at it with port 80 free; join the server to a tailnet, or point a DNS name at it and keep port 80 free. Run this line again to try once more.");
   const thrown = await rootInstall({ found: dockerFound(), page: new Error('EACCES: permission denied') });
   assert.equal(thrown.code, 0, 'a failure the page throws never fails the install either');
   assert.equal(thrown.lines.at(-1), 'The page where you watch the factory could not be set up: it did not start on this server. Run this line again to try once more.');
