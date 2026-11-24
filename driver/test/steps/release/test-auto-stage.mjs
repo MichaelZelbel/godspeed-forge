@@ -1,4 +1,4 @@
-// test cases: 100
+// test cases: 113
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -9,6 +9,7 @@ import * as A from "../../../steps/release/auto-stage.mjs";
 import * as D from "../../../steps/release/auto-drive.mjs";
 import { readDeferrals } from "../../../steps/release/scope-amendment.mjs";
 import * as G from "../../../steps/release/staging.mjs";
+import * as R from "../../../steps/release/release-api.mjs";
 import { PRODUCT_REPO } from "../../../steps/release/staging.mjs";
 
 const REPO = PRODUCT_REPO;
@@ -347,6 +348,7 @@ function world({ issues, scenarioSeq, planText = planFor(), staging = null, stat
       }
       if (name === "stage-server.mjs") {
         if (w.extra.stageServerThrows) throw new Error("boom");
+        if (w.extra.serverDelayMs) await new Promise((r) => setTimeout(r, w.extra.serverDelayMs)); // the install still runs when the scenarios end
         files.set(`releases/${id}/staging.json`, JSON.stringify({ version: args[2], productCommit: "8".repeat(40), status: "installed", installedAt: "2026-11-14T10:30:00Z", healthAfter: { ok: true, version: args[2] } }));
         return { code: 0, stdout: "", stderr: "" };
       }
@@ -367,8 +369,17 @@ function world({ issues, scenarioSeq, planText = planFor(), staging = null, stat
     },
     tagTime: async () => (w.extra.tagTime === undefined ? null : w.extra.tagTime),
     failedJobs: async () => ["two computers move reminders", "the verdict"],
+    failedChecks: async () => null,
     jobLog: async () => rateLimitLog,
     mainFailures: async () => ({}),
+    openIssues: async () => { w.listed = (w.listed || 0) + 1; return (w.open ||= []).map((i) => ({ ...i })); },
+    fileIssue: async (issue) => {
+      w.stopSeenDuring.push(["file", fs.existsSync(stop)]);
+      const made = { number: 2000 + (w.filed ||= []).length, url: "x" };
+      w.filed.push({ ...issue, number: made.number });
+      (w.open ||= []).push({ number: made.number, title: issue.title, body: issue.body });
+      return made;
+    },
   };
   return { w, ctx, cfg };
 }
@@ -1481,6 +1492,208 @@ test("a failed run's failed jobs leave out the jobs that were skipped on purpose
   const jobs = [["a", "failure"], ["b", "cancelled"], ["c", "skipped"], ["d", "skipped"], ["e", "success"]].map(([name, conclusion]) => ({ name, conclusion }));
   const api = async () => ({ ok: true, json: { total_count: 5, jobs } });
   assert.deepEqual(await G.failedJobNames(api, REPO, 1), ["a", "b"]);
+});
+
+// ---------- issue #155 (2026-11-24): the STOP never outlives the scenarios, and a failed candidate is always filed ----------
+// Beta.31's candidate run failed at 13:40 UTC; GitHub answered 502 to the run's jobs, every look ended there, and the
+// step's STOP (relabelled "stage" by a helper) halted the factory until a person removed it at 14:00.
+
+const JOB = "two computers move reminders";
+const FIRST_DAY = "a fresh Docker server turns a first goal into useful work and a matching Telegram brief";
+const jobsUnread = { result: "failed", run: 7, url: "u", tag: "candidate/2.0.0-beta.25" }; // the scenarios' own read of the jobs got no answer
+const ISSUE_1105 = { number: 1105, title: "The first morning brief on a fresh server does not name the person's first goal (beta.31 candidate scenario)", body: `The 2.0.0-beta.31 candidate's everyday scenario "${FIRST_DAY}" failed (run https://github.com/MichaelZelbel/godspeed-mission-control/actions/runs/45396974921).` };
+
+test("issue #155: the STOP goes the moment the scenarios have ended, before the install is waited for and before anything is read to summarise them", async () => {
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, passed], extra: { serverDelayMs: 30 } });
+  const r = await A.autoStage(ctx);
+  assert.equal(r.outcome, "ready");
+  const removed = w.log.indexOf("The factory's STOP file was removed.");
+  const onServer = w.log.findIndex((l) => /is on the server\.$/.test(l));
+  assert.ok(removed >= 0 && onServer > removed, `the STOP was removed before the install ended:\n${w.log.join("\n")}`);
+  assert.deepEqual(w.stopSeenDuring.filter(([n]) => n === "staging-check.mjs").map(([, s]) => s), [false]);
+});
+
+test("issue #155: a failed first run lets the factory go while the install still runs, and the one rerun of its failed jobs pauses it again", async () => {
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, failed, failed, failed], extra: { serverDelayMs: 30 } });
+  ctx.rerunFailed = async () => { w.reruns++; w.stopSeenDuring.push(["rerun", fs.existsSync(w.stop)]); };
+  const r = await A.autoStage(ctx);
+  assert.equal(r.outcome, "failed-tests");
+  const at = (re) => w.log.findIndex((l) => re.test(l));
+  const firstRemoved = at(/^The factory's STOP file was removed\.$/);
+  assert.ok(firstRemoved >= 0 && at(/is on the server\.$/) > firstRemoved, w.log.join(" / "));
+  assert.ok(at(/paused again while the failed jobs run once more/) > at(/is on the server\.$/));
+  assert.deepEqual(w.stopSeenDuring.filter(([n]) => n === "rerun").map(([, s]) => s), [true], "paused while the rerun runs");
+  assert.equal(w.log.filter((l) => l === "The factory's STOP file was removed.").length, 2, "once after the run, once after its rerun");
+  assert.equal(fs.existsSync(w.stop), false);
+});
+
+test("issue #155: a failure the rebuild takes out of the release is filed before the rebuild starts", async () => {
+  const { w, ctx } = driven();
+  const r = await A.autoStage(ctx);
+  assert.equal(r.outcome, "refrozen");
+  assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`]);
+  assert.ok(ctx.state.releases[w.id].filed[`2.0.0-beta.25 ${JOB}`]);
+});
+
+test("issue #155, today's case: the run's jobs answer 502, so its failed jobs are named from its check runs, with the factory running again, and each is filed once, never beside an open issue that names it", async () => {
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, jobsUnread, jobsUnread, jobsUnread] });
+  ctx.failedJobs = async () => { w.stopSeenDuring.push(["jobs", fs.existsSync(w.stop)]); return null; }; // GitHub said 502 to /actions/runs/<id>/jobs
+  ctx.failedChecks = async () => { w.stopSeenDuring.push(["checks", fs.existsSync(w.stop)]); return [JOB, FIRST_DAY, "the verdict"]; };
+  ctx.jobLog = async () => null; // the same 502
+  w.open = [{ ...ISSUE_1105 }];
+  const r = await A.autoStage(ctx);
+  assert.equal(r.outcome, "failed-tests");
+  assert.equal(fs.existsSync(w.stop), false);
+  const summarising = w.stopSeenDuring.filter(([n]) => ["jobs", "checks", "file", "staging-check.mjs"].includes(n));
+  assert.ok(summarising.length >= 4 && summarising.every(([, s]) => s === false), `nothing that summarises or files holds the factory: ${JSON.stringify(summarising)}`);
+  assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`], "filed by name; the job #1105 names is not filed again, the summary job never");
+  assert.deepEqual(w.filed[0].labels, ["bug", "scenario-failure", "archon-triage"], "labelled as main's nightly files a failed everyday scenario");
+  assert.match(w.filed[0].body, /The everyday scenario "two computers move reminders" failed on the candidate of 2\.0\.0-beta\.25 \(u\)/);
+  assert.match(w.filed[0].body, /Its log could not be read when this was filed/);
+  assert.ok(A.namesJob(w.filed[0], JOB) && A.namesJob(ISSUE_1105, FIRST_DAY) && !A.namesJob(ISSUE_1105, JOB));
+  assert.equal(w.notices.length, 1);
+  assert.match(w.notices[0].text, /its log could not be read from GitHub/);
+  const rs = ctx.state.releases[w.id];
+  assert.equal(rs.filed[`2.0.0-beta.25 ${FIRST_DAY}`].issue, 1105);
+  assert.equal(rs.filed[`2.0.0-beta.25 ${FIRST_DAY}`].already, true);
+  assert.ok(rs.finished);
+  assert.ok(w.log.some((l) => /read from its check runs, because GitHub's list of its jobs did not answer/.test(l)));
+});
+
+test("issue #155: when GitHub can name the failed jobs neither from the jobs nor from the check runs, the look ends unfinished with the factory running, and the next look names and files them", async () => {
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, jobsUnread] });
+  ctx.failedJobs = async () => null;
+  ctx.failedChecks = async () => null;
+  const r1 = await A.autoStage(ctx);
+  assert.deepEqual([r1.outcome, r1.why], ["waiting", "failed jobs unknown"]);
+  assert.equal(fs.existsSync(w.stop), false, "the factory runs while the summary waits");
+  assert.deepEqual([w.notices.length, (w.filed || []).length], [0, 0]);
+  assert.equal(ctx.state.releases[w.id].finished, undefined);
+  const next = { ...ctx, state: A.loadState(ctx.stateFile), failedChecks: async () => [JOB, "the verdict"] };
+  const r2 = await A.autoStage(next);
+  assert.equal(r2.outcome, "failed-tests");
+  assert.ok(w.log.includes("Nothing is running, so the factory is not paused."));
+  assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`]);
+  assert.equal(w.notices.length, 1);
+  assert.deepEqual([w.dispatches, w.reruns], [1, 1], "one run, one rerun, never more");
+  assert.equal(fs.existsSync(w.stop), false);
+  const r3 = await A.autoStage({ ...next, state: A.loadState(ctx.stateFile) });
+  assert.match(r3.outcome, /finished|nothing/);
+  assert.deepEqual([w.filed.length, w.notices.length], [1, 1], "nothing filed or said twice");
+});
+
+test("issue #155: a filing GitHub refuses is made by the next look, before anything is said, and nothing twice", async () => {
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, failed] });
+  const fileIssue = ctx.fileIssue;
+  ctx.fileIssue = async () => { throw new R.Refused("GitHub said 502 to POST /repos/x/issues."); };
+  await assert.rejects(() => A.autoStage(ctx), /502/);
+  assert.equal(w.notices.length, 0, "filed first");
+  assert.equal(A.loadState(ctx.stateFile).releases[w.id].finished, undefined, "not finished while unfiled");
+  assert.equal(fs.existsSync(w.stop), false);
+  const r = await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile), fileIssue });
+  assert.equal(r.outcome, "failed-tests");
+  assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`]);
+  assert.match(w.filed[0].body, /What went wrong, as its log says: GitHub limited how many requests/);
+  assert.equal(w.notices.length, 1);
+});
+
+test("issue #155: a failed candidate is filed before the install's record or a rebuild can end the look", async () => {
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, failed], extra: { stageServerThrows: true } });
+  assert.equal((await A.autoStage(ctx)).outcome, "waiting");
+  assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`], "filed on the first look, though the install left no record");
+  await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  const r3 = await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  assert.equal(r3.halt.key, "not-staged");
+  assert.equal(w.filed.length, 1, "once");
+  const d = driven({ over: { itemPulls: async () => { throw new R.Refused("GitHub said 502 to /graphql."); } } });
+  await assert.rejects(() => A.autoStage(d.ctx), /502/);
+  assert.deepEqual(d.w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`], "filed before the rebuild reads anything");
+});
+
+test("issue #155: a failed run whose only failed job is the summary job files that one; one that names no failed job files the run", async () => {
+  const a = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, { ...failed, failedJobs: ["the verdict"] }] });
+  assert.equal((await A.autoStage(a.ctx)).outcome, "failed-tests");
+  assert.deepEqual(a.w.filed.map((i) => i.title), ["Nightly scenario failed: the verdict"]);
+  const b = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, { ...failed, failedJobs: [] }] });
+  assert.equal((await A.autoStage(b.ctx)).outcome, "failed-tests");
+  assert.deepEqual(b.w.filed.map((i) => i.title), ["Nightly scenario failed: the scenario run of 2.0.0-beta.25, which names no failed job"]);
+  assert.equal(b.w.notices.length, 1);
+});
+
+test("issue #155: the stage's read of the public stage file goes through the same retries", async () => {
+  const wrapped = [];
+  const o2 = R.outside({ env: {}, ownerRepo: "o/r", isPrivate: false, wrap: (f) => { wrapped.push(f); return async () => ({ ok: true, status: 200, bytes: Buffer.from(JSON.stringify({ version: "2.0.0-beta.30" })) }); } });
+  const st = await o2.stageAt("beta");
+  assert.equal(st.stage.version, "2.0.0-beta.30");
+  assert.equal(wrapped.length, 2, "both the API and the raw reads are wrapped");
+});
+
+test("issue #155: a STOP of the step relabelled \"stage\" is still the step's own: taken over with this look's process number and removed when the scenarios end", async () => {
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, { result: "running", run: 7 }, passed] });
+  fs.writeFileSync(w.stop, "stage 2639648 2026-11-24T12:47:44.892Z\nThe release step pauses the factory while the scenarios run (the driver's stage step).\n");
+  let during = null;
+  ctx.dispatch = async () => { w.dispatches++; during = fs.readFileSync(w.stop, "utf8"); };
+  const r = await A.autoStage(ctx);
+  assert.equal(r.outcome, "ready");
+  assert.match(during, new RegExp(`^auto-stage ${process.pid} `), "written again with the process that runs");
+  assert.equal(fs.existsSync(w.stop), false);
+  fs.writeFileSync(w.stop, "Operator stopped new factory launches.\n");
+  assert.deepEqual([A.stopIsMine(w.stop), A.takeStop(w.stop, ctx.now()), fs.readFileSync(w.stop, "utf8")], [false, false, "Operator stopped new factory launches.\n"], "the operator's STOP is never taken");
+});
+
+test("issue #155: a look that finds the scenarios ended removes a STOP an earlier look of the step left behind; somebody else's stays", async () => {
+  for (const [text, gone] of [["auto-stage 2639648 2026-11-24T12:47:44.892Z\n", true], ["stage 2639648 2026-11-24T12:47:44.892Z\n", true], ["Operator stopped new factory launches.\n", false]]) {
+    const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [failed], staging: { version: "2.0.0-beta.25", productCommit: "8".repeat(40), status: "installed", installedAt: "2026-11-14T09:30:00Z", healthAfter: { ok: true, version: "2.0.0-beta.25" } } });
+    w.tag = "1".repeat(40);
+    const at = new Date(ctx.now() - 3600 * 1000).toISOString();
+    Object.assign(A.releaseState(ctx.state, w.id), { started: at, freezeStartedAt: at, frozen: at, dispatchedAt: at, rerunAt: at, rerunFromAttempt: 1 });
+    fs.writeFileSync(w.stop, text);
+    const r = await A.autoStage(ctx);
+    assert.equal(r.outcome, "failed-tests");
+    assert.equal(fs.existsSync(w.stop), !gone, text);
+    assert.equal(w.log.some((l) => /left behind was removed/.test(l)), gone, text);
+  }
+});
+
+test("issue #155: a GitHub read that answers 5xx or nothing is asked again after a pause; a write never is, and the pauses have a budget", async () => {
+  const waits = [];
+  const sleep = async (ms) => { waits.push(ms); };
+  const answers = (list) => { const calls = []; return { calls, api: async (m, p) => { calls.push([m, p]); const a = list.shift(); if (a instanceof Error) throw a; return a; } }; };
+  let s = answers([{ ok: false, status: 502 }, { ok: false, status: 503 }, { ok: true, status: 200, json: { jobs: [] } }]);
+  assert.equal((await R.retrying(s.api, { sleep })("GET", "/repos/o/r/actions/runs/45396974921/jobs?per_page=100")).status, 200);
+  assert.deepEqual(waits, [5000, 20000]);
+  waits.length = 0;
+  s = answers([{ ok: false, status: 502 }]);
+  assert.equal((await R.retrying(s.api, { sleep })("POST", "/repos/o/r/issues", { title: "x" })).status, 502);
+  assert.deepEqual([s.calls.length, waits], [1, []], "a write is never sent twice");
+  s = answers([{ ok: false, status: 502 }, { ok: true, status: 200 }]);
+  assert.equal((await R.retrying(s.api, { sleep })("POST", "/graphql", { query: "query { viewer { login } }" })).status, 200, "a GraphQL query is a read");
+  s = answers([{ ok: false, status: 502 }]);
+  assert.equal((await R.retrying(s.api, { sleep })("POST", "/graphql", { query: "mutation { x }" })).status, 502, "a mutation is not");
+  s = answers([{ ok: false, status: 404 }]);
+  assert.equal((await R.retrying(s.api, { sleep })("GET", "/x")).status, 404);
+  assert.equal(s.calls.length, 1, "4xx is an answer");
+  waits.length = 0;
+  s = answers([1, 2, 3, 4].map(() => new Error("socket hang up")));
+  await assert.rejects(() => R.retrying(s.api, { sleep })("GET", "/x"), /socket hang up/);
+  assert.deepEqual(waits, [5000, 20000, 60000]);
+  waits.length = 0;
+  const spent = R.retrying(async () => ({ ok: false, status: 502 }), { sleep, budgetMs: 30000 });
+  await spent("GET", "/a");
+  await spent("GET", "/b");
+  assert.deepEqual(waits, [5000, 20000, 5000], "one caller's pauses stop at its budget");
+});
+
+test("issue #155: the failed jobs' names come from the run's check runs when its jobs cannot be read", async () => {
+  const runs = [["a", "failure"], ["b", "success"], ["c", "skipped"], ["d", "cancelled"]].map(([name, conclusion]) => ({ name, status: "completed", conclusion }));
+  const api = async (m, p) => {
+    if (/\/actions\/runs\/45396974921$/.test(p)) return { ok: true, json: { check_suite_id: 99 } };
+    if (/\/check-suites\/99\/check-runs\?filter=latest&per_page=100$/.test(p)) return { ok: true, json: { total_count: 4, check_runs: runs } };
+    return { ok: false, status: 502 };
+  };
+  assert.deepEqual(await G.failedCheckNames(api, REPO, 45396974921), ["a", "d"]);
+  assert.equal(await G.failedCheckNames(async () => ({ ok: false, status: 502 }), REPO, 1), null);
+  assert.equal(await G.failedCheckNames(async () => { throw new Error("socket hang up"); }, REPO, 1), null);
 });
 
 await runCases();

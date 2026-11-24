@@ -9,6 +9,17 @@ const MINUTE = 60 * 1000;
 const VERSION_FILE = "notebook/package.json"; // where the product keeps its version (the release step edits only this and the README)
 export const GUIDE_LINE = "Guide-Reviewed: none-needed (only the version number changed)";
 
+// One issue in the product repository, filed with the builder App's token (as keep-main-green files its tickets),
+// minted when the first one is filed: never root's own gh login, which is the owner's. -> ({title, body, labels}) => {number, url}
+export function realIssueFiler({ cfg, env }) {
+  const kcfg = K.loadConfig({ ...env, KEEP_MAIN_GREEN_REPO: cfg.repo, KEEP_MAIN_GREEN_STATE_DIR: cfg.stateDir });
+  let hub = null;
+  return async ({ title, body, labels }) => {
+    hub ||= K.realHub({ cfg: kcfg, api: R.retrying(R.githubApi(K.mintToken(kcfg, env), env)) });
+    return hub.createIssue({ title, body, labels });
+  };
+}
+
 // itemIssues and readIssues come from auto-stage.mjs (passed in: that module imports this one).
 export function realDrive({ cfg, env, api, log, itemIssues, readIssues }) {
   const kcfg = K.loadConfig({ ...env, KEEP_MAIN_GREEN_REPO: cfg.repo, KEEP_MAIN_GREEN_STATE_DIR: cfg.stateDir });
@@ -18,7 +29,7 @@ export function realDrive({ cfg, env, api, log, itemIssues, readIssues }) {
   const tools = () => {
     if (built) return built;
     const token = K.mintToken(kcfg, env);
-    const bapi = R.githubApi(token, env);
+    const bapi = R.retrying(R.githubApi(token, env), { log }); // its reads are asked again on 5xx, as the stage's own (issue #155)
     built = {
       token,
       bapi,
@@ -167,7 +178,7 @@ export function realVersionPull({ cfg, env, log, readmeWith, versionWith }) {
   let built = null;
   const builder = () => {
     if (!built) {
-      const bapi = R.githubApi(K.mintToken(kcfg, env), env);
+      const bapi = R.retrying(R.githubApi(K.mintToken(kcfg, env), env), { log }); // its reads are asked again on 5xx (issue #155)
       built = { bapi, hub: K.realHub({ cfg: kcfg, api: bapi }) };
     }
     return built;
@@ -235,7 +246,7 @@ export function realVersionPull({ cfg, env, log, readmeWith, versionWith }) {
     },
     // -> {ok, sha} | {ok: false, message}
     merge: async ({ pr, head, title, message }) => {
-      const api = R.githubApi(R.mintToken(env, repo, "pull_requests=write,contents=write"), env);
+      const api = R.retrying(R.githubApi(R.mintToken(env, repo, "pull_requests=write,contents=write"), env), { log });
       const review = await api("POST", `/repos/${repo}/pulls/${pr}/reviews`, { commit_id: head, event: "APPROVE", body: "The release step's version change: its required check passed." });
       if (!review.ok) log(`The release App's approval of #${pr} was refused (${bad(review)}); merging anyway, as the release step may.`);
       const m = await api("PUT", `/repos/${repo}/pulls/${pr}/merge`, { merge_method: "squash", sha: head, commit_title: title, commit_message: message });

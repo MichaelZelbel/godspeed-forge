@@ -126,6 +126,17 @@ test("auto-stage's STOP counts only from the main project, which is the only one
   assert.deepEqual(readActivity({ REPO: "o/r" }, { factories: [{ primary: true, stop: { writer: "auto-stage", at } }] }, run, now).stop, { at });
 });
 
+test("issue #155: the stage step's STOP holds the release clock only while its writer runs, under either label; one left behind holds nothing", async () => {
+  const { readActivity } = await import("../duties.mjs");
+  const now = T0, at = new Date(now - 10 * MIN).toISOString();
+  const run = () => ({ status: 0, stdout: "" });
+  const stop = o => readActivity({ REPO: "o/r" }, { factories: [{ primary: true, stop: { at, ...o } }] }, run, now).stop;
+  assert.deepEqual(stop({ writer: "auto-stage", line: "auto-stage 9 x", writerAlive: true }), { at });
+  assert.deepEqual(stop({ writer: "stage", line: "stage 9 x", writerAlive: true }), { at }, "relabelled by a helper, still the step's");
+  assert.equal(stop({ writer: "auto-stage", line: "auto-stage 9 x", writerAlive: false }), null, "its writer has ended: a leftover for housekeeping, no work");
+  assert.equal(stop({ writer: "Operator", line: "Operator stopped new factory launches.", writerAlive: false }), null);
+});
+
 test("a round that starts a few seconds early still takes its step: never a round late", () => {
   const fp = releaseState({ look: LOOK }).fp;
   let c = null; const due = [];

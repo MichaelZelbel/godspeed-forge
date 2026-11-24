@@ -51,10 +51,12 @@
 //      role, and run beside the install), the scenarios on candidate/<version>, stage-server.mjs,
 //      staging-check.mjs --tell.
 //   5. Pauses Cole Medin's factory while the scenarios run (the scenario AI key is small and a lap
-//      would spend it too) by creating <factory>/.factory/STOP, and removes it in every case: when
-//      the step ends, fails, or the process is stopped. A STOP file this script made is also removed
-//      at the start of the next look when it is older than stopMaxAgeMinutes, because a stale STOP
-//      stops every lap silently. A STOP somebody else made is never touched.
+//      would spend it too) by creating <factory>/.factory/STOP, and removes it the moment the
+//      scenarios have ended (before the install is waited for and before anything is read to
+//      summarise them), and in every other case: when the step ends, fails, or the process is
+//      stopped. A STOP file this script made is also removed at the start of the next look when it
+//      is older than stopMaxAgeMinutes, and by a look that finds no scenarios running, because a
+//      stale STOP stops every lap silently. A STOP somebody else made is never touched.
 //   6. MONEY: at most one candidate run, plus one rerun of only the failed jobs. The dispatch is
 //      written to the state file before it happens, and a crash in between is resumed by looking at
 //      GitHub, never by dispatching again.
@@ -64,7 +66,10 @@
 //      read from the job log (the scenarios print "FAIL <name>: <what went wrong>"), and whether it
 //      looks caused by this release or by the test machines (it also failed on main's nights, or
 //      GitHub limited requests, or the AI answered nothing). His go then goes through record-go.mjs
-//      with --cause per failed job, which stays manual.
+//      with --cause per failed job, which stays manual. Each failed job is also filed for the
+//      factory, as main's nightly files a failed everyday scenario, unless an open issue names it
+//      already. A log GitHub will not give is said so; names it will not give from the run's jobs
+//      come from its check runs, and when neither answers the next look asks again (2026-11-24).
 //   8. Once only: the state file (stateDir/state.json) keeps what was done and said, so a release is
 //      staged and announced once. Messages go through Godspeed's notice queue with an id made from
 //      the release and the reason, so even a crash between sending and saving cannot send twice.
@@ -83,7 +88,7 @@
 import fs from "node:fs";
 import { readDeferrals, leavesSomething, deferredWords } from "./scope-amendment.mjs";
 import * as D from "./auto-drive.mjs";
-import { realDrive, realVersionPull } from "./auto-drive-real.mjs";
+import { realDrive, realVersionPull, realIssueFiler } from "./auto-drive-real.mjs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -510,13 +515,14 @@ export const clearFailure = (state) => {
 // ---------- the factory's STOP file ----------
 
 const STOP_MARK = "auto-stage";
+const stopText = (now, pid) => `${STOP_MARK} ${pid} ${new Date(now).toISOString()}\nThe release step pauses the factory while the scenarios run (the driver's stage step).\n`;
 
 // Creates the STOP file unless one is there already. Returns true when this call made it.
 export function createStop(file, now, pid = process.pid) {
   if (fs.existsSync(file)) return false;
   if (!fs.existsSync(path.dirname(file))) return false; // no factory here: nothing to pause, and no folder made as root in someone's checkout
   try {
-    fs.writeFileSync(file, `${STOP_MARK} ${pid} ${new Date(now).toISOString()}\nThe release step pauses the factory while the scenarios run (the driver's stage step).\n`, { flag: "wx" });
+    fs.writeFileSync(file, stopText(now, pid), { flag: "wx" });
   } catch (e) {
     if (e.code === "EEXIST") return false; // somebody made it a moment ago
     throw e;
@@ -524,13 +530,26 @@ export function createStop(file, now, pid = process.pid) {
   return true;
 }
 
+// Ours: the first line is "auto-stage <pid> ...", or "stage <pid> ..." (on 2026-11-24 a helper relabelled the step's
+// STOP so, and the step then no longer knew it as its own and left the factory halted). Anything else is somebody else's.
 export const stopIsMine = (file) => {
   try {
-    return fs.readFileSync(file, "utf8").startsWith(STOP_MARK);
+    return /^(auto-stage|stage) \d+\b/.test(fs.readFileSync(file, "utf8"));
   } catch {
     return false;
   }
 };
+
+// Makes the STOP, or takes over one of ours that an earlier look left (killed, or relabelled): it is written again
+// with this process's number, so that whoever reads it sees a writer that runs. -> whether the STOP is this look's now
+export function takeStop(file, now, pid = process.pid) {
+  if (createStop(file, now, pid)) return true;
+  if (!stopIsMine(file)) return false;
+  const tmp = `${file}.${pid}.tmp`;
+  fs.writeFileSync(tmp, stopText(now, pid));
+  fs.renameSync(tmp, file);
+  return true;
+}
 
 // Removes a STOP file this script made; never one somebody else made. Returns whether it removed.
 export function removeStop(file) {
@@ -1029,6 +1048,78 @@ async function versionStep({ ctx, version, plan, deferred, rs, save, sayOnce, bl
   return { outcome: "waiting", why: "version merged" };
 }
 
+// ---------- a failed candidate: its jobs by name, filed for the factory ----------
+
+// The cause of a failed job whose log GitHub would not give.
+export const UNREAD_CAUSE = Object.freeze({ line: "", plain: "its log could not be read from GitHub, so what went wrong is not known yet", environment: false, unread: true });
+
+// The failed jobs of a decided run: {jobs, aggregate, from} or null when GitHub can name them neither from the run's jobs
+// nor from its check runs (each job is a check run of the same name).
+async function failedOf(ctx, staged) {
+  let all = staged.failedJobs || (await ctx.failedJobs(staged.run));
+  let from = "jobs";
+  if (!all) {
+    all = await ctx.failedChecks(staged.run);
+    from = "check runs";
+  }
+  if (!all) return null;
+  return { jobs: all.filter((j) => !G.isAggregateJob(j)), aggregate: all.filter((j) => G.isAggregateJob(j)), from };
+}
+
+// A candidate's failed scenario is filed exactly as a failed everyday scenario is filed from main's nightly run (the
+// product's scenarios/report-night.mjs): one issue per scenario, titled "Nightly scenario failed: <job>" and labelled bug,
+// scenario-failure and archon-triage, which the factory takes first. With that title and label the nightly finds it as
+// its own: it adds a failing night to it and closes it the first night the scenario passes. Never a second one while an
+// open issue names the job already: the nightly's own, or one filed by hand (on 2026-11-24 the main project's issue for
+// beta.31's failed scenario was filed by hand, because the step could not read the run's jobs and filed nothing).
+export const FAILURE_LABELS = Object.freeze(["bug", "scenario-failure", "archon-triage"]);
+export const failureTitle = (job) => `Nightly scenario failed: ${job}`;
+// The job's whole name in the title or the body ("stage" is not named by "stage-server").
+export const namesJob = (issue, job) => {
+  if (!job) return false;
+  const whole = new RegExp(`(^|[^\\w-])${String(job).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\w-])`);
+  return whole.test(String((issue && issue.title) || "")) || whole.test(String((issue && issue.body) || ""));
+};
+export function failureIssue({ version, job, cause = null, run = null, url = null, now = Date.now() }) {
+  const known = cause && !cause.unread && cause.plain;
+  const body = [
+    `The everyday scenario "${job}" failed on the candidate of ${version}${url ? ` (${url})` : run ? ` (run ${run})` : ""}, and again when its failed jobs were run once more.`,
+    cause && cause.line ? `    ${cause.line}` : "",
+    known ? `What went wrong, as its log says: ${String(cause.plain).replace(/[.\s]+$/, "")}.` : cause && cause.unread ? "Its log could not be read when this was filed; the run's page has it." : "The run's page has its log.",
+    cause && cause.environment
+      ? "Its log names a cause on the test machines. Find out whether that is so; fix the product only if it is not."
+      : "Find out why it fails and fix the product; if the scenario checks the wrong thing, say so instead. Keep every existing check as strict as it is.",
+    `Filed by the release step on ${new Date(now).toISOString().slice(0, 10)}.`,
+    `<!-- auto-stage:failed ${version} -->`,
+  ].filter(Boolean).join("\n\n");
+  return { title: failureTitle(job), body, labels: [...FAILURE_LABELS] };
+}
+
+// failures: [{job, cause}]. Each is filed once per candidate (rs.filed, saved after each), or noted as open already.
+// GitHub refusing the list or the filing throws a refusal: the look ends unfinished and the next one carries on.
+async function fileFailures({ ctx, rs, version, staged, failures, save }) {
+  const key = (job) => `${version} ${job}`;
+  const todo = failures.filter((f) => !(rs.filed && rs.filed[key(f.job)]));
+  if (!todo.length) return;
+  const open = await ctx.openIssues();
+  for (const f of todo) {
+    const at = new Date(ctx.now()).toISOString();
+    const hit = open.find((i) => namesJob(i, f.job));
+    if (hit) {
+      (rs.filed ||= {})[key(f.job)] = { issue: hit.number, already: true, at };
+      save();
+      ctx.log(`"${f.job}" is open already as #${hit.number}, so it is not filed a second time.`);
+      continue;
+    }
+    const issue = failureIssue({ version, job: f.job, cause: f.cause, run: staged.run, url: staged.url, now: ctx.now() });
+    const made = await ctx.fileIssue(issue);
+    (rs.filed ||= {})[key(f.job)] = { issue: made.number, at };
+    save();
+    ctx.log(`Filed "${f.job}" for the factory as #${made.number}.`);
+    open.push({ number: made.number, title: issue.title, body: issue.body });
+  }
+}
+
 // ---------- the frozen candidate: scenarios, server, the one message ----------
 
 async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, haltWith, tag }) {
@@ -1072,12 +1163,24 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
   // The factory is paused only while something runs or may still be rerun: a look that merely tries the
   // install again does not hold it up.
   const needStop = sc.result === "none" || sc.result === "running" || (sc.result === "failed" && !rs.rerunAt);
-  const madeStop = needStop && (createStop(cfg.stopFile, now()) || stopIsMine(cfg.stopFile)); // a STOP of ours left by a killed look is taken back
-  ctx.onExit(() => {
-    if (madeStop && removeStop(cfg.stopFile)) log("The factory's STOP file was removed.");
-  });
-  log(madeStop ? "The factory is paused while the scenarios run (STOP file made)." : needStop ? "A STOP file was there already, not made here; it is left as it is." : "Nothing is running, so the factory is not paused.");
+  const paused = needStop && takeStop(cfg.stopFile, now()); // a STOP of ours left by a killed look is taken back
+  // The STOP is held only while scenarios run: it goes the moment a run has ended, before the install is waited for and
+  // before anything is read to summarise it, and is taken again only for the one rerun of the failed jobs. On 2026-11-24
+  // a summary GitHub could not make kept the factory halted for two hours.
+  let held = paused;
+  const releaseStop = () => {
+    if (held && removeStop(cfg.stopFile)) log("The factory's STOP file was removed.");
+    held = false;
+  };
+  const holdStop = () => {
+    if (paused && !held && (held = takeStop(cfg.stopFile, now()))) log("The factory is paused again while the failed jobs run once more.");
+  };
+  ctx.onExit(releaseStop);
+  if (!needStop && removeStop(cfg.stopFile)) log("A STOP file an earlier look of this step left behind was removed: no scenarios run now.");
+  log(paused ? "The factory is paused while the scenarios run (STOP file made)." : needStop ? "A STOP file was there already, not made here; it is left as it is." : "Nothing is running, so the factory is not paused.");
   let decided = null;
+  let named = null; // a failed run's jobs: {jobs, aggregate, from}
+  const causes = {}; // job -> its cause, read from its log
   try {
     // ---- the scenarios: one candidate run, never a second dispatch
     if (sc.result === "none") {
@@ -1115,6 +1218,8 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
           });
 
     sc = await waitDone();
+    const ended = (x) => x.result === "passed" || x.result === "failed"; // nothing of it runs now (a rerun pauses the factory again)
+    if (ended(sc)) releaseStop();
     await server;
     if (sc.result === "failed" && !rs.rerunAt) {
       const info = await ctx.runInfo(sc.run);
@@ -1125,10 +1230,12 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
       rs.rerunAt = new Date(now()).toISOString(); // once, and only the failed jobs
       rs.rerunFromAttempt = info.attempt;
       save();
+      holdStop();
       await ctx.rerunFailed(sc.run);
       log(`Scenario run ${sc.run} failed in ${(sc.failedJobs || []).length} job(s); those jobs only were run once more.`);
       await ctx.sleep(Math.min(cfg.pollSeconds, 30) * 1000);
       sc = await waitDone();
+      if (ended(sc)) releaseStop();
     }
     if (!["passed", "failed"].includes(sc.result)) {
       log(`The scenarios on ${tagName} have not finished (${sc.result}); the next look picks it up.`);
@@ -1136,6 +1243,26 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
     }
     rs.scenarioResult = sc.result;
     decided = sc;
+
+    // ---- a failed candidate is named job by job and filed for the factory before anything else of the release step can
+    // end the look (the install, its record, a rebuild). When GitHub cannot name its jobs at all, the look ends here
+    // unfinished and the next one asks again: never a failure left unfiled.
+    if (sc.result === "failed") {
+      named = await failedOf(ctx, sc);
+      if (!named) {
+        log(`GitHub could not say which jobs of scenario run ${sc.run} failed (neither its jobs nor its check runs could be read); the next look asks again.`);
+        return { outcome: "waiting", why: "failed jobs unknown" };
+      }
+      if (named.from !== "jobs") log(`The failed jobs of run ${sc.run} were read from its ${named.from}, because GitHub's list of its jobs did not answer.`);
+      // the scenarios that failed; when only the summary job failed, that one; when GitHub names no job at all, the run
+      const filed = named.jobs.length ? named.jobs : named.aggregate.length ? named.aggregate : [];
+      for (const job of filed) {
+        const logText = await ctx.jobLog(sc.run, job);
+        causes[job] = logText === null ? UNREAD_CAUSE : classifyFailure(logText, job); // a log GitHub would not give is said so, never a reason to stop
+      }
+      const failures = filed.length ? filed.map((job) => ({ job, cause: causes[job] })) : [{ job: `the scenario run of ${version}, which names no failed job`, cause: null }];
+      await fileFailures({ ctx, rs, version, staged: sc, failures, save });
+    }
 
     // ---- no record of the install: the install costs nothing, so a few looks may try it again
     records.fetch();
@@ -1150,7 +1277,7 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
       return { outcome: "halted", why: "not staged" };
     }
   } finally {
-    if (madeStop && removeStop(cfg.stopFile)) log("The factory's STOP file was removed.");
+    releaseStop();
   }
   const staged = decided; // the answer the look itself saw; a read after the wait could be a GitHub hiccup
 
@@ -1175,17 +1302,11 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
   }
 
   // some failed: staging-check never tells then
-  const allFailed = staged.failedJobs || (await ctx.failedJobs(staged.run)) || [];
-  const jobs = allFailed.filter((j) => !G.isAggregateJob(j));
-  const aggregate = allFailed.filter((j) => G.isAggregateJob(j));
+  const { jobs, aggregate } = named;
   const blockingList = G.blockingScenarios(plan);
   const main = await ctx.mainFailures();
   const failures = [];
-  for (const job of jobs) {
-    const logText = await ctx.jobLog(staged.run, job);
-    const cause = classifyFailure(logText, job);
-    failures.push({ job, cause, mainDates: main[job] || [], blocking: !!blockingList && blockingList.some((b) => job.toLowerCase().includes(b)) });
-  }
+  for (const job of jobs) failures.push({ job, cause: causes[job], mainDates: main[job] || [], blocking: !!blockingList && blockingList.some((b) => job.toLowerCase().includes(b)) });
   // ---- what the plan allows on its own (auto-drive.mjs)
   const judged = D.judgeFailures({ failures, nowMs: now(), listed: !!blockingList });
   const driving = !!D.planRuleWords(plan) && planApproved(plan) && !!ctx.drive;
@@ -1221,7 +1342,7 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
   const pullFiles = {};
   for (const pr of Object.values(itemPulls)) if (pr && pr.number && !pullFiles[pr.number]) pullFiles[pr.number] = await ctx.drive.pullFiles(pr.number);
   const logs = {};
-  for (const f of holding) logs[f.job] = await ctx.jobLog(staged.run, f.job);
+  for (const f of holding) logs[f.job] = (await ctx.jobLog(staged.run, f.job)) || "";
   // What an earlier round already took out is not in the release any more: a failure that still points at it is not
   // explained by it, and is no reason to try the same change again.
   const already = D.alreadyDeferred(records.json(`releases/${id}/scope-amendment.json`));
@@ -1281,10 +1402,14 @@ async function driveOn({ ctx, id, base, plan, rs, save, sayOnce, version }) {
 
 async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
   const token = ghToken(cfg);
-  const api = R.githubApi(token, env);
+  // Every read GitHub answers with 5xx is asked again after a pause (release-api.mjs retrying); the scenario polls
+  // have a budget of their own, so a long wait cannot use up the pauses the summary may need.
+  const api = R.retrying(R.githubApi(token, env), { log });
+  const pollApi = R.retrying(R.githubApi(token, env), { log });
   const childEnv = { ...env, FORGE_RELEASE_CONFIG: configText(), STAGING_READ_TOKEN: token, STAGING_NOTICES_FILE: cfg.noticesFile };
   const readEnv = { ...env, STAGING_READ_TOKEN: token };
   const exits = [];
+  const jobLists = new Map();
   const records = new G.Records(env);
   const stateFile = path.join(cfg.stateDir, "state.json");
   const J = async (p) => {
@@ -1304,7 +1429,7 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
     notify: ({ id, text, about }) => {
       queueNotice(cfg.noticesFile, { id, text, about, facts: [text] });
     },
-    publicVersion: async () => (await G.publicState(readEnv, cfg.repo)).publicVersion,
+    publicVersion: async () => (await G.publicState(readEnv, cfg.repo, api, (f) => R.retrying(f, { log }))).publicVersion,
     tagCommit: async (version) => R.refSha(api, cfg.repo, `tags/candidate/${version}`),
     mainHead: async () => {
       const list = await J(`/repos/${cfg.repo}/commits?sha=main&per_page=1`);
@@ -1316,7 +1441,7 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
       }
       return { commit: sha };
     },
-    scenarios: (version) => G.scenariosOrUnread(readEnv, cfg.repo, version),
+    scenarios: (version) => G.scenariosOrUnread(readEnv, cfg.repo, version, pollApi),
     dispatch: async (tagName) => {
       const inputs = { stage: tagName, ...(cfg.scenarioMac ? { mac: "true" } : {}) };
       const r = await api("POST", `/repos/${cfg.repo}/actions/workflows/${G.SCENARIOS_WORKFLOW}/dispatches`, { ref: tagName, inputs });
@@ -1327,6 +1452,18 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
       if (!r.ok && r.status !== 201) R.refuse(`GitHub said ${r.status} to running the failed jobs of run ${runId} again.`);
     },
     failedJobs: async (runId) => G.failedJobNames(api, cfg.repo, runId),
+    failedChecks: async (runId) => G.failedCheckNames(api, cfg.repo, runId),
+    // The open issues of the product (not pull requests), for "is this job filed already"; a refusal when unreadable.
+    openIssues: async () => {
+      const out = [];
+      for (let page = 1; page <= 10; page++) {
+        const list = await J(`/repos/${cfg.repo}/issues?state=open&per_page=100&page=${page}`);
+        out.push(...(list || []).filter((i) => !i.pull_request).map((i) => ({ number: i.number, title: i.title || "", body: i.body || "" })));
+        if (!list || list.length < 100) break;
+      }
+      return out;
+    },
+    fileIssue: realIssueFiler({ cfg, env }),
     drive: realDrive({ cfg, env, api, log, itemIssues, readIssues }),
     versionPull: realVersionPull({ cfg, env, log, readmeWith: withReadmeSection, versionWith: withVersion }),
     runInfo: async (runId) => {
@@ -1337,12 +1474,22 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
       const r = await api("GET", `/repos/${cfg.repo}/git/commits/${sha}`);
       return r.ok && r.json && r.json.committer ? Date.parse(r.json.committer.date) : null;
     },
+    // A job's log, or null when GitHub does not give it. The run's list of jobs is read once per run, not once per
+    // failed job (eighteen reads of the same list on 2026-11-24, and one 502 among them ended the look).
     jobLog: async (runId, jobName) => {
-      const jobs = await J(`/repos/${cfg.repo}/actions/runs/${runId}/jobs?per_page=100`);
-      const job = (jobs.jobs || []).find((j) => j.name === jobName);
-      if (!job) return "";
-      const r = await api("GET", `/repos/${cfg.repo}/actions/jobs/${job.id}/logs`, undefined, { raw: true });
-      return r.ok ? r.bytes.toString("utf8") : "";
+      try {
+        if (!jobLists.has(runId)) {
+          const r = await api("GET", `/repos/${cfg.repo}/actions/runs/${runId}/jobs?per_page=100`);
+          if (!r.ok || !r.json || !Array.isArray(r.json.jobs)) return null;
+          jobLists.set(runId, r.json.jobs);
+        }
+        const job = jobLists.get(runId).find((j) => j.name === jobName);
+        if (!job) return null;
+        const r = await api("GET", `/repos/${cfg.repo}/actions/jobs/${job.id}/logs`, undefined, { raw: true });
+        return r.ok ? r.bytes.toString("utf8") : null;
+      } catch {
+        return null; // no answer at all, after the pauses: the same as a refusal
+      }
     },
     // job name -> dates (ISO) of main's recent runs of the scenarios in which that job failed
     mainFailures: async () => {
