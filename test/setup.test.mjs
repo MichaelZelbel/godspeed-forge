@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { PassThrough } from 'node:stream';
 import {
-  answersFrom, InputClosed, loadSettings, ReportedSetupError, setupCommand, setupRepository, prepareCheckout,
+  answersFrom, InputClosed, loadSettings, ReportedSetupError, SetupStop, setupCommand, setupRepository, prepareCheckout,
   repositoryFromRemote, UNEXPECTED_MESSAGE
 } from '../lib/setup.mjs';
 import { files } from '../lib/files.mjs';
@@ -340,7 +340,7 @@ assert.deepEqual(failedMessages.at(-1), FINAL_CHECK_FALLBACK);
 await assert.rejects(stat(join(state, 'projects/owner/failing-doctor/registration.json')));
 assert(!failedMessages.some(message => message.includes('schedule')));
 
-testCase('a refused final check stops plainly and the retry finishes without new Apps');
+testCase('a refused final check stops plainly before any App exists and the retry creates each App once');
 const retryRun = async (command, args, options = {}) => {
   if (command === 'claude') return { stdout: 'signed in' };
   if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
@@ -385,9 +385,6 @@ await assert.rejects(setupRepository('owner/retry-check', retryOptions(value => 
   error => error instanceof ReportedSetupError && error.message === 'final-check');
 assert.deepEqual(retryFailed, [
   'Using Claude Code to set up the Forge.',
-  'Create the builder App in your browser: https://example.test/Forge builder',
-  'Create the release App in your browser: https://example.test/Forge release',
-  'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.',
   'Setup stopped because the final check found that the guard keeping your project\'s hidden test scenarios away from the coding agent does not work on this server, because the python command there does not run Python 3. Install the python-is-python3 package on this server before trying setup again.'
 ]);
 for (const hidden of ['Factory refused', 'Holdout fence', 'consumer.py', 'Traceback', 'ghs_report_secret', 'report']) {
@@ -395,7 +392,8 @@ for (const hidden of ['Factory refused', 'Holdout fence', 'consumer.py', 'Traceb
 }
 assert(retryFailed.at(-1).split('http').length - 1 <= 1);
 await assert.rejects(stat(join(state, 'projects/owner/retry-check/registration.json')));
-assert.equal(retryBegins, 2);
+assert.equal(retryBegins, 0, 'a stop at the final check creates no App');
+assert.equal(retryInstalls, 0);
 const installsBeforeRetry = retryInstalls;
 
 retryCheckPasses = true;
@@ -407,14 +405,15 @@ assert.deepEqual(
 );
 assert.deepEqual(retryPassed, [
   'Using Claude Code to set up the Forge.',
+  'Create the builder App in your browser: https://example.test/Forge builder',
+  'Create the release App in your browser: https://example.test/Forge release',
   'Setup is complete for owner/retry-check. Automatic work is off. A typical release costs about $5 to $40 of Claude Code use, based on Anthropic\'s published average of about $6 a day for one person using Claude Code, with most people under $12, and a release taking one to a few days of that work. On a Pro or Max plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready, say "plan release retry-check" in your chat, then "run one lap" to watch the first change being made, then "turn on automatic work".'
 ]);
 assert.equal(retryBegins, 2);
-assert.equal(retryInstalls, installsBeforeRetry);
+assert.equal(retryInstalls, 2);
 assert.deepEqual(JSON.parse(await readFile(join(state, 'projects/owner/retry-check/registration.json'), 'utf8')), { repository: 'owner/retry-check', checkout: join(projectsRoot, 'owner/retry-check'), completed: true, agent: 'claude' }, 'the record of the finished setup keeps the coding assistant it used');
 
-testCase('a stop at the final check says the Apps are kept and retrying adds none');
-// A stop at the final check tells the owner their Apps are kept; stopping again and retrying add none.
+testCase('stopping at the final check again and again creates no App until it passes');
 const appsKeptState = join(root, 'apps-kept-state');
 const appsKeptProjects = join(root, 'apps-kept-projects');
 // The kept-Apps line when only the builder App (named as in the stand-in's credentials, or by default) exists.
@@ -454,21 +453,12 @@ const appsKeptOptions = output => {
 const appsKeptFirst = [];
 await assert.rejects(setupRepository('owner/apps-kept', appsKeptOptions(value => appsKeptFirst.push(value))),
   error => error instanceof ReportedSetupError && error.message === 'final-check');
-assert.equal(appsKeptFirst.at(-1), FINAL_CHECK_FALLBACK);
-assert.equal(appsKeptFirst.at(-2), APPS_KEPT_MESSAGE);
-assert.equal(appsKeptFirst.filter(message => message.startsWith('Setup stopped because')).length, 1);
-assert.deepEqual(appsKeptFirst.filter(message => message.includes('http')), [
-  'Create the builder App in your browser: https://example.test/Forge builder',
-  'Create the release App in your browser: https://example.test/Forge release'
-]);
-for (const hidden of ['archon', 'factory', 'doctor', 'consumer', 'credential', '.json', 'forge-builder-secret-name', 'http']) {
-  assert(!appsKeptFirst.slice(-2).some(message => message.toLowerCase().includes(hidden)), hidden);
-}
+assert.deepEqual(appsKeptFirst, ['Using Claude Code to set up the Forge.', FINAL_CHECK_FALLBACK]);
 const appsKeptSecond = [];
 await assert.rejects(setupRepository('owner/apps-kept', appsKeptOptions(value => appsKeptSecond.push(value))),
   error => error instanceof ReportedSetupError && error.message === 'final-check');
-assert.deepEqual(appsKeptSecond, ['Using Claude Code to set up the Forge.', APPS_KEPT_MESSAGE, FINAL_CHECK_FALLBACK]);
-assert.deepEqual(appsKeptBegins, { 'Forge builder': 1, 'Forge release': 1 });
+assert.deepEqual(appsKeptSecond, appsKeptFirst);
+assert.deepEqual(appsKeptBegins, {});
 appsKeptCheckPasses = true;
 const appsKeptPassed = [];
 await setupRepository('owner/apps-kept', appsKeptOptions(value => appsKeptPassed.push(value)));
@@ -683,7 +673,7 @@ testCase('a refusal not about the download leaves it alone, and only download fo
   assert((await stat(keep)).isDirectory());
 }
 
-testCase('a GitHub connection that fails stops before the final check');
+testCase('a GitHub connection that fails stops after the final check passed');
 const githubFailureMessages = [];
 const githubFailureCalls = [];
 await assert.rejects(setupRepository('owner/failing-github', {
@@ -705,7 +695,7 @@ await assert.rejects(setupRepository('owner/failing-github', {
   output: value => githubFailureMessages.push(value)
 }), error => error instanceof ReportedSetupError && error.message === 'github');
 assert.deepEqual(githubFailureMessages.at(-1), 'Setup stopped because the GitHub connection was not completed. Complete the GitHub page before trying setup again.');
-assert(!githubFailureCalls.some(call => call.args.at(-1) === 'doctor' || call.args.includes('schedule')));
+assert(!githubFailureCalls.some(call => call.args.includes('schedule')));
 await assert.rejects(stat(join(state, 'projects/owner/failing-github/registration.json')));
 
 testCase('leaving the builder App page unfinished stops plainly');
@@ -2327,7 +2317,6 @@ async function retryProject(repository) {
           await mkdir(join(runOptions.cwd, '.factory'), { recursive: true });
           await writeFile(join(runOptions.cwd, '.factory/consumer.json'), '{}\n');
         }
-        if (command === 'python3' && args.at(-1) === 'doctor' && failAt === 'final-check') throw new Error('doctor failed');
         return { stdout: '' };
       }
     },
@@ -2344,6 +2333,8 @@ async function retryProject(repository) {
       appExists: async () => !record.deleted,
       appStatus: async () => 'installed'
     },
+    // Stops after the Apps and the mission answers, where the final check no longer is.
+    factorySetup: async () => { if (failAt === 'after-mission') throw new SetupStop('Stopped after the mission.', 'after-mission'); },
     prompt: async question => { record.prompts.push(question); return answers[record.prompts.length - 1] ?? 'Other.'; },
     output: value => record.messages.push(value)
   });
@@ -2358,8 +2349,8 @@ testCase('a stop after the mission answers does not ask them again on retry');
 // A stop after the mission answers: the retry does not ask them again.
 {
   const project = await retryProject('owner/stopped-after-mission');
-  await assert.rejects(setupRepository('owner/stopped-after-mission', project.options({ failAt: 'final-check' })),
-    error => error instanceof ReportedSetupError && error.message === 'final-check');
+  await assert.rejects(setupRepository('owner/stopped-after-mission', project.options({ failAt: 'after-mission' })),
+    error => error instanceof ReportedSetupError && error.message === 'after-mission');
   assert.deepEqual(project.record.prompts, ['What is this software for?', 'Who uses it?']);
   project.reset();
   const result = await setupRepository('owner/stopped-after-mission', project.options({ answers: ['Second purpose.', 'Second users.'] }));
@@ -2478,7 +2469,7 @@ testCase('an unwritable settings folder stops plainly and the defaults still loa
   assert.deepEqual((await loadSettings(join(settingsRoot, 'forge/config.json'), () => {})).commands, defaults().commands);
 }
 
-async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPrompt = async () => {}, answers = ['Purpose.', 'Users.'], undo = async () => {}, reason, before = [], message }) {
+async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPrompt = async () => {}, afterMission, answers = ['Purpose.', 'Users.'], undo = async () => {}, reason, before = [], message }) {
   testCase(`stop and retry: ${name}`);
   const repository = `owner/${name}`;
   const stopRoot = join(root, 'stops', name);
@@ -2512,6 +2503,7 @@ async function stopThenRetry(name, { prepare, run: failingRun = () => null, onPr
         install: async () => true,
         appStatus: async () => 'installed'
       },
+      factorySetup: async () => { if (failing) await afterMission?.(); },
       prompt: async () => {
         if (!failing) return ['Purpose.', 'Users.'][answer++];
         if (answer === 0) await onPrompt(options);
@@ -2667,8 +2659,8 @@ testCase('after mission answers were not saved, the next run asks once and saves
   assert.deepEqual(project.record.messages.slice(-2), [FORGE_APPS_KEPT, MISSION_NOT_SAVED]);
   assert(!(await isPresent(join(stateDirectory, 'mission.json'))));
   project.reset();
-  await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
-    error => error instanceof ReportedSetupError && error.message === 'final-check');
+  await assert.rejects(setupRepository(repository, project.options({ failAt: 'after-mission' })),
+    error => error instanceof ReportedSetupError && error.message === 'after-mission');
   assert.deepEqual(project.record.prompts, ['What is this software for?', 'Who uses it?']);
   assert(await isPresent(join(stateDirectory, 'mission.json')));
   assert.equal(project.record.begins, 0);
@@ -2756,7 +2748,7 @@ for (const [name, mode, message] of [
 // A saved file that is there but damaged stops setup before it changes anything, with one plain message
 // naming the file to delete. Deleting it, as the message says, lets setup run again without creating new Apps.
 for (const [file, stopAt, damagedMessage] of [
-  ['mission.json', 'final-check', repository => `Setup stopped because the Forge's saved settings for ${repository} on this server are damaged: its saved answers to the mission questions cannot be read. Delete the file projects/${repository}/mission.json in the Forge's private state folder before trying setup again, and setup asks those questions again.`],
+  ['mission.json', 'after-mission', repository => `Setup stopped because the Forge's saved settings for ${repository} on this server are damaged: its saved answers to the mission questions cannot be read. Delete the file projects/${repository}/mission.json in the Forge's private state folder before trying setup again, and setup asks those questions again.`],
   ['registration.json', undefined, repository => `Setup stopped because the Forge's saved settings for ${repository} on this server are damaged: its record of whether setup finished cannot be read. Delete the file projects/${repository}/registration.json in the Forge's private state folder before trying setup again.`]
 ]) {
   testCase(`a damaged ${file} stops before changing anything, and deleting it lets setup finish`);
@@ -2836,8 +2828,8 @@ for (const { name, mission, sentence, recovered, prompts, final } of [
   const repository = `owner/empty-mission-${name.replaceAll(' ', '-')}`;
   const project = await retryProject(repository);
   const answersPath = join(root, 'retry-state', 'projects', repository, 'mission.json');
-  await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
-    error => error instanceof ReportedSetupError && error.message === 'final-check');
+  await assert.rejects(setupRepository(repository, project.options({ failAt: 'after-mission' })),
+    error => error instanceof ReportedSetupError && error.message === 'after-mission');
   assert.equal(project.record.begins, 2);
   await writeFile(answersPath, '');
   await writeFile(project.missionPath, mission(await readFile(project.missionPath, 'utf8')));
@@ -2880,8 +2872,8 @@ for (const kind of ['builder', 'release']) {
   for (const empty of [true, false]) {
     const repository = `owner/final-check-${empty ? 'empty' : 'deleted'}-${kind}-app`;
     const project = await retryProject(repository);
-    await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
-      error => error instanceof ReportedSetupError && error.message === 'final-check');
+    await assert.rejects(setupRepository(repository, project.options({ failAt: 'after-mission' })),
+      error => error instanceof ReportedSetupError && error.message === 'after-mission');
     const path = join(credentialPath(join(root, 'retry-state'), repository), `${kind}-app.json`);
     if (empty) await writeFile(path, ''); else await rm(path);
     project.reset();
@@ -3044,10 +3036,7 @@ testCase('a damaged build tools folder is replaced and setup finishes');
 {
   const projectState = join(root, 'stops', 'unrecordable-registration', 'state', 'projects', 'owner', 'unrecordable-registration');
   await stopThenRetry('unrecordable-registration', {
-    run: async (command, args) => {
-      if (command === 'python3' && args.at(-1) === 'doctor') await chmod(projectState, 0o500);
-      return null;
-    },
+    afterMission: async () => chmod(projectState, 0o500),
     undo: async () => chmod(projectState, 0o700),
     reason: 'registration',
     before: [...appPages, FORGE_APPS_KEPT],
@@ -3060,8 +3049,8 @@ testCase('a damaged build tools folder is replaced and setup finishes');
 {
   const repository = 'owner/unreadable-app';
   const project = await retryProject(repository);
-  await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
-    error => error instanceof ReportedSetupError && error.message === 'final-check');
+  await assert.rejects(setupRepository(repository, project.options({ failAt: 'after-mission' })),
+    error => error instanceof ReportedSetupError && error.message === 'after-mission');
   const builderPath = join(credentialPath(join(root, 'retry-state'), repository), 'builder-app.json');
   await chmod(builderPath, 0o000);
   project.reset();
@@ -3215,8 +3204,8 @@ for (const [name, place] of [['unreadable-legacy-app', 'legacy'], ['unreadable-p
   const project = await retryProject(repository);
   let lockedPath;
   if (place === 'legacy') {
-    await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
-      error => error instanceof ReportedSetupError && error.message === 'final-check');
+    await assert.rejects(setupRepository(repository, project.options({ failAt: 'after-mission' })),
+      error => error instanceof ReportedSetupError && error.message === 'after-mission');
     lockedPath = join(projectStatePath(retryState, repository), 'builder-app.json');
     await writeFile(lockedPath, await readFile(join(credentialPath(retryState, repository), 'builder-app.json')));
     await rm(join(credentialPath(retryState, repository), 'builder-app.json'));
@@ -3247,8 +3236,8 @@ testCase('a pending record setup cannot read is not called a kept App');
   const repository = 'owner/unreadable-pending-no-app';
   const retryState = join(root, 'retry-state');
   const project = await retryProject(repository);
-  await assert.rejects(setupRepository(repository, project.options({ failAt: 'final-check' })),
-    error => error instanceof ReportedSetupError && error.message === 'final-check');
+  await assert.rejects(setupRepository(repository, project.options({ failAt: 'after-mission' })),
+    error => error instanceof ReportedSetupError && error.message === 'after-mission');
   const credentialFolder = credentialPath(retryState, repository);
   await rm(join(credentialFolder, 'release-app.json'));
   await rm(join(projectStatePath(retryState, repository), 'release-installation.json'), { force: true });
