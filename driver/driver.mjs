@@ -549,7 +549,12 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
         : rel.unread ? { yes: true, why: "this round's read does not list it, and the journal holds it open; the clock goes on" }
         : !lookKnown && (prev || (jv.clocks || {})[rel.id]) ? { yes: true, why: "the release step's look cannot be read now; the clock goes on" }
         : { yes: true, why: bld ? `${bld.open} of ${bld.total} tickets are unfinished` : "the release step is working on it" };
-      if (!step.yes) { clocks[rel.id] = { id: rel.id, inStep: false, why: step.why }; delete state.standstill[rel.id]; continue; }
+      if (!step.yes) {
+        clocks[rel.id] = { id: rel.id, inStep: false, why: step.why }; delete state.standstill[rel.id];
+        // the journal forgets the clock too, or the first round after the pause would count the whole pause (and could fire every rung at once)
+        if (!dry && (jv.clocks || {})[rel.id]) { try { appendEvents(journalFile, [{ t: "clock-end", release: rel.id, at: nowIso }]); delete jv.clocks[rel.id]; } catch (e) { record({ kind: "release clock not journaled", why: String(e.message).slice(0, 160) }); } }
+        continue;
+      }
       // an unreadable source never stops the clock: nothing is known to have changed, so its part is the one the clock has
       const now0 = stateNow(rel.id, prev, stageText, lookKnown, about, (jv.clocks || {})[rel.id] || null, bld);
       if (now0.unread) { step = { yes: true, why: `its state could not be read (${now0.unread.slice(0, 120)}); the clock goes on` }; record({ kind: "release clock: a source is unreadable", release: rel.id, why: now0.unread }); }
@@ -596,7 +601,9 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
           try { freshWorld = await (deps.readWorld || readWorld)(env, { gh, sh: deps.sh || shFor(env), ...(deps.worldDeps || {}) }); freshActivity = await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, freshWorld); } catch { freshWorld = null; }
           if (!freshWorld) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "the tickets could not be read again" }); continue; }
           const freshRel = (freshWorld.releases || []).find(r => r.id === k.id) || null;
-          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null, (() => { try { return freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity, prevTokens: sc.buildTokens }) : null; } catch { return null; } })());
+          const freshBld = (() => { try { return freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity, prevTokens: sc.buildTokens }) : null; } catch { return null; } })();
+          if (freshBld && freshBld.unread) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "a ticket could not be read in the fresh read, so it did not confirm the standstill" }); continue; }
+          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null, freshBld);
           if (freshRel && (() => { try { return pageNamesRelease(freshWorld.deliveredPages, freshRel); } catch { return false; } })()) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "a question of money, publishing or deleting that names this release reached the owner since the round began" }); continue; }
           const gone = fresh.files.staging && fresh.files.staging.status === "installed" ? "it is installed now" : !(deps.planApproved || planStillApproved)(env, k.id) ? "its plan is no longer approved" : null;
           if (fresh.fp !== sc.fp || gone) { record({ kind: "message held", entry: `standstill:${k.id}`, why: gone || "the release moved in the fresh read" }); continue; }

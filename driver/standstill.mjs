@@ -108,7 +108,8 @@ export function buildingState({ release, world, now, activity = null, prevTokens
   const tickets = ((release && release.tickets) || []).filter(t => t.issue && !t.deferred);
   const factories = (world && world.factories) || [];
   const prim = factories.find(f => f.primary !== false) || (world && world.factory) || {};
-  const runsRead = !((world && world.unreadable) || []).some(u => /\/runs$/.test(String(u.part || "")));
+  // the primary project's own runs; another project's reader failing says nothing about this release's laps
+  const runsRead = !((world && world.unreadable) || []).some(u => /\/runs$/.test(String(u.part || "")) && (!prim.project || String(u.part) === `factory/${prim.project}/runs`));
   const runs = new Map((prim.activeRuns || []).map(r => [String(r.id), r]));
   // each ticket's state as its own token; one that cannot be read (or was read only in part) keeps the token it had last round, so a
   // ticket that cannot be read is neither progress nor a standstill, and a change in any other ticket still counts
@@ -116,7 +117,7 @@ export function buildingState({ release, world, now, activity = null, prevTokens
   let unread = false, open = 0;
   for (const t of tickets) {
     const it = items[t.issue];
-    if (!it) { unread = true; tokens[t.issue] = null; continue; }
+    if (!it) { unread = true; tokens[t.issue] = null; if (/^open\|/.test(String((prevTokens && prevTokens[t.issue]) || ""))) { open++; lines.push(`#${t.issue}: could not be read this round (it was open)`); } continue; }
     const prs = it.prs || [];
     const claims = (it.loopClaims || []).filter(c => claimLive(c, now));
     if (it.partial) unread = true;

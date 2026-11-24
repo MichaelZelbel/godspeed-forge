@@ -200,6 +200,44 @@ test("the minute-60 notice is held when a question that names the release reache
   assert.ok(s.log().some(e => e.kind === "message held" && /reached the owner/.test(e.why)));
 });
 
+test("a pause ends the clock for good: after the owner's go (or his question) the count starts fresh, it never counts the pause", async () => {
+  const paused = m => m >= 25 && m < 105;
+  const s = server({ look: m => (paused(m) ? `${HEAD(ID, "2.0.0-beta.31")}Already staged and announced at 2026-11-23T20:00:00Z; nothing to do.\n` : LOOK) });
+  for (let m = 0; m <= 160; m += 5) await s.round(m);
+  const runs = s.launched.filter(l => l.entry === `standstill:${ID}`).map(l => l.minute);
+  assert.deepEqual(runs.filter(m => m < 25), [15], "rung 1 before the pause");
+  assert.deepEqual(runs.filter(m => m >= 105), [115, 135], `a new ladder from the end of the pause, rung 1 then rung 2 twenty minutes apart, not every rung at once (steps at ${runs})`);
+});
+
+test("the last open ticket cannot be read for a round: it is still open, and the clock goes on", async () => {
+  const s = server({ worldAt: (now, m) => { const w = world32(now, m); if (m >= 5) delete w.items[616]; return w; }, look: () => LOOK32 });
+  for (let m = 0; m <= 40; m += 5) await s.round(m);
+  assert.deepEqual(s.launched.filter(l => l.entry === `standstill:${ID32}`).map(l => l.minute), [15, 35], "an unreadable ticket is neither progress nor the end of the clock");
+});
+
+test("another project's runs reader failing does not make this release's writing lap stop holding it", async () => {
+  const { buildingState } = await import("../standstill.mjs");
+  const w = world32(T0 + 60 * MIN, 60, { claim: "run-616" });
+  w.factories = [{ primary: true, project: "main", activeRuns: [{ id: "run-616", startedAt: iso(T0), lastOutputAt: iso(T0 + 59 * MIN) }] }];
+  w.unreadable = [{ part: "factory/other/runs", error: "no CLI" }];
+  const b = buildingState({ release: w.releases[0], world: w, now: T0 + 60 * MIN });
+  assert.ok(b.work.some(x => /a run is building #616/.test(x.what)), "the lap is seen writing and holds the clock");
+  w.unreadable = [{ part: "factory/main/runs", error: "no CLI" }];
+  const c = buildingState({ release: w.releases[0], world: w, now: T0 + 60 * MIN });
+  assert.ok(c.work.every(x => !/a run is building/.test(x.what)), "its own runs reader failing: no evidence of writing");
+});
+
+test("the minute-60 fresh read must confirm: a ticket that cannot be read in it holds the notice", async () => {
+  let blind = false;
+  const s = server({ worldAt: (now, m) => { const w = world32(now, m); if (blind) delete w.items[616]; return w; }, look: () => LOOK32 });
+  for (let m = 0; m <= 50; m += 5) await s.round(m);
+  const before = s.told.length, readWorld0 = s.deps.readWorld; const calls = [];
+  s.deps.readWorld = async (...a) => { calls.push(1); if (calls.length >= 2) blind = true; return readWorld0(...a); };
+  await s.round(55);
+  assert.equal(s.told.length, before);
+  assert.ok(s.log().some(e => e.kind === "message held" && /could not be read in the fresh read/.test(e.why)));
+});
+
 test("the test machine's repair halt of 2026-11-22, built from the live record: a halt is a standstill, an acting run at once, the other AI by minute 40, the owner told by minute 60", async () => {
   const { advance } = await import("../inventory.mjs");
   // the halt as the AX41 held it (steps/test-machine/last.json, 2026-11-24): key and words as the step wrote them

@@ -114,6 +114,7 @@ export function view(events) {
     } else if (e.t === "seen" && notices[e.id]) notices[e.id].seen = true;
     else if (e.t === "credit" && e.key) credits[e.key] = (credits[e.key] || 0) + (Number(e.ms) || 0);
     // the release clock (standstill.mjs): when a release's state began, and the steps taken on it, so a lost state file never resets it
+    else if (e.t === "clock-end" && e.release) delete clocks[e.release]; // the release paused (the owner's go, a question to him): the next clock starts fresh
     else if (e.t === "clock" && e.release && e.fp) clocks[e.release] = { fp: e.fp, parts: e.parts || null, since: Number(e.since), steps: [], launches: [], tries: [] };
     else if (e.t === "clock-step" && clocks[e.release] && clocks[e.release].fp === e.fp && !clocks[e.release].steps.includes(e.step)) { clocks[e.release].steps.push(e.step); if (e.provider) clocks[e.release].launches.push({ rung: e.step === "helper" ? 1 : 2, provider: e.provider }); }
     else if (e.t === "clock-try" && clocks[e.release] && clocks[e.release].fp === e.fp) clocks[e.release].tries.push({ rung: e.rung, at: e.at, provider: e.provider, result: e.result, summary: e.summary });
