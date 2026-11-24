@@ -7,8 +7,10 @@
 #   - the other AI launched by minute 40,
 #   - a repair request in the dead-man's spool, read by the dead-man, by minute 60.
 #
-# ONLY ON A THROWAWAY MACHINE (Linux with systemd, as root). It shadows the codex command, writes the driver's settings and
-# turns the driver's timers on. It refuses to run where driver settings exist that it did not write.
+# ONLY ON A THROWAWAY MACHINE (Linux with systemd, as root). It shadows the codex and gh commands, writes the driver's
+# settings and turns the driver's timers on. `install` runs only with FORGE_DRILL_THROWAWAY=yes in its environment and only on
+# a machine with no Forge driver settings, state or projects of its own; it then marks the machine as the drill's
+# (/var/lib/forge-drill/.throwaway), and every other command runs only on a machine so marked.
 #
 #   bash scripts/drill-standstill.sh install [archive]   install the Forge with its install line, from main's archive unless
 #                                                         another is named (FORGE_VERSION=<tag> picks a release), on a stand-in
@@ -47,13 +49,26 @@ stop() { printf 'drill: %s\n' "$*" >&2; exit 1; }
 preconditions() {
   [ "$(id -u)" = "0" ] || stop "run this as root on a throwaway machine"
   [ -d /run/systemd/system ] || stop "this machine does not run systemd"
-  if [ -f "$SETTINGS/driver.json" ] && ! grep -q '"forge-drill"' "$SETTINGS/driver.json"; then
-    stop "$SETTINGS/driver.json exists and is not the drill's: this is a real server, so nothing was changed"
-  fi
+  [ -f "$DRILL/.throwaway" ] || stop "this machine is not marked as the drill's throwaway machine (bash $0 install, with FORGE_DRILL_THROWAWAY=yes, marks a fresh one); nothing was changed"
+}
+# Only a fresh machine becomes the drill's: no Forge driver settings, state or projects that the drill did not make.
+claim_throwaway() {
+  [ "$(id -u)" = "0" ] || stop "run this as root on a throwaway machine"
+  [ -d /run/systemd/system ] || stop "this machine does not run systemd"
+  [ -f "$DRILL/.throwaway" ] && return 0
+  [ "${FORGE_DRILL_THROWAWAY:-}" = "yes" ] || stop "the drill harms a real server: run it only on a throwaway machine, with FORGE_DRILL_THROWAWAY=yes; nothing was changed"
+  local found=""
+  [ -e "$SETTINGS/driver.json" ] && found="$found $SETTINGS/driver.json"
+  [ -n "$(ls -A "$SETTINGS/projects" 2>/dev/null)" ] && found="$found $SETTINGS/projects"
+  [ -e "$STATE" ] && found="$found $STATE"
+  [ -e /var/lib/godspeed/forge/deadman ] && found="$found /var/lib/godspeed/forge/deadman"
+  systemctl list-unit-files 'factory-driver.timer' 'archonfactory-*' --no-legend 2>/dev/null | grep -q . && found="$found (the factory's units)"
+  [ -n "$found" ] && stop "this machine already has a Forge driver or factory:$found. The drill runs only on a fresh throwaway machine; nothing was changed"
+  mkdir -p "$DRILL" && date -u +%FT%TZ >"$DRILL/.throwaway"
 }
 
 do_install() {
-  preconditions
+  claim_throwaway
   local archive="${1:-$MAIN_ARCHIVE}"
   command -v node >/dev/null 2>&1 || stop "the install line needs a Node 22 here first (the one Godspeed brings on a real server)"
   mkdir -p "$WORKSPACE/.godspeed"

@@ -44,7 +44,9 @@ function server({ look = () => LOOK, answers = {}, named = () => false } = {}) {
     launchAct: (e, a, o) => { s.launched.push({ minute: s.at(), unit: o.unit, entry: o.entry.id, provider: o.provider, tried: o.tried, evidence: o.entry.evidence }); },
     // each acting run answers five minutes after its launch with what the test says for its launch number, else it runs on
     actResult: (e, a, unit) => { const l = s.launched.find(x => x.unit === unit); const n = s.launched.indexOf(l) + 1; const said = answers[n]; return said && s.at() >= l.minute + 5 ? { state: "done", result: /RESULT:\s*(\S+)\s*$/.exec(said)[1], said, provider: l.provider } : { state: "running" }; },
-    checkNamed: list => list.map(n => ({ ...n, running: named(n, s.at()) })),
+    // GitHub's answer about a named run: the candidate's run is the release's own (its branch), any other is not
+    checkNamed: list => list.map(n => ({ ...n, running: named(n, s.at()), ...(n.kind === "run" ? { headBranch: n.id === "123456789" ? "candidate/2.0.0-beta.31" : "main", headSha: "x" } : {}) })),
+    planApproved: () => true,
     repairRequest: words => { s.requests.push({ minute: s.at(), words }); return path.join(root, "spool", `repair-${now}.json`); },
     startDeadman: () => { s.deadman.push(s.at()); },
     deliver: { telegram: async text => { s.told.push({ minute: s.at(), text }); return { ok: true, receipt: "42" }; }, issue: () => ({ ok: true, receipt: "https://github.com/o/w/issues/1" }) },
@@ -180,3 +182,50 @@ test("ticket 01: rung 2 goes to the other AI; when it cannot be reached, the sam
   assert.match(s.told.find(t => /about an hour/.test(t.text)).text, /Two AI helpers tried to move it, both on Codex, as the other AI could not be reached/);
 });
 
+
+test("ticket 01: a look that goes missing, a source that becomes unreadable, and a lost state file never reset the hour; rung 2 stays on the other AI after the loss", async () => {
+  // the stage step's look is missing (or a day old) from minute 35 on: the release has not moved, so nothing resets
+  const s = server({ answers: { 1: LIE }, look: m => (m >= 35 ? null : LOOK) });
+  s.deps.stageLook = async () => (s.at() >= 35 ? null : LOOK);
+  for (let m = 0; m <= 60; m += 5) await s.round(m);
+  assert.deepEqual(byClock(s).map(l => l.minute), [20, 40]); assert.deepEqual(s.requests.map(r => r.minute), [60]);
+  assert.ok(s.told.some(t => t.minute === 60 && /about an hour/.test(t.text)), "and the notice at 60 although the look cannot be read");
+  // rung 1 ran on Claude (Codex out at 20); the state file is lost at 30: the journal keeps who ran, so rung 2 is Codex
+  const t = server({ answers: { 1: LIE } });
+  const both = t.deps.providers;
+  t.deps.providers = async () => (t.at() === 20 ? [{ name: "claude", model: "claude-sonnet-5-5", strong: "claude-opus-5-5" }] : both());
+  for (let m = 0; m <= 30; m += 5) await t.round(m);
+  fs.rmSync(path.join(t.env.STATE_DIR, "state.json"));
+  for (let m = 35; m <= 60; m += 5) await t.round(m);
+  assert.deepEqual(byClock(t).map(l => [l.minute, l.provider]), [[20, "claude"], [40, "codex"]], "the other AI than rung 1's, rebuilt from the journal");
+  assert.match(t.requests[0].words, /rung 1 on claude: unresolved/, "and the repair request still names rung 1's answer");
+  assert.match(t.told.find(x => /about an hour/.test(x.text)).text, /first Claude and then Codex/);
+  // the release's own files become unreadable at 50: the notice still comes at 60
+  const u = server({ answers: { 1: LIE } });
+  u.deps.releaseFiles = () => { if (u.at() >= 50) throw new Error("state.json: unexpected end of JSON input"); return { autoStage: { blocked: {} }, staging: null }; };
+  for (let m = 0; m <= 60; m += 5) await u.round(m);
+  assert.ok(u.told.some(x => x.minute === 60), "a source unreadable in the fresh read is unchanged: the notice is not held");
+});
+
+test("ticket 01: what a helper names holds the release's clock only when it is the release's own work: another repository's run, an unrelated pull request or a web server's unit never do", async () => {
+  const said = "In progress: https://github.com/someone/else/actions/runs/555555555 runs, pull request #4242 is open, and nginx.service is active.\nRESULT: in-progress";
+  const s = server({ answers: { 1: said }, named: () => true }); // every one of them is running
+  for (let m = 0; m <= 60; m += 5) await s.round(m);
+  assert.deepEqual(byClock(s).map(l => l.minute), [20, 40], "none of them held the clock");
+  assert.equal(s.state().standstill[ID].tries[0].result, "unresolved");
+  assert.deepEqual(s.requests.map(r => r.minute), [60]);
+  // the same answer naming the release's version pull request, which is open: that holds
+  const t = server({ answers: { 1: "Pull request #1094 raises the version and waits for its check.\nRESULT: in-progress" }, named: (n, minute) => n.kind === "pr" && n.id === "1094" && minute < 50 });
+  t.deps.releaseFiles = () => ({ autoStage: { blocked: {}, bump: { pr: 1094, branch: "release/version-2.0.0-beta.31", head: "h" } }, staging: null });
+  for (let m = 0; m <= 70; m += 5) await t.round(m);
+  assert.deepEqual(byClock(t).map(l => l.minute), [20, 65], "its own version pull request, open until minute 50, held it");
+});
+
+test("ticket 01: the notice's title says about an hour too", async () => {
+  const s = server({ answers: { 1: LIE } });
+  const titles = []; s.deps.deliver = { ...s.deps.deliver, issue: (title, text) => { titles.push(title); return { ok: true, receipt: "https://github.com/o/w/issues/1" }; } };
+  const env = { ...s.env, WATCH_REPO: "o/w" };
+  s.round = async minute => { s.deps.now = () => T0 + minute * MIN; return round(env, s.deps); };
+  for (let m = 0; m <= 60; m += 5) await s.round(m);
+  assert.ok(titles.includes("Beta 31 has not moved for about an hour"), JSON.stringify(titles));
+});

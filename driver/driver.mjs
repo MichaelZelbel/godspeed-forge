@@ -30,7 +30,7 @@ import { clockCheck, wentBackwards, verifyInstalled, deliver, readEnvFile } from
 import { gateStep, gateClear, GATE } from "./gate.mjs";
 import { movingUntilFor, heldUntil, creditEvents, creditKeyById, ACTIVITY, buildInventory, advance, violationEntry, describeRow, parseStage, stageStalled, factoryWorking, CHAIN, H as HR, ownerName } from "./inventory.mjs";
 import { actDefaults as onDutyDefaults, launchAct, actResult, markHandled, answeredFile, repairRequestChecked } from "./onduty.mjs";
-import { STANDSTILL, releaseState, inReleaseStep, workFor, tick, nextStep as clockNextStep, stillMinutes, namedIn, checkNamed, noticeText, repairWords } from "./standstill.mjs";
+import { STANDSTILL, releaseState, inReleaseStep, workFor, tick, nextStep as clockNextStep, stillMinutes, namedIn, checkNamed, noticeText, repairWords, ownedBy, OWN_UNITS } from "./standstill.mjs";
 import { aiDefaults, providers, factoryProvider, ladderCandidates, launchHelper, helperResult, refreshTokens, checkJson, helperDir, UNIT_RE } from "./ai.mjs";
 import { applyReport, applyDueDefaults, actDefaults, notify, plain } from "./act.mjs";
 import { housekeep, hkDefaults } from "./housekeeping.mjs";
@@ -202,6 +202,24 @@ export async function round(env, deps = {}) {
       }
     };
     let clockProviders = [];
+    // The release's state now, as the clock sees it: a look that cannot be read and a file that cannot be read are taken as the
+    // clock's last (unchanged), never as a change, so an unreadable source never resets or stops it. -> {look, files, fp, unread}
+    const stateNow = (id, prev, text, known, about) => {
+      const look = known ? (about ? text : "") : (prev && typeof prev.look === "string" ? prev.look : "");
+      let files = null, unread = null;
+      try { files = (deps.releaseFiles || readReleaseFiles)(env, id); } catch (e) { unread = String(e.message).slice(0, 200); }
+      if (!files) files = (prev && prev.parts) || { autoStage: null, staging: null };
+      return { look, files, unread, fp: releaseState({ look, autoStage: files.autoStage, staging: files.staging }).fp };
+    };
+    // What is the release's own work, for what a helper names (standstill.mjs ownedBy): its repository and version, auto-stage's
+    // version pull request, and its tickets' pull requests
+    const releaseOwn = (id, autoStage) => {
+      const rel = (worldNow.releases || []).find(r => r.id === id) || { tickets: [] };
+      const prs = (rel.tickets || []).flatMap(t => (((worldNow.items || {})[t.issue] || {}).prs) || []);
+      const as = autoStage !== undefined ? autoStage : ((state.standstill || {})[id] && state.standstill[id].parts ? state.standstill[id].parts.autoStage : null);
+      return { repo: env.REPO, version: rel.version || ((state.standstill || {})[id] || {}).version || null, bump: (as && as.bump) || null, prNumbers: prs.map(p => p.number), prHeads: prs.map(p => p.headSha).filter(Boolean) };
+    };
+    let worldNow = {};
 
     // ---- the journal and the clock (9.4, 9.10, 8.6): intervals are monotonic, GitHub's Date header only anchors
     const journalFile = path.join(env.STATE_DIR, "journal.jsonl");
@@ -230,6 +248,7 @@ export async function round(env, deps = {}) {
 
     // ---- the world, once (before collecting, so a report is acted on against what is true now)
     const world = await (deps.readWorld || readWorld)(env, { gh, sh: deps.sh || shFor(env), ...(deps.worldDeps || {}) });
+    worldNow = world;
     let ledger = readJson(ledgerFile, {});
     const unreadableParts = []; // a release that cannot be evaluated is "unreadable", which escalates
     for (const rel of world.releases || []) {
@@ -379,12 +398,19 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       // "in-progress" holds only for what it names that the driver can check runs: a systemd unit, a GitHub run, a pull request
       // (standstill.mjs), checked now and on every round after. One naming nothing checkable, or nothing that runs, counts as
       // unresolved (ticket 01: beta.31's run said "the factory driver is actively running the repair", and got a two-hour hold).
-      const live = r.result === "in-progress" ? (deps.checkNamed || checkNamedReal)(namedIn(r.said, env.REPO)).filter(n => n.running).map(n => ({ kind: n.kind, id: n.id, repo: n.repo, what: n.what, answeredAt: now })) : [];
+      // what counts: for the release clock only the release's own work (ownedBy); in the chain a unit, or a run or pull request of
+      // this repository, never the driver's own units
+      const counts = a.standstill ? (n => ownedBy(n, releaseOwn(a.standstill))) : (n => (n.kind === "unit" ? !OWN_UNITS.test(n.id) : String(n.repo).toLowerCase() === String(env.REPO).toLowerCase()));
+      const live = r.result === "in-progress" ? (deps.checkNamed || checkNamedReal)(namedIn(r.said, env.REPO)).filter(n => n.running && counts(n)).map(n => ({ kind: n.kind, id: n.id, repo: n.repo, what: n.what, answeredAt: now })) : [];
       const answer = r.result === "in-progress" && !live.length ? "unresolved" : r.result;
       const said = `${r.result === "in-progress" && !live.length ? "answered in-progress, but named nothing the driver could see running: " : live.length ? `in-progress, and the driver sees ${live.map(n => n.what).join(" and ")} running: ` : ""}${String(r.said || "")}`;
       if (a.standstill) { // the release clock's own run: its try counts for the clock of the state it was launched on
         const sc = (state.standstill || {})[a.standstill];
-        if (sc && sc.fp === a.fp) { (sc.tries ||= []).push({ rung: a.rung, at: nowIso, provider: a.provider, result: answer, summary: said.slice(-500) }); if (live.length) sc.named = [...(sc.named || []), ...live]; }
+        if (sc && sc.fp === a.fp) {
+          (sc.tries ||= []).push({ rung: a.rung, at: nowIso, provider: a.provider, result: answer, summary: said.slice(-500) });
+          if (live.length) sc.named = [...(sc.named || []), ...live];
+          try { appendEvents(journalFile, [{ t: "clock-try", release: a.standstill, fp: a.fp, rung: a.rung, provider: a.provider, result: answer, summary: said.slice(-300), at: nowIso }]); } catch { /* the state file still has it */ }
+        }
       }
       else if (c && live.length && (c.holds || 0) < 2 && ACTIVITY.creditHours * HR - (creditUsed(creditKeyById(eid, c.nan ? undefined : c.milestone))) > 0) { c.holds = (c.holds || 0) + 1; const ck = creditKeyById(eid, c.nan ? undefined : c.milestone); const grant = Math.min(STANDSTILL.namedHoldMinutes * MIN, ACTIVITY.creditHours * HR - creditUsed(ck)); roundCredit[ck] = (roundCredit[ck] || 0) + grant; c.holdUntil = now + grant; c.holdAt = now; c.waitOn = live; c.launched = true; try { appendEvents(journalFile, [{ t: "credit", key: ck, ms: grant, at: nowIso }]); } catch { (state.creditDebt ||= {})[ck] = ((state.creditDebt || {})[ck] || 0) + grant; } (c.tries ||= []).push({ rung: a.rung, at: nowIso, provider: a.provider, result: "in-progress", summary: said.slice(-300) }); } // moving while what it named runs
       else if (c) { (c.tries ||= []).push({ rung: a.rung, at: nowIso, provider: a.provider, result: answer, summary: said.slice(-500) }); if (r.result === "notice") { c.rung = 3; c.rungSince = now; c.launched = true; c.told = false; } } // the notice goes out through both transports below, with receipts // it told Michael itself: rung 3, restarts after 24 hours
@@ -406,8 +432,8 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     // a sign-in failure collected just now is this round's obstacle too, so housekeeping repairs it in this same round
     world.actLogins = { ...(state.actLogin || {}) };
     for (const o of actLoginObstacles(world.actLogins, state.firstSeen, nowIso)) if (!ids.has(o.id)) { obstacles.push(o); ids.add(o.id); state.firstSeen[o.id] = o.since; record({ kind: "obstacle", id: o.id, obstacle: o.kind, key: `act:${o.provider}`, evidence: o.evidence }); }
-    let stage = null, stageText = "";
-    try { const text = await (deps.stageLook || stageLookReal)(env); stageText = text || ""; stage = text ? parseStage(text) : null; } catch { stage = null; }
+    let stage = null, stageText = "", lookKnown = false; // a look that is missing, a day old or unreadable is not known: the release clock keeps the last one
+    try { const text = await (deps.stageLook || stageLookReal)(env); lookKnown = typeof text === "string"; stageText = text || ""; stage = text ? parseStage(text) : null; } catch { stage = null; }
     // deterministic fallbacks for the shipping steps (setup fixes, not cuts), before any acting rung
     if (!dry && stage) { try { for (const x of await (deps.fallbacks || shippingFallbacks)(env, stage, state, now)) record({ kind: "shipping fallback", ...x }); } catch (e) { record({ kind: "shipping fallback failed", why: String(e.message).slice(0, 200) }); } }
     if (stageStalled(stage)) { const key = `${stage.id}\n${stage.reason || stage.result}`; if (!state.stageWatch || state.stageWatch.reasonKey !== key) state.stageWatch = { reasonKey: key, since: now - stage.minutes * MIN }; } else if (stage) state.stageWatch = null;
@@ -479,18 +505,19 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     for (const rel of clocked) {
       const prev = state.standstill[rel.id] || null;
       const about = !!(stage && stage.id === rel.id);
-      let step = rel.unread ? { yes: true, why: "the release list could not be read this round; the clock goes on" } : inReleaseStep(rel.id, stage, about ? stageText : "", jv.releases[rel.id] || null);
+      let step = rel.unread ? { yes: true, why: "the release list could not be read this round; the clock goes on" }
+        : !lookKnown && prev ? { yes: true, why: "the release step's look cannot be read now; the clock goes on" }
+        : inReleaseStep(rel.id, stage, about ? stageText : "", jv.releases[rel.id] || null);
       if (!step.yes) { clocks[rel.id] = { id: rel.id, inStep: false, why: step.why }; delete state.standstill[rel.id]; continue; }
-      const look = about ? stageText : "";
-      // an unreadable source never stops the clock: nothing is known to have changed, so the state is the one the clock has
-      let files = { autoStage: null, staging: null }, fp;
-      try { files = (deps.releaseFiles || readReleaseFiles)(env, rel.id); fp = releaseState({ look, autoStage: files.autoStage, staging: files.staging }).fp; }
-      catch (e) { fp = prev ? prev.fp : `unreadable:${rel.id}`; step = { yes: true, why: `its state could not be read (${String(e.message).slice(0, 120)}); the clock goes on` }; record({ kind: "release clock: a source is unreadable", release: rel.id, why: String(e.message).slice(0, 200) }); }
+      // an unreadable source never stops the clock: nothing is known to have changed, so its part is the one the clock has
+      const now0 = stateNow(rel.id, prev, stageText, lookKnown, about);
+      if (now0.unread) { step = { yes: true, why: `its state could not be read (${now0.unread.slice(0, 120)}); the clock goes on` }; record({ kind: "release clock: a source is unreadable", release: rel.id, why: now0.unread }); }
+      const { look, files, fp } = now0;
       try {
-        const named = prev && prev.fp === fp && (prev.named || []).length ? (deps.checkNamed || checkNamedReal)(prev.named).filter(n => n.running) : [];
+        const named = prev && prev.fp === fp && (prev.named || []).length ? (deps.checkNamed || checkNamedReal)(prev.named).filter(n => n.running && ownedBy(n, releaseOwn(rel.id, files.autoStage))) : [];
         const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, about, named, now });
         const t = tick(prev, { fp, work, now, lastRoundAt: jv0.lastRoundAt, journal: (jv.clocks || {})[rel.id] || null });
-        t.clock.named = named; t.clock.version = rel.version || t.clock.version;
+        t.clock.named = named; t.clock.version = rel.version || t.clock.version; t.clock.look = look; t.clock.parts = files;
         // the journal keeps when this state began, so a lost state file never resets the clock
         if (!((jv.clocks || {})[rel.id] && jv.clocks[rel.id].fp === fp)) clockEvents.push({ t: "clock", release: rel.id, fp, since: t.clock.since, at: nowIso });
         state.standstill[rel.id] = t.clock;
@@ -664,11 +691,13 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
         } else if (d === "notice") {
           // THE GATE by construction: the same state was read in every round for an hour (far more than 3 readings 10 minutes
           // apart); the release's own sources are read again right now and must agree, and none may be unreadable
-          let fresh = null;
-          try { const text2 = await (deps.stageLook || stageLookReal)(env); const about2 = !!(text2 && parseStage(text2).id === k.id); const f2 = (deps.releaseFiles || readReleaseFiles)(env, k.id); fresh = releaseState({ look: about2 ? text2 : "", autoStage: f2.autoStage, staging: f2.staging }); } catch { fresh = null; }
-          if (!fresh || fresh.fp !== sc.fp) { record({ kind: "message held", entry: `standstill:${k.id}`, why: fresh ? "the release moved in the fresh read" : "a source was unreadable in the fresh read" }); continue; }
+          // the same rules as the clock: what cannot be read is unchanged (so the hour is never missed), what has changed holds it
+          let text2 = null, known2 = false; try { text2 = await (deps.stageLook || stageLookReal)(env); known2 = typeof text2 === "string"; } catch { known2 = false; }
+          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id));
+          const gone = fresh.files.staging && fresh.files.staging.status === "installed" ? "it is installed now" : !(deps.planApproved || planStillApproved)(env, k.id) ? "its plan is no longer approved" : null;
+          if (fresh.fp !== sc.fp || gone) { record({ kind: "message held", entry: `standstill:${k.id}`, why: gone || "the release moved in the fresh read" }); continue; }
           const words = versionWords(k.version || "");
-          const text = noticeText(words, sc.launches, !!sc.done.repair), nid = `n:standstill:${k.id}:${sc.since}`, title = `${words} has not moved for an hour`;
+          const text = noticeText(words, sc.launches, !!sc.done.repair), nid = `n:standstill:${k.id}:${sc.since}`, title = `${words} has not moved for about an hour`;
           const a2 = await applyReport(env, { id: `standstill:${k.id}` }, { text, key: `tell:${nid}`, about: title }, { kind: "tell-michael", state, gated: true });
           const n2 = await sendNotice(env, nid, title, text, now, deps.deliver, [`standstill:${k.id}`]);
           appendEvents(journalFile, [n2]);
@@ -676,7 +705,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
           record({ kind: "told Michael", entries: [`standstill:${k.id}`], minutes: k.minutes, by: "the release clock", queue: !a2.failed.length, receipts: n2.receipts, failed: n2.failed });
         }
       }
-      const taken = Object.keys(sc.done).filter(s => sc.done[s] && !doneBefore[s]).map(step => ({ t: "clock-step", release: k.id, fp: sc.fp, step, at: iso(now) }));
+      const taken = Object.keys(sc.done).filter(s => sc.done[s] && !doneBefore[s]).map(step => { const l = ["helper", "other"].includes(step) ? [...(sc.launches || [])].reverse().find(x => x.rung === (step === "helper" ? 1 : 2)) : null; return { t: "clock-step", release: k.id, fp: sc.fp, step, ...(l ? { provider: l.provider } : {}), at: iso(now) }; });
       if (taken.length) { try { appendEvents(journalFile, taken); } catch (e) { record({ kind: "release clock not journaled", why: String(e.message).slice(0, 160) }); } }
     }
     let L = adv.actions.launch;
@@ -974,6 +1003,13 @@ export function readReleaseFiles(env, id) {
   const read = f => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { if (e && e.code === "ENOENT") return null; throw new Error(`${f} cannot be read: ${e.message}`); } };
   const st = env.AUTO_STAGE_STATE ? read(env.AUTO_STAGE_STATE) : null;
   return { autoStage: ((st && st.releases) || {})[id] || null, staging: env.RELEASES_DIR ? read(path.join(env.RELEASES_DIR, id, "staging.json")) : null };
+}
+
+// Is the release's plan still approved? A plan that cannot be read counts as still approved (unknown is not a change).
+export function planStillApproved(env, id) {
+  if (!env.RELEASES_DIR) return true;
+  let text; try { text = fs.readFileSync(path.join(env.RELEASES_DIR, id, "plan.md"), "utf8"); } catch (e) { return !(e && e.code === "ENOENT"); }
+  return /^\s*status:\s*approved\b/im.test(text);
 }
 
 // ---------------------------------------------------------------- the dry run's account

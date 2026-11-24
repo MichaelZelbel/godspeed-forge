@@ -114,8 +114,9 @@ export function view(events) {
     } else if (e.t === "seen" && notices[e.id]) notices[e.id].seen = true;
     else if (e.t === "credit" && e.key) credits[e.key] = (credits[e.key] || 0) + (Number(e.ms) || 0);
     // the release clock (standstill.mjs): when a release's state began, and the steps taken on it, so a lost state file never resets it
-    else if (e.t === "clock" && e.release && e.fp) clocks[e.release] = { fp: e.fp, since: Number(e.since), steps: [] };
-    else if (e.t === "clock-step" && clocks[e.release] && clocks[e.release].fp === e.fp && !clocks[e.release].steps.includes(e.step)) clocks[e.release].steps.push(e.step);
+    else if (e.t === "clock" && e.release && e.fp) clocks[e.release] = { fp: e.fp, since: Number(e.since), steps: [], launches: [], tries: [] };
+    else if (e.t === "clock-step" && clocks[e.release] && clocks[e.release].fp === e.fp && !clocks[e.release].steps.includes(e.step)) { clocks[e.release].steps.push(e.step); if (e.provider) clocks[e.release].launches.push({ rung: e.step === "helper" ? 1 : 2, provider: e.provider }); }
+    else if (e.t === "clock-try" && clocks[e.release] && clocks[e.release].fp === e.fp) clocks[e.release].tries.push({ rung: e.rung, at: e.at, provider: e.provider, result: e.result, summary: e.summary });
     else if (e.t === "round" && Number.isFinite(at)) { lastRoundAt = Math.max(Number.isFinite(lastRoundAt) ? lastRoundAt : 0, at); lastRound = { at, mono: e.mono, boot: e.boot }; }
   }
   for (const r of Object.values(releases)) r.lastMilestoneAt = Math.max(r.approvedAt || 0, ...Object.entries(r.slots).filter(([k]) => !k.startsWith("p:")).map(([, t]) => t).filter(Number.isFinite));

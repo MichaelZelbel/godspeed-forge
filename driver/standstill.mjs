@@ -108,10 +108,11 @@ export function tick(prev, { fp, work, now, lastRoundAt, journal = null }) {
   if (!(prev && prev.fp === fp) && journal && journal.fp === fp && Number.isFinite(journal.since)) {
     // the state file lost this clock: the journal has when this state began and which steps were taken (time held by work
     // since then is not known, so it counts as still: the steps come early, never late)
-    prev = { fp, since: journal.since, stillMs: Math.max(0, now - journal.since), lastAt: now, cycleFrom: 0, done: Object.fromEntries((journal.steps || []).map(s => [s, true])), tries: [], named: [] };
+    const launches = [...(journal.launches || [])];
+    prev = { fp, since: journal.since, stillMs: Math.max(0, now - journal.since), lastAt: now, cycleFrom: 0, done: Object.fromEntries((journal.steps || []).map(s => [s, true])), tries: [...(journal.tries || [])], launches, rung1Provider: (launches.find(l => l.rung === 1) || {}).provider, named: [] };
   }
   if (prev && prev.fp === fp) {
-    c = { ...prev, done: { ...(prev.done || {}) }, tries: [...(prev.tries || [])] };
+    c = { ...prev, done: { ...(prev.done || {}) }, tries: [...(prev.tries || [])], launches: [...(prev.launches || [])] };
     if (!held.length) c.stillMs += Math.max(0, now - c.lastAt);
   } else {
     const from = prev && Number.isFinite(prev.lastAt) ? prev.lastAt : lastRoundAt;
@@ -157,6 +158,23 @@ const RUNNING = /^(queued|in_progress|waiting|requested|pending)$/;
 // steps (the stage step's run is the one that repeats its waiting sentence) and the acting runs themselves. Beta.31's run said
 // "the factory driver is actively running the requested repair".
 export const OWN_UNITS = /^(factory-driver|factory-deadman|factory-act-|factory-helper-|factory-repair-|forge-step-)/;
+// A named thing holds the release's clock only when it is the release's own work: one of its release programs' units, a GitHub run
+// of its repository on its candidate, its release branch, its version pull request or one of its tickets' pull requests, or one of
+// those pull requests themselves. Anything else a helper names (another repository's run, any open pull request, a web server's
+// unit) is unrelated activity, which never holds it. own: {repo, version, bump (auto-stage's), prNumbers, prHeads}
+export const RELEASE_UNITS = /(freeze|scenario|stage-server|staging-check)/i;
+export function ownedBy(n, own) {
+  if (!n || !own) return false;
+  if (n.kind === "unit") return RELEASE_UNITS.test(n.id) && !OWN_UNITS.test(n.id);
+  if (String(n.repo || "").toLowerCase() !== String(own.repo || "").toLowerCase()) return false;
+  const bump = own.bump || null, nums = (own.prNumbers || []).map(Number), heads = own.prHeads || [];
+  if (n.kind === "pr") return (!!bump && Number(n.id) === Number(bump.pr)) || nums.includes(Number(n.id));
+  if (n.kind === "run") {
+    const b = String(n.headBranch || "");
+    return (/^(candidate|release)\//.test(b) && !!own.version && versionIn(b) === own.version) || (!!bump && ((!!bump.branch && b === bump.branch) || (!!bump.head && n.headSha === bump.head))) || (!!n.headSha && heads.includes(n.headSha));
+  }
+  return false;
+}
 // Each named thing, checked now. run(cmd, args) -> {status, stdout}. Anything the driver cannot read counts as not running.
 export function checkNamed(named, run) {
   return (named || []).map(n => {
@@ -169,7 +187,8 @@ export function checkNamed(named, run) {
       if (!/^[\w.-]+\/[\w.-]+$/.test(n.repo) || !/^\d+$/.test(n.id)) return { ...n, running: false };
       if (n.kind === "run") {
         const r = run("gh", ["api", `repos/${n.repo}/actions/runs/${n.id}`]);
-        return { ...n, running: r.status === 0 && RUNNING.test(String(JSON.parse(r.stdout || "{}").status || "")) };
+        const j = r.status === 0 ? JSON.parse(r.stdout || "{}") : {};
+        return { ...n, running: r.status === 0 && RUNNING.test(String(j.status || "")), headBranch: j.head_branch || null, headSha: j.head_sha || null };
       }
       if (n.kind === "pr") {
         const r = run("gh", ["api", `repos/${n.repo}/pulls/${n.id}`]);
