@@ -6,7 +6,12 @@
 // "in-progress" naming nothing anybody could check, it got a two-hour hold, unrelated activity used up the rest of the six-hour
 // moving credit, and the next escalation was due 19 hours after the release step began to wait.
 //
-// One clock per approved release that has not reached the owner's server, while the release step works on it:
+// THE FORGE 0.3.3: the same clock now runs from the release's approval to its install, in every phase (building tickets, the stage
+// step, the test machine, the scenarios), because a release's ticket nobody built stood still for two hours on 2026-11-24 while the
+// clock waited for every ticket to be done. Its state gains the tickets' states (buildingState); inReleaseStep below is no longer a
+// gate and is kept only for what it says about the release. The only phases without a clock are the owner's go and the wait of
+// tickets that all wait on his answer.
+// One clock per approved release that has not reached the owner's server:
 //   - the release's STATE is the stage step's look at it (look.txt, with its minutes and timestamps taken out), its stage in the
 //     auto-stage state file and its staging record; a change of any of them resets the clock and its ladder;
 //   - CHECKABLE WORK pauses the clock, only while it runs and only inside its own limit: a GitHub run in progress on the candidate
@@ -33,6 +38,8 @@ export const STANDSTILL = Object.freeze({
   runHours: 6, // a GitHub run on the version pull request: its own timeout
   scenariosHours: 3, // a run on the candidate or release branch, and a release program, are bounded by their own start
   stopHours: 2, // auto-stage's STOP file
+  claimHours: 3, // the loop's own limit on a claim (a claim older than this is no claim); the same hours the factory is told
+  silentMinutes: 30, // a run that has written nothing for this long holds nothing: the same half hour progress.mjs calls not working
 });
 const MIN = 60000, H = 60 * MIN;
 
@@ -57,13 +64,14 @@ export function stable(v) {
 // The release's state is three parts, each kept as its own fingerprint, so that a part that cannot be read this round is taken
 // as unchanged (the last known one) while a part that can be read and changed is a change. -> {look, stage, staging}
 const h = v => crypto.createHash("sha1").update(JSON.stringify(v)).digest("hex").slice(0, 16);
-export const partsOf = ({ look, autoStage, staging }) => ({ look: h(normaliseLook(look)), stage: h(stable(autoStage || null)), staging: h(stable(staging || null)) });
+export const partsOf = ({ look, autoStage, staging, build }) => ({ look: h(normaliseLook(look)), stage: h(stable(autoStage || null)), staging: h(stable(staging || null)), ...(build === undefined ? {} : { build: build === null ? null : h(build) }) });
 // parts: this round's parts, null for one that could not be read; known: the clock's (or the journal's) last parts
-export const mergeParts = (parts, known) => Object.fromEntries(["look", "stage", "staging"].map(k => [k, parts[k] != null ? parts[k] : (known && known[k] != null ? known[k] : h(k === "look" ? "" : null))]));
-export const fpOf = parts => h([parts.look, parts.stage, parts.staging]);
+// The ticket part exists only while some ticket is unfinished (buildingState): when it ends (the last ticket done) that is itself a change.
+export const mergeParts = (parts, known) => Object.fromEntries(["look", "stage", "staging", ...(parts.build !== undefined ? ["build"] : [])].map(k => [k, parts[k] != null ? parts[k] : (known && known[k] != null ? known[k] : h(k === "look" ? "" : k === "build" ? "unread" : null))]));
+export const fpOf = parts => h(parts.build != null ? [parts.look, parts.stage, parts.staging, parts.build] : [parts.look, parts.stage, parts.staging]);
 // -> the release's state as one fingerprint, and its parts
-export function releaseState({ look, autoStage, staging }) {
-  const parts = partsOf({ look, autoStage, staging });
+export function releaseState({ look, autoStage, staging, build }) {
+  const parts = partsOf({ look, autoStage, staging, build });
   return { fp: fpOf(parts), parts };
 }
 
@@ -81,6 +89,62 @@ export function inReleaseStep(id, stage, look, journal) {
   return { yes: false, why: "the factory is still building its tickets" };
 }
 
+// ---------------------------------------------------------------- while the tickets are being built (the Forge 0.3.3)
+// The same clock, the same 20/40/60 ladder, for the time before every ticket is done. On 2026-11-24 the last ticket of
+// Godspeed 2.0.0-beta.32 (#616) was workable and nobody built it for about two hours: the factory's laps built other items first,
+// and the per-ticket owner, "factory loop, rung 0", gives a ticket twelve hours. Michael: "I don't want the release to sit still
+// for even an hour without you fixing it."
+// The release is standing still while its unfinished tickets have nothing live: no claim of a run that is still writing, and no
+// change since the clock began in any ticket's state (an issue opening or closing, a pull request opened, merged, given a new
+// commit or a new comment, which is where a review shows). Anything of those starts the count again; an unfinished ticket that
+// waits on the owner (needs-owner, on the issue or its pull request) is the parked path's, not this clock's; when every
+// unfinished ticket is parked the release waits on his answer and has no clock; when none is left the ticket part is gone. A dependency that is already closed is no reason
+// to wait: nothing here looks at dependencies at all, so a ticket whose dependency closed is judged like any other.
+// Pure. release: world.releases[i]; world: the driver's world; -> null | { fp, work, lines, unread, open }
+const claimLive = (c, now) => Number.isFinite(Date.parse(c.at)) && now - Date.parse(c.at) < STANDSTILL.claimHours * H;
+export function buildingState({ release, world, now, activity = null }) {
+  const items = (world && world.items) || {};
+  const tickets = ((release && release.tickets) || []).filter(t => t.issue && !t.deferred);
+  const factories = (world && world.factories) || [];
+  const prim = factories.find(f => f.primary !== false) || (world && world.factory) || {};
+  const runsRead = !((world && world.unreadable) || []).some(u => /\/runs$/.test(String(u.part || "")));
+  const runs = new Map((prim.activeRuns || []).map(r => [String(r.id), r]));
+  const parts = [], work = [], lines = [];
+  let unread = false, open = 0, parked = 0;
+  for (const t of tickets) {
+    const it = items[t.issue];
+    if (!it) { unread = true; parts.push(`${t.issue}|unread`); continue; }
+    const prs = it.prs || [];
+    const claims = (it.loopClaims || []).filter(c => claimLive(c, now));
+    parts.push([t.issue, it.state, prs.map(p => `${p.number}.${p.state}.${p.merged ? 1 : 0}.${p.headSha || ""}.${(p.comments || []).length}`).join(","), claims.map(c => c.run).join(",")].join("|"));
+    if (it.state !== "open") continue;
+    if ((it.labels || []).includes("needs-owner") || prs.some(p => p.state === "open" && (p.labels || []).includes("needs-owner"))) { parked++; lines.push(`#${t.issue}: parked on the owner (needs-owner)`); continue; }
+    open++;
+    let held = false;
+    for (const c of claims) {
+      const r = runs.get(c.run);
+      if (!runsRead) { work.push({ what: `a live claim on #${t.issue} (the factory's runs could not be read)`, until: Date.parse(c.at) + STANDSTILL.claimHours * H }); held = true; }
+      else if (r) {
+        const last = Date.parse(r.lastOutputAt || r.startedAt);
+        const until = Math.min(Date.parse(c.at) + STANDSTILL.claimHours * H, (Number.isFinite(last) ? last : now) + STANDSTILL.silentMinutes * MIN);
+        work.push({ what: `a run is building #${t.issue} (claim by run ${c.run})`, until }); held = true;
+      }
+    }
+    const open_prs = prs.filter(p => p.state === "open").map(p => `#${p.number}`);
+    lines.push(`#${t.issue}: open, ${held ? "being built" : "no live claim and no run on it"}${open_prs.length ? `, open pull request ${open_prs.join(", ")}` : ", no pull request"}`);
+  }
+  // a GitHub run on an unfinished ticket's pull request (its checks) holds the clock for the run's own timeout
+  const heads = new Set(), branches = new Set();
+  for (const t of tickets) for (const p of (((items[t.issue] || {}).prs) || [])) if (p.state === "open") { if (p.headSha) heads.add(p.headSha); if (p.headRef) branches.add(p.headRef); }
+  for (const r of (activity && activity.runs) || []) {
+    const at = Date.parse(r.createdAt);
+    if (Number.isFinite(at) && ((r.headSha && heads.has(r.headSha)) || (r.headBranch && branches.has(r.headBranch)))) work.push({ what: `a GitHub run (${r.name || "a workflow"}) on a ticket's pull request`, until: at + STANDSTILL.runHours * H });
+  }
+  if (!open && !parked) return null;
+  // every unfinished ticket waits on the owner's answer: the questions path owns that wait, with its own escalation to him
+  return { fp: h(["build", ...parts]), work, lines, unread, open, parkedOnly: !open, total: tickets.length };
+}
+
 // ---------------------------------------------------------------- checkable work
 const versionIn = s => (/(\d+\.\d+\.\d+(?:-[a-z]+\.\d+(?:\.\d+)*)?)/i.exec(String(s || "")) || [])[1] || null;
 // -> [{what, until}] the work that holds the clock now (until > now). activity: readActivity's {runs, stop, procs}; autoStage: the
@@ -88,8 +152,8 @@ const versionIn = s => (/(\d+\.\d+\.\d+(?:-[a-z]+\.\d+(?:\.\d+)*)?)/i.exec(Strin
 // what an acting run's in-progress named and the driver found running this round, with the time of the answer; repo: the
 // release's repository (a release program names it first: freeze.mjs <repo> <version>, stage-server.mjs <repo> <version>
 // --release <id>).
-export function workFor({ id, activity, autoStage, about, named = [], now, repo = "" }) {
-  const out = [];
+export function workFor({ id, activity, autoStage, about, named = [], now, repo = "", extra = [] }) {
+  const out = [...extra];
   const v = versionIn(id), bump = (autoStage && autoStage.bump) || null;
   for (const r of (activity && activity.runs) || []) {
     const at = Date.parse(r.createdAt);

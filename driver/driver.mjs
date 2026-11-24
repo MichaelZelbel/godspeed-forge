@@ -31,7 +31,7 @@ import { clockCheck, wentBackwards, verifyInstalled, deliver, readEnvFile } from
 import { gateStep, gateClear, GATE } from "./gate.mjs";
 import { movingUntilFor, heldUntil, creditEvents, creditKeyById, ACTIVITY, buildInventory, advance, violationEntry, describeRow, parseStage, stageStalled, factoryWorking, CHAIN, H as HR, ownerName } from "./inventory.mjs";
 import { actDefaults as onDutyDefaults, launchAct, actResult, markHandled, answeredFile, repairRequestChecked } from "./onduty.mjs";
-import { STANDSTILL, partsOf, mergeParts, fpOf, inReleaseStep, workFor, tick, nextStep as clockNextStep, stillMinutes, namedIn, checkNamed, noticeText, repairWords, ownedBy, OWN_UNITS } from "./standstill.mjs";
+import { STANDSTILL, buildingState, partsOf, mergeParts, fpOf, inReleaseStep, workFor, tick, nextStep as clockNextStep, stillMinutes, namedIn, checkNamed, noticeText, repairWords, ownedBy, OWN_UNITS } from "./standstill.mjs";
 import { aiDefaults, providers, factoryProvider, ladderCandidates, launchHelper, helperResult, refreshTokens, checkJson, helperDir, UNIT_RE } from "./ai.mjs";
 import { applyReport, applyDueDefaults, actDefaults, notify, plain } from "./act.mjs";
 import { housekeep, hkDefaults } from "./housekeeping.mjs";
@@ -216,17 +216,17 @@ export async function round(env, deps = {}) {
     // clock's last (unchanged), never as a change, so an unreadable source never resets or stops it. -> {look, files, fp, unread}
     // Each part is compared on its own: a part that can be read and changed is a change, a part that cannot be read is the
     // clock's last (with the state file lost, the journal's). -> {look (text, for the helpers), files, parts, fp, unread}
-    const stateNow = (id, prev, text, known, about, journal) => {
+    const stateNow = (id, prev, text, known, about, journal, bld) => {
       let got = null, unread = null;
       try { got = (deps.releaseFiles || readReleaseFiles)(env, id); } catch (e) { got = { autoStage: null, staging: null, unread: { stage: String(e.message).slice(0, 200), staging: String(e.message).slice(0, 200) } }; }
       const bad = got.unread || {}; // each file on its own: one that cannot be read never hides a change in the other
       unread = [bad.stage, bad.staging].filter(Boolean).join("; ") || null;
-      const read = partsOf({ look: known && about ? text : "", autoStage: got.autoStage, staging: got.staging });
-      const parts = mergeParts({ look: known ? read.look : null, stage: bad.stage ? null : read.stage, staging: bad.staging ? null : read.staging }, (prev && prev.parts) || (journal && journal.parts) || null);
+      const read = partsOf({ look: known && about ? text : "", autoStage: got.autoStage, staging: got.staging, build: bld ? bld.fp : undefined });
+      const parts = mergeParts({ look: known ? read.look : null, stage: bad.stage ? null : read.stage, staging: bad.staging ? null : read.staging, ...(bld ? { build: bld.unread ? null : read.build } : {}) }, (prev && prev.parts) || (journal && journal.parts) || null);
       const look = known ? (about ? text : "") : (prev && typeof prev.lookText === "string" ? prev.lookText : "");
       const last = (prev && prev.files) || { autoStage: null, staging: null };
       const files = { autoStage: bad.stage ? last.autoStage : got.autoStage, staging: bad.staging ? last.staging : got.staging };
-      return { look, files, unread, parts, fp: fpOf(parts) };
+      return { look: known && bld && bld.lines.length ? `${look}${look ? String.fromCharCode(10) : ""}The release's unfinished tickets: ${bld.lines.join("; ")}.` : look, files, unread, parts, fp: fpOf(parts) };
     };
     // What is the release's own work, for what a helper names (standstill.mjs ownedBy): its repository and version, auto-stage's
     // version pull request, and its tickets' pull requests
@@ -533,25 +533,34 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     for (const rel of clocked) {
       const prev = state.standstill[rel.id] || null;
       const about = !!(stage && stage.id === rel.id);
-      let step = rel.unread ? { yes: true, why: "this round's read does not list it, and the journal holds it open; the clock goes on" }
+      // ONE clock from approval to install, with no phase where it is off (the Forge 0.3.3, Michael 2026-11-24): the release's state
+      // is the stage step's look, auto-stage's state, the staging record and, while a ticket is unfinished, the tickets' states.
+      // The one exception is the owner's go: the stage step says it has staged and announced the release (the question is delivered
+      // before it says so), and the release then waits for him.
+      const relObj = (world.releases || []).find(r => r.id === rel.id) || null;
+      let bld = null; try { bld = relObj ? buildingState({ release: relObj, world, now, activity }) : null; } catch (e) { record({ kind: "release clock: tickets unreadable", release: rel.id, why: String(e.message).slice(0, 160) }); }
+      const waitingGo = about && lookKnown && /^Already staged and announced at /m.test(stageText);
+      let step = waitingGo ? { yes: false, why: "the release is staged and announced, and waits for the owner's go" }
+        : bld && bld.parkedOnly ? { yes: false, why: "every unfinished ticket waits on the owner's answer; the questions path owns that wait" }
+        : rel.unread ? { yes: true, why: "this round's read does not list it, and the journal holds it open; the clock goes on" }
         : !lookKnown && (prev || (jv.clocks || {})[rel.id]) ? { yes: true, why: "the release step's look cannot be read now; the clock goes on" }
-        : inReleaseStep(rel.id, stage, about ? stageText : "", jv.releases[rel.id] || null);
+        : { yes: true, why: bld ? `${bld.open} of ${bld.total} tickets are unfinished` : "the release step is working on it" };
       if (!step.yes) { clocks[rel.id] = { id: rel.id, inStep: false, why: step.why }; delete state.standstill[rel.id]; continue; }
       // an unreadable source never stops the clock: nothing is known to have changed, so its part is the one the clock has
-      const now0 = stateNow(rel.id, prev, stageText, lookKnown, about, (jv.clocks || {})[rel.id] || null);
+      const now0 = stateNow(rel.id, prev, stageText, lookKnown, about, (jv.clocks || {})[rel.id] || null, bld);
       if (now0.unread) { step = { yes: true, why: `its state could not be read (${now0.unread.slice(0, 120)}); the clock goes on` }; record({ kind: "release clock: a source is unreadable", release: rel.id, why: now0.unread }); }
       const { look, files, fp } = now0;
       try {
         const named = prev && prev.fp === fp && (prev.named || []).length ? (deps.checkNamed || checkNamedReal)(prev.named).filter(n => n.running && ownedBy(n, releaseOwn(rel.id, files.autoStage))) : [];
-        const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, about, named, now, repo: env.REPO });
+        const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, about, named, now, repo: env.REPO, extra: bld ? bld.work : [] });
         const t = tick(prev, { fp, work, now, lastRoundAt: jv0.lastRoundAt, journal: (jv.clocks || {})[rel.id] || null });
         t.clock.named = named; t.clock.version = rel.version || t.clock.version;
         t.clock.parts = now0.parts; t.clock.lookText = look; t.clock.files = files; // the parts as now known (unreadable ones the last known)
         // the journal keeps when this state began, so a lost state file never resets the clock
         if (!((jv.clocks || {})[rel.id] && jv.clocks[rel.id].fp === t.clock.fp)) clockEvents.push({ t: "clock", release: rel.id, fp: t.clock.fp, parts: t.clock.parts, since: t.clock.since, at: nowIso });
         state.standstill[rel.id] = t.clock;
-        clocks[rel.id] = { id: rel.id, version: t.clock.version, inStep: true, why: step.why, due: t.due, look, files, minutes: stillMinutes(t.clock), held: t.clock.held, next: clockNextStep(t.clock) };
-      } catch (e) { record({ kind: "release clock failed", release: rel.id, why: String(e.message).slice(0, 200) }); }
+        clocks[rel.id] = { id: rel.id, version: t.clock.version, inStep: true, why: step.why, due: t.due, look, files, minutes: stillMinutes(t.clock), held: t.clock.held, next: clockNextStep(t.clock), where: bld ? `${bld.open} of ${bld.total} tickets unfinished (${bld.lines.join("; ")})` : (about && parseStage(stageText).reason) || (about ? `the release step says ${parseStage(stageText).result || "nothing"}` : "the release step has nothing to say about it"), progressed: t.clock.since };
+      } catch (e) { if (process.env.FD_DEBUG) console.error(e.stack); record({ kind: "release clock failed", release: rel.id, why: String(e.message).slice(0, 200) }); }
     }
     for (const id of Object.keys(state.standstill)) if (!listed(id) && !carried.includes(id)) delete state.standstill[id]; // installed, superseded or no longer open in the journal
     if (!dry && clockEvents.length) { try { appendEvents(journalFile, clockEvents); } catch (e) { record({ kind: "release clock not journaled", why: String(e.message).slice(0, 160) }); } }
@@ -575,7 +584,8 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
           // apart); the release's own sources are read again right now and must agree, and none may be unreadable
           // the same rules as the clock: what cannot be read is unchanged (so the hour is never missed), what has changed holds it
           let text2 = null, known2 = false; try { text2 = await (deps.stageLook || stageLookReal)(env); known2 = typeof text2 === "string"; } catch { known2 = false; }
-          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null);
+          const freshRel = (worldNow.releases || []).find(r => r.id === k.id) || null;
+          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null, (() => { try { return freshRel ? buildingState({ release: freshRel, world: worldNow, now, activity }) : null; } catch { return null; } })());
           const gone = fresh.files.staging && fresh.files.staging.status === "installed" ? "it is installed now" : !(deps.planApproved || planStillApproved)(env, k.id) ? "its plan is no longer approved" : null;
           if (fresh.fp !== sc.fp || gone) { record({ kind: "message held", entry: `standstill:${k.id}`, why: gone || "the release moved in the fresh read" }); continue; }
           const words = versionWords(k.version || "");
@@ -1071,7 +1081,7 @@ export function describe(out) {
   lines.push(`inventory (${(out.inventory || []).length} entries, ${out.violations || 0} rule violations, ${out.actRunsToday || 0} acting runs in the last 24 h):`);
   for (const r of out.inventory || []) lines.push(`  ${describeRow(r, Date.now())}`);
   for (const p of out.stepPlan || []) lines.push(`step ${p.name}: ${p.text}`);
-  for (const k of out.standstill || []) lines.push(k.inStep ? `release ${k.id}: the release clock: still for ${k.minutes} minutes${(k.held || []).length ? `, held by ${k.held.join("; ")}` : ""}; next step: ${k.next.what} by minute ${k.next.at}${k.due.length ? ` (due now: ${k.due.join(", ")})` : ""}` : `release ${k.id}: no release clock (${k.why})`);
+  for (const k of out.standstill || []) lines.push(k.inStep ? `release ${k.id}: the release clock: still for ${k.minutes} minutes${(k.held || []).length ? `, held by ${k.held.join("; ")}` : ""}; next step: ${k.next.what} by minute ${k.next.at}${k.due.length ? ` (due now: ${k.due.join(", ")})` : ""}; where it is: ${k.where || "unknown"}` : `release ${k.id}: no release clock (${k.why})`);
   lines.push(`obstacles (${out.steps.length}):`);
   for (const s of out.steps) lines.push(`  ${s.kind} ${s.key} since ${s.since}: ${s.do}${s.provider ? ` on ${s.provider}/${s.model}` : ""}${s.note ? ` (${s.note})` : ""}`);
   return lines.join("\n");
