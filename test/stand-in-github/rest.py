@@ -47,7 +47,7 @@ def ref_sha(state, ref):
 def shown_issue(repo, item):
     number = item["number"]
     return {"number": number, "title": item["title"], "body": item["body"], "state": item["state"].lower(),
-            "labels": [], "user": {"login": item.get("login", "scenario-builder[bot]"), "type": "Bot"},
+            "labels": [], "user": {"login": item.get("login", "someone-else"), "type": "User"},
             "created_at": item.get("createdAt", now()), "updated_at": item.get("createdAt", now()),
             "html_url": f"{SITE}/{repo}/issues/{number}"}
 
@@ -185,7 +185,7 @@ class Handler(BaseHTTPRequestHandler):
             if not found:
                 return 404, {"message": "Not Found"}
             item = found[0]
-            for key, field in (("name", "name"), ("body", "body"), ("prerelease", "isPrerelease"), ("draft", "isDraft")):
+            for key, field in (("tag_name", "tagName"), ("name", "name"), ("body", "body"), ("prerelease", "isPrerelease"), ("draft", "isDraft")):
                 if key in payload:
                     item[field] = payload[key]
             if payload.get("make_latest") == "true" and not item["isPrerelease"] and not item["isDraft"]:
@@ -248,7 +248,7 @@ class Handler(BaseHTTPRequestHandler):
             if not found:
                 return 404, {"message": "Not Found"}
             if method == "GET":
-                return 200, page([{"id": index + 1, "body": c["body"], "user": {"login": c.get("login", "scenario-builder[bot]")}}
+                return 200, page([{"id": index + 1, "body": c["body"], "user": {"login": c.get("login", "someone-else")}}
                                   for index, c in enumerate(found[0]["comments"])], query)
             if method == "POST":
                 found[0]["comments"].append({"body": payload["body"], "login": self.login()})

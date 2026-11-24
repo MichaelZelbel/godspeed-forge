@@ -25,6 +25,35 @@ assert_no_secrets() {
   fi
 }
 
+# Inside the container: the stand-in GitHub's REST face, and the project the Forge has set up for the owner. The
+# address is exported for the Forge, which reads it as FORGE_GITHUB_API_URL; port 0 keeps two runs apart.
+scenario_forge_start() {
+  gh serve >/scenario/artifacts/github-serve.log 2>&1 &
+  for _ in $(seq 100); do
+    [ -f /scenario/github/rest.port ] && break
+    sleep 0.1
+  done
+  [ -f /scenario/github/rest.port ] || scenario_fail "The stand-in GitHub did not start"
+  FORGE_GITHUB_API_URL="http://127.0.0.1:$(cat /scenario/github/rest.port)"
+  export FORGE_GITHUB_API_URL
+  git -C /scenario/sample remote set-url origin /scenario/remote.git
+  node /forge/scenarios/support/owner.mjs seed
+}
+
+scenario_owner_says() {
+  node /forge/scenarios/support/owner.mjs say "$@"
+}
+
+# The tag of the release GitHub shows as the latest, written to the file named.
+scenario_public_version() {
+  gh release list --json tagName,isLatest | python3 -c \
+    'import json, sys; print(next(r["tagName"] for r in json.load(sys.stdin) if r["isLatest"]))' >"$1"
+}
+
+scenario_notices() {
+  node /forge/scenarios/support/owner.mjs notices >/scenario/notices.txt
+}
+
 scenario_cleanup() {
   if [ -n "${SCENARIO_ROOT-}" ] && [ -d "$SCENARIO_ROOT" ]; then
     rm -rf "$SCENARIO_ROOT"
@@ -54,6 +83,7 @@ scenario_start() {
   git -C "$SCENARIO_ROOT/sample" remote add origin "$SCENARIO_ROOT/remote.git"
   git -C "$SCENARIO_ROOT/sample" push -q origin main
   git --git-dir="$SCENARIO_ROOT/remote.git" symbolic-ref HEAD refs/heads/main
+  chmod -R a+rwX "$SCENARIO_ROOT/remote.git" "$SCENARIO_ROOT/sample"
   STANDIN_GITHUB_STATE="$SCENARIO_ROOT/github" \
     "$repository_root/test/stand-in-github/control" init \
       --remote "$SCENARIO_ROOT/remote.git" --runtime-remote /scenario/remote.git
@@ -72,12 +102,13 @@ scenario_start() {
     -e STANDIN_AGENT_FIXTURE=/scenario/agent-fixture \
     -e STANDIN_AGENT_TRANSCRIPT=/scenario/transcript \
     -e STANDIN_GITHUB_STATE=/scenario/github \
+    -e GODSPEED_WORKSPACE=/home/scenario/godspeed -e GODSPEED_VERSION=2.0.0-beta.24 \
     -e GH_TOKEN= -e GITHUB_TOKEN= -e OPENAI_API_KEY= -e ANTHROPIC_API_KEY= \
     -e HTTP_PROXY= -e HTTPS_PROXY= -e ALL_PROXY= \
     -v "$repository_root:/forge:ro" \
     -v "$SCENARIO_ROOT:/scenario" \
     -w /scenario/sample \
-    "$image" bash "/forge/scenarios/$scenario_name.sh" --inside; then
+    "$image" bash -c 'umask 000; git config --global safe.directory "*"; exec bash "$@"' bash "/forge/scenarios/$scenario_name.sh" --inside; then
     return 1
   fi
 }

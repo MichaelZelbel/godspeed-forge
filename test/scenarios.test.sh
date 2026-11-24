@@ -40,16 +40,16 @@ python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["remote"] == "
 [ "$(git --git-dir="$scenario_root/remote.git" symbolic-ref HEAD)" = refs/heads/main ]
 printf '%s\n' "$scenario_root" >>"$FAKE_DOCKER_LOG"
 case "$script" in
-  forge-setup.sh) echo "Forge setup command is missing" ;;
-  forge-one-release.sh) echo "Forge plan-release command is missing" ;;
-  forge-questions.sh) echo "Forge question relay is missing" ;;
+  forge-setup.sh) echo "Forge setup cannot run offline yet: creating its GitHub Apps calls https://api.github.com directly (lib/github-adapter.mjs)" ;;
+  forge-one-release.sh) echo "The owner's go did not publish the release" ;;
+  forge-questions.sh) echo "A build question reached the owner" ;;
   *) exit 64 ;;
 esac
 exit 1
 EOF
 chmod +x "$root/bin/docker"
 
-test_case "two scenario runs at once each fail closed, naming the missing step"
+test_case "two scenario runs at once each fail closed, naming the failing step"
 export PATH="$root/bin:$PATH"
 export FAKE_DOCKER_LOG="$root/docker.log"
 set +e
@@ -65,9 +65,9 @@ set -e
 [ "$one_status" -ne 0 ]
 [ "$two_status" -ne 0 ]
 test_case "each run reports the same three named failures and 0 of 3 pass"
-expected='FAIL forge-setup: Forge setup command is missing
-FAIL forge-one-release: Forge plan-release command is missing
-FAIL forge-questions: Forge question relay is missing
+expected='FAIL forge-setup: Forge setup cannot run offline yet: creating its GitHub Apps calls https://api.github.com directly (lib/github-adapter.mjs)
+FAIL forge-one-release: The owner'"'"'s go did not publish the release
+FAIL forge-questions: A build question reached the owner
 0 of 3 pass'
 [ "$(cat "$root/one.out")" = "$expected" ]
 [ "$(cat "$root/two.out")" = "$expected" ]

@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 . scenarios/support/common.sh
 
 owner_requests_setup() {
-  scenario_fail "Forge setup command is missing"
+  scenario_fail "Forge setup cannot run offline yet: creating its GitHub Apps calls https://api.github.com directly (lib/github-adapter.mjs)"
 }
 
 assert_setup_result() {

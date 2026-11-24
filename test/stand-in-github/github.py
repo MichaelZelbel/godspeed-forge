@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -116,6 +117,10 @@ def issue(argv):
         item = find(state["issues"], parsed.number, "issue")
         item["comments"].append({"body": parsed.body})
         write_state(root, state)
+    elif operation == "close":
+        item = find(state["issues"], args[0] if args else "", "issue")
+        item["state"] = "CLOSED"
+        write_state(root, state)
     else:
         die("unsupported issue operation")
 
@@ -162,6 +167,10 @@ def pull_request(argv):
             item["mergeCommit"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=directory, check=True,
                                                  capture_output=True, text=True).stdout.strip()
         item["mergedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for number in re.findall(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", item["body"]):
+            for closed in state["issues"]:
+                if closed["number"] == int(number):
+                    closed["state"] = "CLOSED"
         item["merged"] = True
         item["state"] = "MERGED"
         write_state(root, state)
