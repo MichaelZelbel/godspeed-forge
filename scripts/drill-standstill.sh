@@ -18,6 +18,7 @@
 #   bash scripts/drill-standstill.sh check               read the journals: the minute of each step; exit 0 only when all three
 #                                                         came by their minute
 #   bash scripts/drill-standstill.sh run [archive]       install, start, wait 65 minutes, check
+#   bash scripts/drill-standstill.sh reset               back to before start (to run it again)
 #
 # Stand-ins, all in /var/lib/forge-drill: the AIs (codex shadowed in /usr/local/sbin, claude named in the settings) answer
 # exactly what beta.31's helper answered; GitHub is the driver's own stand-in hook (RD_GH_CMD), showing two tickets closed
@@ -203,6 +204,10 @@ do_start() {
   say "Installing the driver with the drill's settings ..."
   forge driver install --settings-dir "$SETTINGS"
   systemctl daemon-reload
+  # the drill starts on a driver that has done a round, as on a server where it has run for a while (its clock counts a new
+  # state from the last round that saw the old one)
+  say "Running the driver's first round ..."
+  systemctl start factory-driver.service || stop "the driver's first round failed: journalctl -u factory-driver.service"
   systemctl enable --now forge-drill-stage.timer >/dev/null
   # minute 0: the release step starts saying beta.31's waiting sentence, and nothing about the release changes after it
   date -u +%s >"$DRILL/started-at"
@@ -249,10 +254,19 @@ CHECK
   DRILL="$DRILL" STATE="$STATE" SPOOL="$SPOOL" RELEASE="$RELEASE" T0="$t0" node "$DRILL/bin/check.mjs"
 }
 
+# Back to before `start` (the Forge stays installed): the driver's timers off, its state, the dead-man's and the drill's gone.
+do_reset() {
+  preconditions
+  systemctl disable --now factory-driver.timer factory-deadman.timer forge-drill-stage.timer >/dev/null 2>&1 || true
+  rm -rf "$STATE" /var/lib/godspeed/forge/deadman "$SPOOL" "$DRILL/started-at" "$DRILL/deadman-journal.json"
+  rm -f "$SETTINGS/driver.json" "$SETTINGS/driver.env" "$SETTINGS/projects/drill-owner--drill-product.json"
+}
+
 case "${1:-}" in
   install) shift; do_install "$@" ;;
   start) do_start ;;
   check) do_check ;;
+  reset) do_reset ;;
   run) shift; do_install "$@"; do_start; say "Waiting 65 minutes ..."; sleep 3900; do_check ;;
-  *) say "usage: bash $0 install [archive] | start | check | run [archive]"; exit 2 ;;
+  *) say "usage: bash $0 install [archive] | start | check | run [archive] | reset"; exit 2 ;;
 esac
