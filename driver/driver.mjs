@@ -175,6 +175,7 @@ export async function round(env, deps = {}) {
       const first = sc.rung1Provider || ((sc.tries || []).find(t => t.rung === 1 && t.provider !== "none") || {}).provider;
       const other = first === "claude" ? "codex" : "claude";
       const provider = rung === 1 ? (usable.includes("codex") ? "codex" : usable[0]) : (usable.includes(other) ? other : usable[0]);
+      if (rung === 2 && provider && provider !== other) record({ kind: "release clock: the other AI is not reachable", entry: entryId, wanted: other, used: provider, why: "a second try on the same AI now beats none; the notice says so" });
       if (!provider) {
         if (["codex", "claude"].some(signedOut0)) { delete sc.done[key]; record({ kind: "acting run waits", entry: entryId, rung, why: "its AI cannot sign in right now; housekeeping links the sign-in again first" }); return; }
         (sc.tries ||= []).push({ rung, at: nowIso2, provider: "none", result: "unresolved", summary: "could not start: no AI provider is reachable" }); record({ kind: "acting run launch failed", entry: entryId, rung, why: "no AI provider is reachable" }); return;
@@ -471,24 +472,33 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     // ---- THE RELEASE CLOCK (standstill.mjs): every approved release the release step works on, judged by its own state alone
     state.standstill ||= {};
     const clocks = {};
-    for (const rel of world.releases || []) {
+    const releasesUnread = (world.unreadable || []).some(u => u.part === "releases");
+    const clockEvents = [];
+    // the releases read this round; when the release list itself could not be read, the ones the clock already has go on
+    const clocked = [...(world.releases || []).map(r => ({ id: r.id, version: r.version })), ...(releasesUnread ? Object.keys(state.standstill).filter(id => !(world.releases || []).some(r => r.id === id)).map(id => ({ id, version: (state.standstill[id] || {}).version, unread: true })) : [])];
+    for (const rel of clocked) {
+      const prev = state.standstill[rel.id] || null;
+      const about = !!(stage && stage.id === rel.id);
+      let step = rel.unread ? { yes: true, why: "the release list could not be read this round; the clock goes on" } : inReleaseStep(rel.id, stage, about ? stageText : "", jv.releases[rel.id] || null);
+      if (!step.yes) { clocks[rel.id] = { id: rel.id, inStep: false, why: step.why }; delete state.standstill[rel.id]; continue; }
+      const look = about ? stageText : "";
+      // an unreadable source never stops the clock: nothing is known to have changed, so the state is the one the clock has
+      let files = { autoStage: null, staging: null }, fp;
+      try { files = (deps.releaseFiles || readReleaseFiles)(env, rel.id); fp = releaseState({ look, autoStage: files.autoStage, staging: files.staging }).fp; }
+      catch (e) { fp = prev ? prev.fp : `unreadable:${rel.id}`; step = { yes: true, why: `its state could not be read (${String(e.message).slice(0, 120)}); the clock goes on` }; record({ kind: "release clock: a source is unreadable", release: rel.id, why: String(e.message).slice(0, 200) }); }
       try {
-        const about = !!(stage && stage.id === rel.id);
-        const step = inReleaseStep(rel.id, stage, about ? stageText : "", jv.releases[rel.id] || null);
-        if (!step.yes) { clocks[rel.id] = { id: rel.id, inStep: false, why: step.why }; delete state.standstill[rel.id]; continue; }
-        const files = (deps.releaseFiles || readReleaseFiles)(env, rel.id);
-        const look = about ? stageText : "";
-        const { fp } = releaseState({ look, autoStage: files.autoStage, staging: files.staging });
-        const prev = state.standstill[rel.id] || null;
         const named = prev && prev.fp === fp && (prev.named || []).length ? (deps.checkNamed || checkNamedReal)(prev.named).filter(n => n.running) : [];
         const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, about, named, now });
-        const t = tick(prev, { fp, work, now, lastRoundAt: jv0.lastRoundAt });
-        t.clock.named = named;
+        const t = tick(prev, { fp, work, now, lastRoundAt: jv0.lastRoundAt, journal: (jv.clocks || {})[rel.id] || null });
+        t.clock.named = named; t.clock.version = rel.version || t.clock.version;
+        // the journal keeps when this state began, so a lost state file never resets the clock
+        if (!((jv.clocks || {})[rel.id] && jv.clocks[rel.id].fp === fp)) clockEvents.push({ t: "clock", release: rel.id, fp, since: t.clock.since, at: nowIso });
         state.standstill[rel.id] = t.clock;
-        clocks[rel.id] = { id: rel.id, version: rel.version, inStep: true, why: step.why, due: t.due, look, files, minutes: stillMinutes(t.clock), held: t.clock.held, next: clockNextStep(t.clock) };
+        clocks[rel.id] = { id: rel.id, version: t.clock.version, inStep: true, why: step.why, due: t.due, look, files, minutes: stillMinutes(t.clock), held: t.clock.held, next: clockNextStep(t.clock) };
       } catch (e) { record({ kind: "release clock failed", release: rel.id, why: String(e.message).slice(0, 200) }); }
     }
-    if (!(world.unreadable || []).some(u => u.part === "releases")) for (const id of Object.keys(state.standstill)) if (!(world.releases || []).some(r => r.id === id)) delete state.standstill[id]; // installed or gone (never on a read that failed)
+    if (!releasesUnread) for (const id of Object.keys(state.standstill)) if (!(world.releases || []).some(r => r.id === id)) delete state.standstill[id]; // installed or gone (never on a read that failed)
+    if (!dry && clockEvents.length) { try { appendEvents(journalFile, clockEvents); } catch (e) { record({ kind: "release clock not journaled", why: String(e.message).slice(0, 160) }); } }
     out.standstill = Object.values(clocks);
     // the generic chain neither launches for nor tells about a release the clock drives: one owner per release
     const byClock = new Set(Object.values(clocks).filter(k => k.inStep).flatMap(k => [`release:${k.id}`, `stage:${k.id}`]));
@@ -641,6 +651,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     if (!dry) for (const k of Object.values(clocks)) {
       if (!k.inStep || !k.due.length) continue;
       const sc = state.standstill[k.id];
+      const doneBefore = { ...sc.done };
       for (const d of k.due) {
         if (d === "helper" || d === "other-ai") clockLaunch(k, sc, d === "helper" ? 1 : 2);
         else if (d === "repair") {
@@ -665,6 +676,8 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
           record({ kind: "told Michael", entries: [`standstill:${k.id}`], minutes: k.minutes, by: "the release clock", queue: !a2.failed.length, receipts: n2.receipts, failed: n2.failed });
         }
       }
+      const taken = Object.keys(sc.done).filter(s => sc.done[s] && !doneBefore[s]).map(step => ({ t: "clock-step", release: k.id, fp: sc.fp, step, at: iso(now) }));
+      if (taken.length) { try { appendEvents(journalFile, taken); } catch (e) { record({ kind: "release clock not journaled", why: String(e.message).slice(0, 160) }); } }
     }
     let L = adv.actions.launch;
     if (L && !dry && entries.length) { // work may have started since the round began (auto-stage's STOP, a run): look again right before launching

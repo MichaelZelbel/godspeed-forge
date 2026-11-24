@@ -34,14 +34,13 @@ export const STANDSTILL = Object.freeze({
 const MIN = 60000, H = 60 * MIN;
 
 // ---------------------------------------------------------------- the release's state
-// The stage step's look without what changes on every look while nothing happens: "(for 25 minutes)", "35 minutes old", times,
-// and commit ids (main's head is named in the look; the release's own steps show in its state file and staging record).
+// The stage step's look without what changes on every look while nothing happens: its minutes ("(for 25 minutes)", "35 minutes
+// old") and its timestamps. Everything else it says is the state (a new commit named in it is a change).
 export function normaliseLook(text) {
   return String(text || "").split(/\r?\n/)
     .map(l => l.replace(/\d{4}-\d\d-\d\d[T ]\d\d:\d\d(?::\d\d(?:\.\d+)?)?(?:Z|[+-]\d\d:?\d\d)?/g, "<time>")
       .replace(/\s*\(for \d+ (?:minute|hour)s?\)/gi, "")
       .replace(/\b\d+ (second|minute|hour|day)s?\b/gi, "<n> $1s")
-      .replace(/\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/g, "<commit>")
       .trim())
     .filter(Boolean).join("\n");
 }
@@ -59,15 +58,16 @@ export function releaseState({ look, autoStage, staging }) {
 }
 
 // Is the release in the release step's hands? While the factory still builds its tickets, each ticket has its own clock.
-// stage: parseStage(look) or null; journal: the journal's view of the release ({tickets, slots}) or null.
+// stage: parseStage(look) or null; look: the look's text when it is about this release; journal: the journal's view of the
+// release ({tickets, slots}) or null. A release the look does not name (none, or another one) is the release step's once
+// every ticket is done: one clock per approved release.
 export function inReleaseStep(id, stage, look, journal) {
-  if (stage && stage.id) {
-    if (stage.id !== id) return { yes: false, why: `the release step is working on ${stage.id}` };
+  if (stage && stage.id === id) {
     if (/^Not complete yet: waiting on /m.test(String(look || ""))) return { yes: false, why: "the factory is still building its tickets" };
     return { yes: true, why: "the release step is working on it" };
   }
   const sealed = (journal && journal.tickets) || [];
-  if (sealed.length && sealed.every(t => `t:${t.item}:resolved` in ((journal && journal.slots) || {}))) return { yes: true, why: "every ticket is done and the release step says nothing about it" };
+  if (sealed.length && sealed.every(t => `t:${t.item}:resolved` in ((journal && journal.slots) || {}))) return { yes: true, why: stage && stage.id ? `every ticket is done, and the release step is working on ${stage.id}` : "every ticket is done and the release step says nothing about it" };
   return { yes: false, why: "the factory is still building its tickets" };
 }
 
@@ -85,22 +85,30 @@ export function workFor({ id, activity, autoStage, about, named = [], now }) {
     if (/^(candidate|release)\//.test(String(r.headBranch || "")) && v && versionIn(r.headBranch) === v) out.push({ what: `a GitHub run (${r.name || "a workflow"}) on ${r.headBranch}`, until: at + STANDSTILL.scenariosHours * H });
     else if (bump && ((bump.head && r.headSha === bump.head) || (bump.branch && r.headBranch === bump.branch))) out.push({ what: `a GitHub run (${r.name || "a workflow"}) on the version pull request${bump.pr ? ` #${bump.pr}` : ""}`, until: at + STANDSTILL.runHours * H });
   }
+  // auto-stage's STOP belongs to the release the stage step works on (it writes only the main project's); its programs name the
+  // release's version in their arguments, so another release's or project's never count
   if (about && activity && activity.stop && Number.isFinite(Date.parse(activity.stop.at))) out.push({ what: "auto-stage's STOP file (the scenarios run)", until: Date.parse(activity.stop.at) + STANDSTILL.stopHours * H });
-  if (about) for (const p of (activity && activity.procs) || []) {
+  for (const p of (activity && activity.procs) || []) {
     const m = /release\/(freeze|stage-server|staging-check)\.mjs/.exec(String(p.args || ""));
-    if (m && Number.isFinite(p.startedAt)) out.push({ what: `the release step's ${m[1]} program`, until: p.startedAt + STANDSTILL.scenariosHours * H });
+    if (m && v && String(p.args).split(/\s+/).some(a => a === v || a.startsWith(`${v}.`)) && Number.isFinite(p.startedAt)) out.push({ what: `the release step's ${m[1]} program`, until: p.startedAt + STANDSTILL.scenariosHours * H });
   }
   for (const n of named || []) if (Number.isFinite(n.answeredAt)) out.push({ what: `${n.what}, which an acting run named and is running`, until: n.answeredAt + STANDSTILL.namedHoldMinutes * MIN });
   return out.filter(w => w.until > now);
 }
 
 // ---------------------------------------------------------------- the clock
-// prev: this release's clock from the last round, or null. -> { clock, due: ["helper" | "other-ai" | "repair" | "notice"] }
+// prev: this release's clock from the last round, or null. journal: what the journal holds for this release's clock ({fp, since,
+// steps}), which a lost or corrupt state file cannot take away. -> { clock, due: ["helper" | "other-ai" | "repair" | "notice"] }
 // A new state is counted from the last round that saw the old one (the state changed somewhere after it), so a step is never
-// late: the release has stood still for at most that long when its step comes.
-export function tick(prev, { fp, work, now, lastRoundAt }) {
+// late against the change itself, and at most one round early.
+export function tick(prev, { fp, work, now, lastRoundAt, journal = null }) {
   const held = work.filter(w => w.until > now);
   let c;
+  if (!(prev && prev.fp === fp) && journal && journal.fp === fp && Number.isFinite(journal.since)) {
+    // the state file lost this clock: the journal has when this state began and which steps were taken (time held by work
+    // since then is not known, so it counts as still: the steps come early, never late)
+    prev = { fp, since: journal.since, stillMs: Math.max(0, now - journal.since), lastAt: now, cycleFrom: 0, done: Object.fromEntries((journal.steps || []).map(s => [s, true])), tries: [], named: [] };
+  }
   if (prev && prev.fp === fp) {
     c = { ...prev, done: { ...(prev.done || {}) }, tries: [...(prev.tries || [])] };
     if (!held.length) c.stillMs += Math.max(0, now - c.lastAt);
@@ -180,10 +188,10 @@ const PROVIDER_WORDS = { codex: "Codex", claude: "Claude" };
 export function noticeText(versionName, launches, requested) {
   const started = (launches || []).filter(l => PROVIDER_WORDS[l.provider]).sort((a, b) => a.rung - b.rung);
   const names = [...new Set(started.map(l => PROVIDER_WORDS[l.provider]))];
-  const tried = started.length >= 2 ? `Two AI helpers tried to move it${names.length === 2 ? `, first ${names[0]} and then ${names[1]}` : ""}, and it is still stuck`
+  const tried = started.length >= 2 ? `Two AI helpers tried to move it, ${names.length === 2 ? `first ${names[0]} and then ${names[1]}` : `both on ${names[0]}, as the other AI could not be reached`}, and it is still stuck`
     : started.length === 1 ? `One AI helper (${names[0]}) tried to move it and it is still stuck; a second one could not be started`
     : "No AI helper could be started to move it";
-  return `${versionName} has not moved for an hour. ${tried}, so ${requested ? "the repair program is now working on it" : "Mission Control keeps trying to start the repair program"}; nothing is needed from you unless a later message says so.`;
+  return `${versionName} has not moved for about an hour. ${tried}, so ${requested ? "the repair program is now working on it" : "Mission Control keeps trying to start the repair program"}; nothing is needed from you unless a later message says so.`;
 }
 // The repair request the dead-man's repair run reads (deadman.mjs puts it into its brief). tries: the answers (and failed starts);
 // launches: the runs started, of which one without an answer yet is still running.

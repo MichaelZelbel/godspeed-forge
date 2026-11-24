@@ -218,7 +218,7 @@ export function readActivity(env, world, run = sysRun, now = Date.now()) {
     try { for (const x of JSON.parse(r.stdout).workflow_runs || []) runs.push({ headBranch: x.head_branch, headSha: x.head_sha, createdAt: x.run_started_at || x.created_at, name: x.name }); } catch { /* unreadable: nothing is called moving */ }
   }
   let stop = null;
-  for (const f of world.factories || []) { const st = f && f.stop; if (st && /auto-stage/.test(String(st.writer || st.line || "")) && now - Date.parse(st.at) < 2 * HOUR) stop = { at: st.at }; }
+  for (const f of world.factories || []) { const st = f && f.stop; if (f && f.primary !== false && st && /auto-stage/.test(String(st.writer || st.line || "")) && now - Date.parse(st.at) < 2 * HOUR) stop = { at: st.at }; } // auto-stage writes only the main project's
   // a release program alive right now (auto-stage's look, the freeze, the stage-server install): visibly working
   const ps = run("ps", ["-eo", "etimes=,args="]); // elapsed seconds: each program is bounded by its own start
   const procs = String(ps.stdout || "").split(String.fromCharCode(10)).map(l => /^\s*(\d+)\s+(.*)$/.exec(l)).filter(m => m && /release\/(auto-stage|freeze|stage-server|staging-check)\.mjs/.test(m[2]) && !/--dry-run|--explain/.test(m[2])).map(m => ({ startedAt: now - Number(m[1]) * 1000, args: m[2].slice(0, 120) }));

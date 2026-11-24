@@ -71,10 +71,10 @@ test("ticket 01: beta.31 replayed, the same waiting sentence for 3 hours and an 
   assert.match(s.requests[0].words, new RegExp(`^The approved release ${ID} has not moved for 60 minutes`));
   assert.match(s.requests[0].words, /rung 1 on codex: unresolved \(answered in-progress, but named nothing the driver could see running: The factory driver is actively running/, "the lie is named as what it was");
   assert.deepEqual(s.deadman, [60], "and the dead-man is started at once to read it");
-  const notice = s.told.find(t => /has not moved for an hour/.test(t.text));
+  const notice = s.told.find(t => /has not moved for about an hour/.test(t.text));
   assert.ok(notice && notice.minute <= 60, `the notice by minute 60 (it came at ${notice && notice.minute})`);
-  assert.equal(notice.text, "Beta 31 has not moved for an hour. Two AI helpers tried to move it, first Codex and then Claude, and it is still stuck, so the repair program is now working on it; nothing is needed from you unless a later message says so.");
-  assert.equal(s.told.filter(t => /has not moved for an hour/.test(t.text)).length, 1, "told once");
+  assert.equal(notice.text, "Beta 31 has not moved for about an hour. Two AI helpers tried to move it, first Codex and then Claude, and it is still stuck, so the repair program is now working on it; nothing is needed from you unless a later message says so.");
+  assert.equal(s.told.filter(t => /has not moved for about an hour/.test(t.text)).length, 1, "told once");
   const st = s.state();
   assert.deepEqual(st.standstill[ID].tries.map(t => [t.rung, t.provider, t.result]), [[1, "codex", "unresolved"]], "in-progress naming nothing counts as unresolved; rung 2 still runs");
   assert.ok(!s.log().some(e => e.kind === "acting run launched" && /^(release|stage):/.test(e.entry)), "the chain itself launched nothing for the release: one owner");
@@ -137,3 +137,46 @@ test("ticket 01: in the chain too, an in-progress that names nothing checkable i
   assert.equal(c.holdUntil, T0 + 15 * MIN, "closed at 15: the hold ends that round");
   assert.equal(c.tries[0].result, "unresolved", "and the try counts as unresolved");
 });
+
+test("ticket 01: the clock never stops on a lost state file, an unreadable source or an unreadable release list: 20, 40 and 60 still come", async () => {
+  // a lost (corrupt) state file at minute 30: the journal keeps when the state began and which steps were taken
+  const s = server({ answers: { 1: LIE } });
+  for (let m = 0; m <= 30; m += 5) await s.round(m);
+  fs.writeFileSync(path.join(s.env.STATE_DIR, "state.json"), "{ corrupt");
+  for (let m = 35; m <= 65; m += 5) await s.round(m);
+  assert.deepEqual(byClock(s).map(l => [l.minute, l.provider]), [[20, "codex"], [40, "claude"]], "rung 1 not again, rung 2 at 40 (the provider of rung 1 is lost with the file, so rung 2 takes the other of the default)");
+  assert.deepEqual(s.requests.map(r => r.minute), [60], "and the repair request at 60");
+  // the release's own files cannot be read from minute 10 on: nothing is known to have changed, so the clock goes on
+  const u = server({ answers: { 1: LIE } });
+  u.deps.releaseFiles = () => { if (u.at() >= 10) throw new Error("state.json: unexpected end of JSON input"); return { autoStage: { blocked: {} }, staging: null }; };
+  for (let m = 0; m <= 60; m += 5) await u.round(m);
+  assert.deepEqual(byClock(u).map(l => l.minute), [20, 40]); assert.deepEqual(u.requests.map(r => r.minute), [60]);
+  // the release list cannot be read from minute 10 on (GitHub down, a broken records checkout): the clock it has goes on
+  const w = server({ answers: { 1: LIE } });
+  const read = w.deps.readWorld;
+  w.deps.readWorld = async () => { const x = await read(); if (w.at() >= 10) { x.releases = []; x.unreadable = [{ part: "releases", error: "the records checkout cannot be read" }]; } return x; };
+  for (let m = 0; m <= 60; m += 5) await w.round(m);
+  assert.deepEqual(byClock(w).map(l => l.minute), [20, 40]); assert.deepEqual(w.requests.map(r => r.minute), [60]);
+});
+
+test("ticket 01: every approved release has its own clock: an older one whose tickets are done stands still while the release step works on a newer one", async () => {
+  const OTHER = "godspeed-2.0.0-beta.32-next";
+  const s = server({ answers: { 1: LIE, 2: LIE, 3: LIE, 4: LIE }, look: () => LOOK.replace(new RegExp(ID, "g"), OTHER).replace("2.0.0-beta.31", "2.0.0-beta.32").replace("Waiting for the factory driver to move item 1 to the next release under the plan's rule.", "Waiting: the pull request that raises the version (#1094) waits for its required check (running).") });
+  const read = s.deps.readWorld;
+  s.deps.readWorld = async () => { const x = await read(); x.releases.push({ ...x.releases[0], id: OTHER, version: "2.0.0-beta.32", label: "beta.32", plan: x.releases[0].plan.replace(ID, OTHER) }); return x; };
+  for (let m = 0; m <= 60; m += 5) await s.round(m);
+  assert.deepEqual(byClock(s).map(l => l.minute), [20, 40], "beta.31 (its tickets done) gets its acting runs at 20 and 40");
+  assert.ok(s.launched.filter(l => l.entry === `standstill:${OTHER}`).length >= 1, "and beta.32, standing still too, gets its own");
+  assert.ok(s.requests.some(r => r.words.includes(ID)) && s.requests.some(r => r.words.includes(OTHER)), "each its own repair request");
+});
+
+test("ticket 01: rung 2 goes to the other AI; when it cannot be reached, the same AI tries again at once and the owner is told so", async () => {
+  const s = server({ answers: { 1: LIE } });
+  const both = s.deps.providers;
+  s.deps.providers = async () => (s.at() >= 25 ? [{ name: "codex", model: "gpt-5.6-terra", strong: "gpt-5.6-sol" }] : both());
+  for (let m = 0; m <= 60; m += 5) await s.round(m);
+  assert.deepEqual(byClock(s).map(l => [l.minute, l.provider]), [[20, "codex"], [40, "codex"]]);
+  assert.ok(s.log().some(e => e.kind === "release clock: the other AI is not reachable" && e.wanted === "claude"));
+  assert.match(s.told.find(t => /about an hour/.test(t.text)).text, /Two AI helpers tried to move it, both on Codex, as the other AI could not be reached/);
+});
+

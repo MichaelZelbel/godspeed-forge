@@ -14,10 +14,11 @@ test("the clock's minutes are constants in code: 20, 40, 60", () => {
   assert.ok(Object.isFrozen(STANDSTILL), "nothing changes them at run time");
 });
 
-test("the release's state: the stage step's look without its minutes, times and commit ids, the auto-stage state and the staging record", () => {
+test("the release's state: the stage step's look without its minutes and timestamps, the auto-stage state and the staging record", () => {
   const a = releaseState({ look: "Waiting: the version pull request (#1094) waits for its required check (running) (for 5 minutes).\nMain is at f88f083 and its required check passed.\nA STOP file of this script was 35 minutes old.\nChecked at 2026-11-23T21:05:00Z.", autoStage: { blocked: { "version-check": "2026-11-23T20:00:00Z" } }, staging: null });
-  const b = releaseState({ look: "Waiting: the version pull request (#1094) waits for its required check (running) (for 50 minutes).\nMain is at 0a1b2c3 and its required check passed.\nA STOP file of this script was 80 minutes old.\nChecked at 2026-11-23T21:50:00Z.", autoStage: { blocked: { "version-check": "2026-11-23T20:00:00Z" } }, staging: null });
+  const b = releaseState({ look: "Waiting: the version pull request (#1094) waits for its required check (running) (for 50 minutes).\nMain is at f88f083 and its required check passed.\nA STOP file of this script was 80 minutes old.\nChecked at 2026-11-23T21:50:00Z.", autoStage: { blocked: { "version-check": "2026-11-23T20:00:00Z" } }, staging: null });
   assert.equal(a.fp, b.fp, "the same sentence, later: the same state");
+  assert.notEqual(a.fp, releaseState({ look: "Waiting: the version pull request (#1094) waits for its required check (running) (for 5 minutes).\nMain is at 0a1b2c3 and its required check passed.\nA STOP file of this script was 35 minutes old.\nChecked at 2026-11-23T21:05:00Z.", autoStage: { blocked: { "version-check": "2026-11-23T20:00:00Z" } } }).fp, "a new commit named in the look is a change");
   assert.notEqual(releaseState({ look: LOOK }).fp, releaseState({ look: LOOK.replace("item 1", "item 2") }).fp, "another sentence: a new state");
   assert.notEqual(releaseState({ look: LOOK, autoStage: {} }).fp, releaseState({ look: LOOK, autoStage: { started: "2026-11-23T22:00:00Z" } }).fp, "a step in the state file: a new state");
   assert.equal(releaseState({ look: LOOK, staging: { status: "staged", lastCheck: { at: "1", result: "ok" } } }).fp, releaseState({ look: LOOK, staging: { lastCheck: { result: "ok", at: "2" }, status: "staged" } }).fp, "a check's own time is not a change");
@@ -29,8 +30,9 @@ test("the clock runs only while the release is in the release step's hands", () 
   const stage = { id: ID, reason: null, result: "waiting" };
   assert.equal(inReleaseStep(ID, stage, LOOK, null).yes, true, "beta.31: waiting for the driver is the release step's");
   assert.equal(inReleaseStep(ID, stage, `Release ${ID} (2.0.0-beta.31): x.\nNot complete yet: waiting on #783.\nResult: waiting.`, null).yes, false, "the factory still builds a ticket: the ticket's own clock");
-  assert.match(inReleaseStep(ID, { id: "godspeed-2.0.0-beta.32-x" }, "", null).why, /working on godspeed-2\.0\.0-beta\.32-x/);
   const journal = { tickets: [{ item: 1 }, { item: 2 }], slots: { "t:1:resolved": 1, "t:2:resolved": 2 } };
+  assert.deepEqual([inReleaseStep(ID, { id: "godspeed-2.0.0-beta.32-x" }, "", journal).yes, inReleaseStep(ID, { id: "godspeed-2.0.0-beta.32-x" }, "", journal).why], [true, "every ticket is done, and the release step is working on godspeed-2.0.0-beta.32-x"], "one clock per approved release: another release in the release step does not take this one's clock away");
+  assert.equal(inReleaseStep(ID, { id: "godspeed-2.0.0-beta.32-x" }, "", null).yes, false, "its tickets not done: not yet");
   assert.equal(inReleaseStep(ID, null, "", journal).yes, true, "no look about it, every ticket done: the release step should be at it");
   assert.equal(inReleaseStep(ID, null, "", { tickets: [{ item: 1 }, { item: 2 }], slots: { "t:1:resolved": 1 } }).yes, false);
 });
@@ -42,10 +44,10 @@ test("checkable work holds the clock only while it runs and inside its own limit
     { headBranch: "main", createdAt: new Date(now - 5 * MIN).toISOString(), name: "required" },
     { headBranch: "candidate/2.0.0-beta.30", createdAt: new Date(now - 5 * MIN).toISOString(), name: "scenarios" },
     { headBranch: "release/version-2.0.0-beta.31", headSha: "abc", createdAt: new Date(now - 5 * MIN).toISOString(), name: "required" },
-  ], stop: { at: new Date(now - 30 * MIN).toISOString() }, procs: [{ startedAt: now - 10 * MIN, args: "node /x/release/auto-stage.mjs" }, { startedAt: now - 10 * MIN, args: "node /x/release/freeze.mjs o/r 2.0.0-beta.31" }] };
+  ], stop: { at: new Date(now - 30 * MIN).toISOString() }, procs: [{ startedAt: now - 10 * MIN, args: "node /x/release/auto-stage.mjs" }, { startedAt: now - 10 * MIN, args: "node /x/release/freeze.mjs o/r 2.0.0-beta.31 --commit abc" }, { startedAt: now - 10 * MIN, args: "node /x/release/stage-server.mjs o/r 2.0.0-beta.30 --release godspeed-2.0.0-beta.30-y" }] };
   const w = workFor({ id: ID, activity, autoStage: { bump: { branch: "release/version-2.0.0-beta.31", head: "abc", pr: 1094 } }, about: true, now });
   assert.deepEqual(w.map(x => x.what), ["a GitHub run (scenarios) on candidate/2.0.0-beta.31", "a GitHub run (required) on release/version-2.0.0-beta.31", "auto-stage's STOP file (the scenarios run)", "the release step's freeze program"]);
-  assert.deepEqual(workFor({ id: ID, activity: { ...activity, runs: [activity.runs[0]] }, about: false, now }).map(x => x.what), ["a GitHub run (scenarios) on candidate/2.0.0-beta.31"], "a STOP or a program belongs to the release the stage step looks at");
+  assert.deepEqual(workFor({ id: ID, activity: { ...activity, runs: [activity.runs[0]] }, about: false, now }).map(x => x.what), ["a GitHub run (scenarios) on candidate/2.0.0-beta.31", "the release step's freeze program"], "a STOP belongs to the release the stage step looks at; a program to the release whose version it names (beta.30's install is not this one's)");
   assert.deepEqual(workFor({ id: ID, activity: { runs: [{ headBranch: "candidate/2.0.0-beta.31", createdAt: new Date(now - 4 * 60 * MIN).toISOString() }] }, about: true, now }), [], "a run past its own limit holds nothing");
   assert.deepEqual(workFor({ id: ID, activity: null, about: true, named: [{ what: "the GitHub run 9", answeredAt: now - 61 * MIN }], now }), [], "what a helper named holds at most an hour after its answer");
 });
@@ -96,11 +98,31 @@ test("an in-progress answer counts only for what it names that the driver can ch
 
 test("what the owner reads at minute 60, word for word, and what the dead-man's repair run reads", () => {
   const launches = [{ rung: 1, provider: "codex" }, { rung: 2, provider: "claude" }];
-  assert.equal(noticeText("Beta 31", launches, true), "Beta 31 has not moved for an hour. Two AI helpers tried to move it, first Codex and then Claude, and it is still stuck, so the repair program is now working on it; nothing is needed from you unless a later message says so.");
-  assert.equal(noticeText("Beta 31", [launches[0]], true), "Beta 31 has not moved for an hour. One AI helper (Codex) tried to move it and it is still stuck; a second one could not be started, so the repair program is now working on it; nothing is needed from you unless a later message says so.");
-  assert.equal(noticeText("Beta 31", [], false), "Beta 31 has not moved for an hour. No AI helper could be started to move it, so Mission Control keeps trying to start the repair program; nothing is needed from you unless a later message says so.");
+  assert.equal(noticeText("Beta 31", launches, true), "Beta 31 has not moved for about an hour. Two AI helpers tried to move it, first Codex and then Claude, and it is still stuck, so the repair program is now working on it; nothing is needed from you unless a later message says so.");
+  assert.equal(noticeText("Beta 31", [launches[0], { rung: 2, provider: "codex" }], true), "Beta 31 has not moved for about an hour. Two AI helpers tried to move it, both on Codex, as the other AI could not be reached, and it is still stuck, so the repair program is now working on it; nothing is needed from you unless a later message says so.");
+  assert.equal(noticeText("Beta 31", [launches[0]], true), "Beta 31 has not moved for about an hour. One AI helper (Codex) tried to move it and it is still stuck; a second one could not be started, so the repair program is now working on it; nothing is needed from you unless a later message says so.");
+  assert.equal(noticeText("Beta 31", [], false), "Beta 31 has not moved for about an hour. No AI helper could be started to move it, so Mission Control keeps trying to start the repair program; nothing is needed from you unless a later message says so.");
   assert.doesNotMatch(noticeText("Beta 31", launches, true), /—|–|#\d|\.mjs|rung/, "plain words: no dash, no numbers of issues, no file or internal names");
   const w = repairWords(ID, 60, LOOK, [{ rung: 1, provider: "codex", result: "unresolved" }], launches);
   assert.match(w, new RegExp(`^The approved release ${ID} has not moved for 60 minutes`));
   assert.match(w, /Waiting for the factory driver to move item 1/); assert.match(w, /rung 1 on codex: unresolved; rung 2 on claude: still running/);
 });
+
+test("a clock the state file lost is rebuilt from the journal: when the state began and the steps taken", () => {
+  const fp = releaseState({ look: LOOK }).fp;
+  const r = tick(null, { fp, work: [], now: T0 + 45 * MIN, lastRoundAt: T0 + 40 * MIN, journal: { fp, since: T0, steps: ["helper", "other"] } });
+  assert.equal(Math.round(r.clock.stillMs / MIN), 45, "still since the journal's start, not since now");
+  assert.deepEqual(r.due, [], "rung 1 and rung 2 were taken already: not again");
+  const later = tick(r.clock, { fp, work: [], now: T0 + 60 * MIN, journal: { fp, since: T0, steps: ["helper", "other"] } });
+  assert.deepEqual(later.due, ["repair", "notice"], "and the repair step comes at its minute");
+  assert.equal(Math.round(tick(null, { fp, work: [], now: T0 + 45 * MIN, lastRoundAt: T0 + 40 * MIN, journal: { fp: "another", since: T0, steps: [] } }).clock.stillMs / MIN), 5, "the journal's clock of another state is not this one's");
+});
+
+test("auto-stage's STOP counts only from the main project, which is the only one auto-stage stops", async () => {
+  const { readActivity } = await import("../duties.mjs");
+  const now = T0, at = new Date(now - 10 * MIN).toISOString();
+  const run = () => ({ status: 0, stdout: "" });
+  assert.equal(readActivity({ REPO: "o/r" }, { factories: [{ primary: false, stop: { writer: "auto-stage", at } }] }, run, now).stop, null, "another project's STOP holds nothing");
+  assert.deepEqual(readActivity({ REPO: "o/r" }, { factories: [{ primary: true, stop: { writer: "auto-stage", at } }] }, run, now).stop, { at });
+});
+
