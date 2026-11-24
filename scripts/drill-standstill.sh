@@ -240,20 +240,21 @@ do_start() {
   until [ "$(stat -c %Y "$STATE/heartbeat" 2>/dev/null || echo 0)" -gt "$before" ]; do sleep 2; done
   # minute 0: the release step starts saying beta.31's waiting sentence, and nothing about the release changes after it; the
   # stand-in stage step repeats it every 15 minutes from now on (never before minute 0, so the drill measures from the change)
-  date -u +%s >"$DRILL/started-at"
+  date -u +%s%3N >"$DRILL/started-at" # in milliseconds
   "$DRILL/bin/stage-look"
   systemctl start forge-drill-stage.timer
-  say "The release $RELEASE stands still from $(date -u +%FT%TZ) (minute 0). Check with: bash $0 check (after minute 60)."
+  say "The release $RELEASE stands still from $(date -u -d "@$(( $(cat "$DRILL/started-at") / 1000 ))" +%FT%TZ) (minute 0). Check with: bash $0 check (after minute 60)."
 }
 
 do_check() {
   [ -f "$DRILL/started-at" ] || stop "the drill was not started here (bash $0 start)"
   local t0; t0="$(cat "$DRILL/started-at")"
-  journalctl -u factory-deadman.service --since "@$t0" -o json --no-pager >"$DRILL/deadman-journal.json" 2>/dev/null || true
+  journalctl -u factory-deadman.service --since "@$((t0 / 1000))" -o json --no-pager >"$DRILL/deadman-journal.json" 2>/dev/null || true
   cat >"$DRILL/bin/check.mjs" <<'CHECK'
     import fs from "node:fs";
-    const { DRILL, STATE, SPOOL, RELEASE } = process.env, t0 = Number(process.env.T0) * 1000;
-    const minute = at => Math.round(((typeof at === "number" ? at : Date.parse(at)) - t0) / 6000) / 10;
+    const { DRILL, STATE, SPOOL, RELEASE } = process.env, t0 = Number(process.env.T0); // milliseconds
+    const minute = at => ((typeof at === "number" ? at : Date.parse(at)) - t0) / 60000; // exact: a step at 20 minutes and one millisecond is late
+    const shown = m => m.toFixed(2);
     const lines = fs.readFileSync(`${STATE}/decisions.jsonl`, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)).filter(e => Date.parse(e.at) >= t0 - 5 * 60000);
     const mine = lines.filter(e => e.entry === `standstill:${RELEASE}` || e.release === RELEASE || (e.entries || []).includes(`standstill:${RELEASE}`));
     const launch = r => mine.find(e => e.kind === "acting run launched" && e.rung === r);
@@ -268,16 +269,16 @@ do_check() {
     const read = repair ? dm.find(j => j.at >= Date.parse(repair.at)) : null;
     console.log(`minute 0 = ${new Date(t0).toISOString()} (the release step began to say beta.31's waiting sentence)`);
     console.log("the driver's own journal (decisions.jsonl), the release clock's lines:");
-    for (const e of mine) console.log(`  minute ${minute(e.at)}: ${JSON.stringify(e)}`);
+    for (const e of mine) console.log(`  minute ${shown(minute(e.at))}: ${JSON.stringify(e)}`);
     console.log("the dead-man's journal (journalctl -u factory-deadman), its reading of the spool:");
-    for (const j of dm.slice(0, 3)) console.log(`  minute ${minute(j.at)}: ${j.text}`);
+    for (const j of dm.slice(0, 3)) console.log(`  minute ${shown(minute(j.at))}: ${j.text}`);
     console.log(`the dead-man's spool ${SPOOL}: ${spool.join(", ") || "empty"}`);
     const checks = [
-      ["an acting run launched by minute 20", launch(1) && minute(launch(1).at) <= 20, launch(1) && `minute ${minute(launch(1).at)}, ${launch(1).provider}`],
-      ["the other AI launched by minute 40", launch(2) && minute(launch(2).at) <= 40 && launch(2).provider !== launch(1)?.provider, launch(2) && `minute ${minute(launch(2).at)}, ${launch(2).provider}`],
-      ["a repair request in the dead-man spool by minute 60", repair && minute(repair.at) <= 60 && spool.length > 0, repair && `minute ${minute(repair.at)}, ${repair.file}`],
-      ["read by the dead-man by minute 60", read && minute(read.at) <= 60, read && `minute ${minute(read.at)}`],
-      ["one notice to the owner, by minute 60, in Godspeed's queue", toldAll.length === 1 && minute(told.at) <= 60 && queued.length === 1, told && `minute ${minute(told.at)}, ${toldAll.length} in all, ${queued.length} in the queue`],
+      ["an acting run launched by minute 20", launch(1) && minute(launch(1).at) <= 20, launch(1) && `minute ${shown(minute(launch(1).at))}, ${launch(1).provider}`],
+      ["the other AI launched by minute 40", launch(2) && minute(launch(2).at) <= 40 && launch(2).provider !== launch(1)?.provider, launch(2) && `minute ${shown(minute(launch(2).at))}, ${launch(2).provider}`],
+      ["a repair request in the dead-man spool by minute 60", repair && minute(repair.at) <= 60 && spool.length > 0, repair && `minute ${shown(minute(repair.at))}, ${repair.file}`],
+      ["read by the dead-man by minute 60", read && minute(read.at) <= 60, read && `minute ${shown(minute(read.at))}`],
+      ["one notice to the owner, by minute 60, in Godspeed's queue", toldAll.length === 1 && minute(told.at) <= 60 && queued.length === 1, told && `minute ${shown(minute(told.at))}, ${toldAll.length} in all, ${queued.length} in the queue`],
     ];
     let ok = true;
     for (const [what, pass, how] of checks) { console.log(`${pass ? "PASS" : "FAIL"}: ${what}${how ? ` (${how})` : ""}`); if (!pass) ok = false; }

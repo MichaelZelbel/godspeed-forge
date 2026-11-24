@@ -548,6 +548,41 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     for (const id of Object.keys(state.standstill)) if (!listed(id) && !carried.includes(id)) delete state.standstill[id]; // installed, superseded or no longer open in the journal
     if (!dry && clockEvents.length) { try { appendEvents(journalFile, clockEvents); } catch (e) { record({ kind: "release clock not journaled", why: String(e.message).slice(0, 160) }); } }
     out.standstill = Object.values(clocks);
+    // ---- the release clock's steps, in this round, whatever else runs (each counted in the day's acting runs)
+    if (!dry) for (const k of Object.values(clocks)) {
+      if (!k.inStep || !k.due.length) continue;
+      const sc = state.standstill[k.id];
+      const doneBefore = { ...sc.done };
+      for (const d of k.due) {
+        if (d === "helper" || d === "other-ai") clockLaunch(k, sc, d === "helper" ? 1 : 2);
+        else if (d === "repair") {
+          try {
+            const file = (deps.repairRequest || (w => repairRequestChecked({ FD_SPOOL: process.env.FD_SPOOL, FD_SETTINGS_DIR: process.env.FD_SETTINGS_DIR }, w, new Date(now), { release: k.id, minutes: k.minutes, tries: sc.tries, from: "the release clock" })))(repairWords(k.id, k.minutes, k.look, sc.tries, sc.launches));
+            sc.done.repair = true;
+            record({ kind: "repair requested", release: k.id, minutes: k.minutes, file, by: "the release clock" });
+            try { (deps.startDeadman || startDeadmanReal)(); } catch { /* its own timer reads the spool within five minutes */ }
+          } catch (e) { record({ kind: "repair request failed", release: k.id, minutes: k.minutes, why: String(e.message).slice(0, 300) }); } // asked again next round
+        } else if (d === "notice") {
+          // THE GATE by construction: the same state was read in every round for an hour (far more than 3 readings 10 minutes
+          // apart); the release's own sources are read again right now and must agree, and none may be unreadable
+          // the same rules as the clock: what cannot be read is unchanged (so the hour is never missed), what has changed holds it
+          let text2 = null, known2 = false; try { text2 = await (deps.stageLook || stageLookReal)(env); known2 = typeof text2 === "string"; } catch { known2 = false; }
+          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null);
+          const gone = fresh.files.staging && fresh.files.staging.status === "installed" ? "it is installed now" : !(deps.planApproved || planStillApproved)(env, k.id) ? "its plan is no longer approved" : null;
+          if (fresh.fp !== sc.fp || gone) { record({ kind: "message held", entry: `standstill:${k.id}`, why: gone || "the release moved in the fresh read" }); continue; }
+          const words = versionWords(k.version || "");
+          const text = noticeText(words, sc.launches, !!sc.done.repair), nid = `n:standstill:${k.id}:${sc.since}`, title = `${words} has not moved for about an hour`;
+          const a2 = await applyReport(env, { id: `standstill:${k.id}` }, { text, key: `tell:${nid}`, about: title }, { kind: "tell-michael", state, gated: true });
+          const n2 = await sendNotice(env, nid, title, text, now, deps.deliver, [`standstill:${k.id}`]);
+          appendEvents(journalFile, [n2]);
+          const delivered = !a2.failed.length || Object.keys(n2.receipts || {}).length > 0; // nothing delivered anywhere: tried again next round
+          if (delivered) sc.done.notice = true;
+          record({ kind: delivered ? "told Michael" : "told Michael: nothing delivered, kept", entries: [`standstill:${k.id}`], minutes: k.minutes, by: "the release clock", queue: !a2.failed.length, receipts: n2.receipts, failed: n2.failed });
+        }
+      }
+      const taken = Object.keys(sc.done).filter(s => sc.done[s] && !doneBefore[s]).map(step => { const l = ["helper", "other"].includes(step) ? [...(sc.launches || [])].reverse().find(x => x.rung === (step === "helper" ? 1 : 2)) : null; return { t: "clock-step", release: k.id, fp: sc.fp, step, ...(l ? { provider: l.provider } : {}), at: iso(now) }; });
+      if (taken.length) { try { appendEvents(journalFile, taken); } catch (e) { record({ kind: "release clock not journaled", why: String(e.message).slice(0, 160) }); } }
+    }
     // the generic chain neither launches for nor tells about a release the clock drives: one owner per release
     const byClock = new Set(Object.values(clocks).filter(k => k.inStep).flatMap(k => [`release:${k.id}`, `stage:${k.id}`]));
     let entries = [];
@@ -695,41 +730,6 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       } catch (e) { record({ kind: "resend failed", notice: nid, why: String(e.message).slice(0, 160) }); }
     }
     for (const r of adv.rows) if (byClock.has(r.entry.id)) r.byClock = true;
-    // ---- the release clock's steps, in this round, whatever else runs (each counted in the day's acting runs)
-    if (!dry) for (const k of Object.values(clocks)) {
-      if (!k.inStep || !k.due.length) continue;
-      const sc = state.standstill[k.id];
-      const doneBefore = { ...sc.done };
-      for (const d of k.due) {
-        if (d === "helper" || d === "other-ai") clockLaunch(k, sc, d === "helper" ? 1 : 2);
-        else if (d === "repair") {
-          try {
-            const file = (deps.repairRequest || (w => repairRequestChecked({ FD_SPOOL: process.env.FD_SPOOL, FD_SETTINGS_DIR: process.env.FD_SETTINGS_DIR }, w, new Date(now), { release: k.id, minutes: k.minutes, tries: sc.tries, from: "the release clock" })))(repairWords(k.id, k.minutes, k.look, sc.tries, sc.launches));
-            sc.done.repair = true;
-            record({ kind: "repair requested", release: k.id, minutes: k.minutes, file, by: "the release clock" });
-            try { (deps.startDeadman || startDeadmanReal)(); } catch { /* its own timer reads the spool within five minutes */ }
-          } catch (e) { record({ kind: "repair request failed", release: k.id, minutes: k.minutes, why: String(e.message).slice(0, 300) }); } // asked again next round
-        } else if (d === "notice") {
-          // THE GATE by construction: the same state was read in every round for an hour (far more than 3 readings 10 minutes
-          // apart); the release's own sources are read again right now and must agree, and none may be unreadable
-          // the same rules as the clock: what cannot be read is unchanged (so the hour is never missed), what has changed holds it
-          let text2 = null, known2 = false; try { text2 = await (deps.stageLook || stageLookReal)(env); known2 = typeof text2 === "string"; } catch { known2 = false; }
-          const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null);
-          const gone = fresh.files.staging && fresh.files.staging.status === "installed" ? "it is installed now" : !(deps.planApproved || planStillApproved)(env, k.id) ? "its plan is no longer approved" : null;
-          if (fresh.fp !== sc.fp || gone) { record({ kind: "message held", entry: `standstill:${k.id}`, why: gone || "the release moved in the fresh read" }); continue; }
-          const words = versionWords(k.version || "");
-          const text = noticeText(words, sc.launches, !!sc.done.repair), nid = `n:standstill:${k.id}:${sc.since}`, title = `${words} has not moved for about an hour`;
-          const a2 = await applyReport(env, { id: `standstill:${k.id}` }, { text, key: `tell:${nid}`, about: title }, { kind: "tell-michael", state, gated: true });
-          const n2 = await sendNotice(env, nid, title, text, now, deps.deliver, [`standstill:${k.id}`]);
-          appendEvents(journalFile, [n2]);
-          const delivered = !a2.failed.length || Object.keys(n2.receipts || {}).length > 0; // nothing delivered anywhere: tried again next round
-          if (delivered) sc.done.notice = true;
-          record({ kind: delivered ? "told Michael" : "told Michael: nothing delivered, kept", entries: [`standstill:${k.id}`], minutes: k.minutes, by: "the release clock", queue: !a2.failed.length, receipts: n2.receipts, failed: n2.failed });
-        }
-      }
-      const taken = Object.keys(sc.done).filter(s => sc.done[s] && !doneBefore[s]).map(step => { const l = ["helper", "other"].includes(step) ? [...(sc.launches || [])].reverse().find(x => x.rung === (step === "helper" ? 1 : 2)) : null; return { t: "clock-step", release: k.id, fp: sc.fp, step, ...(l ? { provider: l.provider } : {}), at: iso(now) }; });
-      if (taken.length) { try { appendEvents(journalFile, taken); } catch (e) { record({ kind: "release clock not journaled", why: String(e.message).slice(0, 160) }); } }
-    }
     let L = adv.actions.launch;
     if (L && !dry && entries.length) { // work may have started since the round began (auto-stage's STOP, a run): look again right before launching
       try { const again = withSteps(await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, world)); const m = heldUntil(L.entry, again && { ...again, waitingOnMain: !!(stage && /(main'?s?\b[^.]*\b(required check|Windows setup|image))|(image\b[^.]*not in the registry)/i.test(String(stage.reason || ""))), releaseId: (stage && stage.id) || undefined, onlyRelease: jv.open.length === 1 ? jv.open[0].id : null }, world, credits, now); if (Number.isFinite(m) && m > now) { record({ kind: "acting run held", entry: L.entry.id, why: "work started on it meanwhile" }); L = null; } } catch { /* unreadable: launch as decided */ }

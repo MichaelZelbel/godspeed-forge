@@ -59,22 +59,22 @@ test("20, 40, 60: a still release gets an acting run, the other AI, then the rep
   at(0);
   assert.equal(c.stillMs, 5 * MIN, "a new state counts from the last round that saw the old one");
   for (let m = 5; m <= 90; m += 5) at(m);
-  assert.deepEqual(seen, [[15, "helper"], [35, "other-ai"], [55, "repair", "notice"]], "each step by its minute, counted from the last round that saw the release move");
+  assert.deepEqual(seen, [[10, "helper"], [30, "other-ai"], [50, "repair", "notice"]], "each step in the last round before its minute, counted from the last round that saw the release move (the round at -5): the next round would be past it");
   assert.deepEqual(nextStep(c), { what: "the ladder again, from rung 1", at: 60 + 24 * 60 + 20 });
   // held: the clock does not run while the work runs, and goes on from where it was
   c = null; seen.length = 0;
   at(0); at(5); at(10);
   for (let m = 15; m <= 40; m += 5) at(m, { work: [{ what: "a run", until: T0 + 42 * MIN }] });
   assert.equal(Math.round(c.stillMs / MIN), 15, "15 minutes before the run, none while it ran");
-  at(45);
-  assert.deepEqual(seen, [[45, "helper"]], "the run ended at 42: the round at 45 goes on from 15 and reaches 20, so the helper comes");
-  // a change at minute 35 starts the clock again
+  for (let m = 45; m <= 60; m += 5) at(m);
+  assert.deepEqual(seen, [[10, "helper"], [60, "other-ai"]], "the run ended at 42: the clock went on from 15 and reached its last round before minute 40 at 60");
+  // a change at minute 25, before the round that would take rung 2 (30), starts the clock again
   c = null; seen.length = 0;
-  for (let m = 0; m <= 30; m += 5) at(m);
-  at(35, { look: LOOK.replace("item 1", "item 2") });
+  for (let m = 0; m <= 20; m += 5) at(m);
+  at(25, { look: LOOK.replace("item 1", "item 2") });
   assert.equal(c.done.helper, undefined, "a new state: a new ladder");
-  for (let m = 40; m <= 50; m += 5) at(m, { look: LOOK.replace("item 1", "item 2") });
-  assert.deepEqual(seen, [[15, "helper"], [50, "helper"]], "no rung 2 at 40; the new state gets its own rung 1 at its own minute 20");
+  for (let m = 30; m <= 40; m += 5) at(m, { look: LOOK.replace("item 1", "item 2") });
+  assert.deepEqual(seen, [[10, "helper"], [35, "helper"]], "no rung 2; the new state gets its own rung 1 in its own last round before minute 20");
   assert.deepEqual(nextStep(c), { what: "the other AI (rung 2)", at: 40 }, "the new state's own minute 40 comes next");
 });
 
@@ -131,7 +131,7 @@ test("a round that starts a few seconds early still takes its step: never a roun
   let c = null; const due = [];
   // rounds on the five-minute grid, each starting up to two seconds early or late
   for (const [m, jitter] of [[0, 1500], [5, -2000], [10, 800], [15, -1900], [20, -2000], [25, 0]]) { const r = tick(c, { fp, work: [], now: T0 + m * MIN + jitter, lastRoundAt: T0 - 5 * MIN + 1000 }); c = r.clock; if (r.due.length) { due.push([m, ...r.due]); for (const d of r.due) c.done[{ helper: "helper" }[d]] = true; } }
-  assert.deepEqual(due[0], [15, "helper"], "the change came after the round at -5: the round at 15 is 20 minutes after it and takes the step");
+  assert.deepEqual(due[0], [10, "helper"], "counted from the round at -5, the round at 10 is the last before minute 20, though it starts two seconds early or late");
 });
 
 

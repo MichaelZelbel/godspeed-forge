@@ -67,12 +67,13 @@ test("ticket 01: beta.31 replayed, the same waiting sentence for 3 hours and an 
   const s = server({ answers: { 1: LIE } });
   for (let m = 0; m <= 180; m += 5) await s.round(m);
   const runs = byClock(s);
-  assert.deepEqual(runs.slice(0, 2).map(l => [l.minute, l.provider]), [[20, "codex"], [40, "claude"]], "rung 1 at 20 on Codex, rung 2 at 40 on Claude, whatever rung 1 said");
+  // rounds every five minutes: each step in the last round before its minute
+  assert.deepEqual(runs.slice(0, 2).map(l => [l.minute, l.provider]), [[15, "codex"], [35, "claude"]], "rung 1 by 20 on Codex (the round at 15), rung 2 by 40 on Claude (at 35), whatever rung 1 said");
   assert.ok(s.requests.length >= 1 && s.requests[0].minute <= 60, `the repair request by minute 60 (it came at ${s.requests[0] && s.requests[0].minute})`);
   assert.equal(s.requests.length, 1, "once");
-  assert.match(s.requests[0].words, new RegExp(`^The approved release ${ID} has not moved for 60 minutes`));
+  assert.match(s.requests[0].words, new RegExp(`^The approved release ${ID} has not moved for 55 minutes`));
   assert.match(s.requests[0].words, /rung 1 on codex: unresolved \(answered in-progress, but named nothing the driver could see running: The factory driver is actively running/, "the lie is named as what it was");
-  assert.deepEqual(s.deadman, [60], "and the dead-man is started at once to read it");
+  assert.deepEqual(s.deadman, [55], "and the dead-man is started at once to read it");
   const notice = s.told.find(t => /has not moved for about an hour/.test(t.text));
   assert.ok(notice && notice.minute <= 60, `the notice by minute 60 (it came at ${notice && notice.minute})`);
   assert.equal(notice.text, "Beta 31 has not moved for about an hour. Two AI helpers tried to move it, first Codex and then Claude, and it is still stuck, so the repair program is now working on it; nothing is needed from you unless a later message says so.");
@@ -88,9 +89,9 @@ test("ticket 01: an in-progress answer that names a GitHub run in progress holds
   const s = server({ answers: { 1: "The candidate's scenarios run https://github.com/MichaelZelbel/godspeed-mission-control/actions/runs/123456789 is still going.\nRESULT: in-progress" }, named: (n, minute) => n.kind === "run" && n.id === "123456789" && minute < 50 });
   for (let m = 0; m <= 90; m += 5) await s.round(m);
   const runs = byClock(s);
-  assert.equal(runs[0].minute, 20);
-  assert.ok(!runs.some(l => l.minute > 20 && l.minute < 50), "nothing more while the run it named runs");
-  assert.equal(runs[1].minute, 65, "it ended before minute 50; the clock went on from 20 and reached 40 at minute 65");
+  assert.equal(runs[0].minute, 15);
+  assert.ok(!runs.some(l => l.minute > 15 && l.minute < 50), "nothing more while the run it named runs");
+  assert.equal(runs[1].minute, 65, "it ended before minute 50; the clock went on from 15 and its round before minute 40 came at 65");
   assert.equal(s.state().standstill[ID].tries[0].result, "in-progress");
   assert.match(s.state().standstill[ID].tries[0].summary, /the driver sees the GitHub run 123456789 running/);
 });
@@ -99,7 +100,7 @@ test("ticket 01: a release whose state changes at minute 35 gets no rung 2; its 
   const s = server({ look: m => (m >= 35 ? LOOK.replace("item 1", "item 2") : LOOK) });
   for (let m = 0; m <= 75; m += 5) await s.round(m);
   const runs = byClock(s);
-  assert.deepEqual(runs.map(l => l.minute), [20, 50, 70], "rung 1 at 20; the change at 35 (counted from the round at 30) brings a new rung 1 at 50 and its rung 2 at 70, never one at 40");
+  assert.deepEqual(runs.map(l => l.minute), [15, 45, 65], "rung 1 at 15; the change at 35 (counted from the round at 30) brings a new rung 1 at 45 and its rung 2 at 65, never the old ladder's rung 2 at 35");
   assert.equal(runs[1].provider, "codex", "a new state's ladder starts at rung 1");
 });
 
@@ -146,19 +147,19 @@ test("ticket 01: the clock never stops on a lost state file, an unreadable sourc
   for (let m = 0; m <= 30; m += 5) await s.round(m);
   fs.writeFileSync(path.join(s.env.STATE_DIR, "state.json"), "{ corrupt");
   for (let m = 35; m <= 65; m += 5) await s.round(m);
-  assert.deepEqual(byClock(s).map(l => [l.minute, l.provider]), [[20, "codex"], [40, "claude"]], "rung 1 not again, rung 2 at 40 (the provider of rung 1 is lost with the file, so rung 2 takes the other of the default)");
-  assert.deepEqual(s.requests.map(r => r.minute), [60], "and the repair request at 60");
+  assert.deepEqual(byClock(s).map(l => [l.minute, l.provider]), [[15, "codex"], [35, "claude"]], "rung 1 not again, rung 2 by 40 on the other AI");
+  assert.deepEqual(s.requests.map(r => r.minute), [55], "and the repair request by 60");
   // the release's own files cannot be read from minute 10 on: nothing is known to have changed, so the clock goes on
   const u = server({ answers: { 1: LIE } });
   u.deps.releaseFiles = () => { if (u.at() >= 10) throw new Error("state.json: unexpected end of JSON input"); return { autoStage: { blocked: {} }, staging: null }; };
   for (let m = 0; m <= 60; m += 5) await u.round(m);
-  assert.deepEqual(byClock(u).map(l => l.minute), [20, 40]); assert.deepEqual(u.requests.map(r => r.minute), [60]);
+  assert.deepEqual(byClock(u).map(l => l.minute), [15, 35]); assert.deepEqual(u.requests.map(r => r.minute), [55]);
   // the release list cannot be read from minute 10 on (GitHub down, a broken records checkout): the clock it has goes on
   const w = server({ answers: { 1: LIE } });
   const read = w.deps.readWorld;
   w.deps.readWorld = async () => { const x = await read(); if (w.at() >= 10) { x.releases = []; x.unreadable = [{ part: "releases", error: "the records checkout cannot be read" }]; } return x; };
   for (let m = 0; m <= 60; m += 5) await w.round(m);
-  assert.deepEqual(byClock(w).map(l => l.minute), [20, 40]); assert.deepEqual(w.requests.map(r => r.minute), [60]);
+  assert.deepEqual(byClock(w).map(l => l.minute), [15, 35]); assert.deepEqual(w.requests.map(r => r.minute), [55]);
 });
 
 test("ticket 01: every approved release has its own clock: an older one whose tickets are done stands still while the release step works on a newer one", async () => {
@@ -167,7 +168,7 @@ test("ticket 01: every approved release has its own clock: an older one whose ti
   const read = s.deps.readWorld;
   s.deps.readWorld = async () => { const x = await read(); x.releases.push({ ...x.releases[0], id: OTHER, version: "2.0.0-beta.32", label: "beta.32", plan: x.releases[0].plan.replace(ID, OTHER) }); return x; };
   for (let m = 0; m <= 60; m += 5) await s.round(m);
-  assert.deepEqual(byClock(s).map(l => l.minute), [20, 40], "beta.31 (its tickets done) gets its acting runs at 20 and 40");
+  assert.deepEqual(byClock(s).map(l => l.minute), [15, 35], "beta.31 (its tickets done) gets its acting runs by 20 and 40");
   assert.ok(s.launched.filter(l => l.entry === `standstill:${OTHER}`).length >= 1, "and beta.32, standing still too, gets its own");
   assert.ok(s.requests.some(r => r.words.includes(ID)) && s.requests.some(r => r.words.includes(OTHER)), "each its own repair request");
 });
@@ -177,7 +178,7 @@ test("ticket 01: rung 2 goes to the other AI; when it cannot be reached, the sam
   const both = s.deps.providers;
   s.deps.providers = async () => (s.at() >= 25 ? [{ name: "codex", model: "gpt-5.6-terra", strong: "gpt-5.6-sol" }] : both());
   for (let m = 0; m <= 60; m += 5) await s.round(m);
-  assert.deepEqual(byClock(s).map(l => [l.minute, l.provider]), [[20, "codex"], [40, "codex"]]);
+  assert.deepEqual(byClock(s).map(l => [l.minute, l.provider]), [[15, "codex"], [35, "codex"]]);
   assert.ok(s.log().some(e => e.kind === "release clock: the other AI is not reachable" && e.wanted === "claude"));
   assert.match(s.told.find(t => /about an hour/.test(t.text)).text, /Two AI helpers tried to move it, both on Codex, as the other AI could not be reached/);
 });
@@ -188,37 +189,37 @@ test("ticket 01: a look that goes missing, a source that becomes unreadable, and
   const s = server({ answers: { 1: LIE }, look: m => (m >= 35 ? null : LOOK) });
   s.deps.stageLook = async () => (s.at() >= 35 ? null : LOOK);
   for (let m = 0; m <= 60; m += 5) await s.round(m);
-  assert.deepEqual(byClock(s).map(l => l.minute), [20, 40]); assert.deepEqual(s.requests.map(r => r.minute), [60]);
-  assert.ok(s.told.some(t => t.minute === 60 && /about an hour/.test(t.text)), "and the notice at 60 although the look cannot be read");
+  assert.deepEqual(byClock(s).map(l => l.minute), [15, 35]); assert.deepEqual(s.requests.map(r => r.minute), [55]);
+  assert.ok(s.told.some(t => t.minute === 55 && /about an hour/.test(t.text)), "and the notice by 60 although the look cannot be read");
   // rung 1 ran on Claude (Codex out at 20); the state file is lost at 30: the journal keeps who ran, so rung 2 is Codex
   const t = server({ answers: { 1: LIE } });
   const both = t.deps.providers;
-  t.deps.providers = async () => (t.at() === 20 ? [{ name: "claude", model: "claude-sonnet-5-5", strong: "claude-opus-5-5" }] : both());
+  t.deps.providers = async () => (t.at() === 15 ? [{ name: "claude", model: "claude-sonnet-5-5", strong: "claude-opus-5-5" }] : both());
   for (let m = 0; m <= 30; m += 5) await t.round(m);
   fs.rmSync(path.join(t.env.STATE_DIR, "state.json"));
   for (let m = 35; m <= 60; m += 5) await t.round(m);
-  assert.deepEqual(byClock(t).map(l => [l.minute, l.provider]), [[20, "claude"], [40, "codex"]], "the other AI than rung 1's, rebuilt from the journal");
+  assert.deepEqual(byClock(t).map(l => [l.minute, l.provider]), [[15, "claude"], [35, "codex"]], "the other AI than rung 1's, rebuilt from the journal");
   assert.match(t.requests[0].words, /rung 1 on claude: unresolved/, "and the repair request still names rung 1's answer");
   assert.match(t.told.find(x => /about an hour/.test(x.text)).text, /first Claude and then Codex/);
   // the release's own files become unreadable at 50: the notice still comes at 60
   const u = server({ answers: { 1: LIE } });
-  u.deps.releaseFiles = () => { if (u.at() >= 50) throw new Error("state.json: unexpected end of JSON input"); return { autoStage: { blocked: {} }, staging: null }; };
+  u.deps.releaseFiles = () => { if (u.at() >= 45) throw new Error("state.json: unexpected end of JSON input"); return { autoStage: { blocked: {} }, staging: null }; };
   for (let m = 0; m <= 60; m += 5) await u.round(m);
-  assert.ok(u.told.some(x => x.minute === 60), "a source unreadable in the fresh read is unchanged: the notice is not held");
+  assert.ok(u.told.some(x => x.minute === 55), "a source unreadable in the fresh read is unchanged: the notice is not held");
 });
 
 test("ticket 01: what a helper names holds the release's clock only when it is the release's own work: another repository's run, an unrelated pull request or a web server's unit never do", async () => {
   const said = "In progress: https://github.com/someone/else/actions/runs/555555555 runs, pull request #4242 is open, and nginx.service is active.\nRESULT: in-progress";
   const s = server({ answers: { 1: said }, named: () => true }); // every one of them is running
   for (let m = 0; m <= 60; m += 5) await s.round(m);
-  assert.deepEqual(byClock(s).map(l => l.minute), [20, 40], "none of them held the clock");
+  assert.deepEqual(byClock(s).map(l => l.minute), [15, 35], "none of them held the clock");
   assert.equal(s.state().standstill[ID].tries[0].result, "unresolved");
-  assert.deepEqual(s.requests.map(r => r.minute), [60]);
+  assert.deepEqual(s.requests.map(r => r.minute), [55]);
   // the same answer naming the release's version pull request, which is open: that holds
   const t = server({ answers: { 1: "Pull request #1094 raises the version and waits for its check.\nRESULT: in-progress" }, named: (n, minute) => n.kind === "pr" && n.id === "1094" && minute < 50 });
   t.deps.releaseFiles = () => ({ autoStage: { blocked: {}, bump: { pr: 1094, branch: "release/version-2.0.0-beta.31", head: "h" } }, staging: null });
   for (let m = 0; m <= 70; m += 5) await t.round(m);
-  assert.deepEqual(byClock(t).map(l => l.minute), [20, 65], "its own version pull request, open until minute 50, held it");
+  assert.deepEqual(byClock(t).map(l => l.minute), [15, 65], "its own version pull request, open until minute 50, held it");
 });
 
 test("ticket 01: the notice's title says about an hour too", async () => {
@@ -238,8 +239,8 @@ test("ticket 01: the state file lost while the look cannot be read and the relea
   for (let m = 0; m <= 30; m += 5) await s.round(m);
   fs.rmSync(path.join(s.env.STATE_DIR, "state.json"));
   for (let m = 35; m <= 60; m += 5) await s.round(m);
-  assert.deepEqual(byClock(s).map(l => [l.minute, l.provider]), [[20, "codex"], [40, "claude"]], "no new ladder: rung 1 not again, rung 2 at 40 on the other AI");
-  assert.deepEqual(s.requests.map(r => r.minute), [60]);
+  assert.deepEqual(byClock(s).map(l => [l.minute, l.provider]), [[15, "codex"], [35, "claude"]], "no new ladder: rung 1 not again, rung 2 by 40 on the other AI");
+  assert.deepEqual(s.requests.map(r => r.minute), [55]);
 });
 
 test("ticket 01: after a lost state file the next acting run gets a new unit, never the first one's again, and launches", async () => {
@@ -252,7 +253,7 @@ test("ticket 01: after a lost state file the next acting run gets a new unit, ne
   fs.rmSync(path.join(s.env.STATE_DIR, "state.json"));
   for (let m = 35; m <= 45; m += 5) await s.round(m);
   const runs = byClock(s);
-  assert.deepEqual(runs.map(l => l.minute), [20, 40]);
+  assert.deepEqual(runs.map(l => l.minute), [15, 35]);
   assert.notEqual(runs[0].unit, runs[1].unit, "a new unit name");
   assert.ok(!s.log().some(e => e.kind === "acting run launch failed"));
 });
@@ -261,7 +262,7 @@ test("ticket 01: one of the release's files that cannot be read never hides a ch
   const s = server({ answers: { 1: LIE } });
   s.deps.releaseFiles = () => (s.at() >= 35 ? { autoStage: null, staging: { status: "staged", stagedAt: "2026-11-23T21:35:00Z" }, unread: { stage: "state.json cannot be read" } } : { autoStage: { blocked: {} }, staging: null });
   for (let m = 0; m <= 60; m += 5) await s.round(m);
-  assert.deepEqual(byClock(s).map(l => l.minute), [20, 50], "the staging record changed at 35 (the state file unreadable beside it): no rung 2 at 40, a new ladder from the change");
+  assert.deepEqual(byClock(s).map(l => l.minute), [15, 45], "the staging record changed at 35 (the state file unreadable beside it): no rung 2, a new ladder from the change");
 });
 
 test("ticket 01: a notice that reached nobody is not counted as told: it is sent again the next round", async () => {
@@ -289,7 +290,7 @@ test("ticket 01: a records checkout that vanishes (an empty release list, nothin
   const read = s.deps.readWorld;
   s.deps.readWorld = async () => { const x = await read(); if (s.at() >= 30) x.releases = []; return x; };
   for (let m = 0; m <= 60; m += 5) { if (m === 30) fs.rmSync(path.join(s.root, "records"), { recursive: true }); await s.round(m); }
-  assert.deepEqual(byClock(s).map(l => l.minute), [20, 40], "the vanished staging record is unknown, not a change");
-  assert.deepEqual(s.requests.map(r => r.minute), [60]);
-  assert.ok(s.told.some(t => t.minute === 60), "and the plan that cannot be read does not hold the notice");
+  assert.deepEqual(byClock(s).map(l => l.minute), [15, 35], "the vanished staging record is unknown, not a change");
+  assert.deepEqual(s.requests.map(r => r.minute), [55]);
+  assert.ok(s.told.some(t => t.minute === 55), "and the plan that cannot be read does not hold the notice");
 });

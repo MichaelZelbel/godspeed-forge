@@ -14,8 +14,9 @@
 //     install or check program of the release step that is running; and the unit, GitHub run or pull request an acting run's
 //     "in-progress" named, once the driver has checked it runs (or is open), for at most an hour after the answer;
 //   - never work: the stage step's own repeated waiting sentence, other projects' runs, an acting run's word;
-//   - at 20 minutes still an acting run (rung 1), at 40 the other AI (rung 2) whatever rung 1 said, at 60 a repair request to the
-//     dead-man naming the release and both tries, and one notice to the owner naming what was tried.
+//   - by 20 minutes still an acting run (rung 1), by 40 the other AI (rung 2) whatever rung 1 said, by 60 a repair request to the
+//     dead-man naming the release and both tries, and one notice to the owner naming what was tried. Rounds come every five
+//     minutes, so each step is taken in the last round before its minute: never late, at most a round or two early.
 // The six-hour moving credit and the 24- and 72-hour ceilings stay as outer limits (inventory.mjs); they never delay these steps.
 // Pure except checkNamed, whose commands come in as `run`.
 import crypto from "node:crypto";
@@ -27,7 +28,8 @@ export const STANDSTILL = Object.freeze({
   namedHoldMinutes: 60, // what an acting run's "in-progress" names holds the clock at most this long after the answer
   restartHours: 24, // after the repair step the ladder starts again when the release still has not moved
   firstSightMaxMinutes: 10, // a new state is counted from the last round that saw the old one, never from further back than this
-  toleranceMinutes: 1, // rounds start a few seconds early or late: a step within a minute of its mark is taken in that round, never a round late
+  roundMinutes: 5, // the driver's round comes every five minutes (factory-driver.timer); a step is taken in the last round before its minute
+  toleranceMinutes: 1, // rounds start a few seconds early or late: a round within a minute of that is still the one
   runHours: 6, // a GitHub run on the version pull request: its own timeout
   scenariosHours: 3, // a run on the candidate or release branch, and a release program, are bounded by their own start
   stopHours: 2, // auto-stage's STOP file
@@ -135,7 +137,9 @@ export function tick(prev, { fp, work, now, lastRoundAt, journal = null }) {
   c.held = held.map(w => w.what);
   const cycle = () => (c.stillMs - (c.cycleFrom || 0)) / MIN;
   if (c.done.repair && cycle() >= STANDSTILL.repairMinutes + STANDSTILL.restartHours * 60) { c.cycleFrom = c.stillMs; c.done = {}; c.tries = []; } // the ladder starts again
-  const m = cycle() + STANDSTILL.toleranceMinutes, due = [];
+  // the last round before the minute: the next round would come after it, and a round's own work takes seconds, so a step is
+  // never late against the change; it comes at most one round (two, when the change came just before a round) early
+  const m = cycle() + STANDSTILL.roundMinutes + STANDSTILL.toleranceMinutes, due = [];
   if (m >= STANDSTILL.helperMinutes && !c.done.helper) due.push("helper");
   if (m >= STANDSTILL.otherAiMinutes && !c.done.other) due.push("other-ai");
   if (m >= STANDSTILL.repairMinutes && !c.done.repair) due.push("repair");
