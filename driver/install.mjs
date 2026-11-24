@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { discoverSteps } from "./steps.mjs";
 import { loadSettings, renderEnvFile, defaultSettingsDir } from "./settings.mjs";
+import { factoryAccount, inside } from "./checkout-guard.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export class InstallStop extends Error {}
@@ -58,7 +59,10 @@ const stateDirective = (dir, key = "StateDirectory") => {
 // The unit files, rendered from driver/units from the settings: { "<file>": text }.
 export function renderUnits(source, loaded, envFile, driverDir = loaded.get("server.driver_dir"), unitsDir = realDeps.unitsDir) {
   const g = loaded.get;
-  const pull = g("releases.records_checkout") ? `ExecStartPre=-/usr/bin/git -C ${g("releases.records_checkout")} pull --ff-only -q\n` : "";
+  // the records' pull runs as root, so records that live in the factory user's home are pulled as that user (issue #157)
+  const rc = g("releases.records_checkout"), acct = factoryAccount({ server: { factory_user: g("server.factory_user"), factory_home: g("server.factory_home") } });
+  const asFactory = rc && String(rc).startsWith("/") && acct.user && acct.user !== "root" && acct.home && inside(path.posix.normalize(String(rc)), acct.home);
+  const pull = rc ? `ExecStartPre=-${asFactory ? `/usr/sbin/runuser -u ${acct.user} -- /usr/bin/env HOME=${acct.home} ` : ""}/usr/bin/git -C ${rc} pull --ff-only -q\n` : "";
   const login = g("server.login_unit");
   const values = {
     NODE: g("server.node"), DRIVER_DIR: driverDir, KEEPER_DIR: g("server.keeper_dir"), SETTINGS_DIR: loaded.dir, ENV_FILE: envFile,

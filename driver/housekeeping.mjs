@@ -8,6 +8,9 @@
 //                    sign-in links put back (onduty.mjs linkLogins) and one tiny sign-in check on the smallest model
 //   disk > 85 %      Archon's own cleanup of worktrees idle for a day (it skips any a live run holds),
 //                    then `docker system prune -f` in the factory user's rootless Docker
+//   checkouts        every project checkout in the factory user's home is that user's alone: files another user owns
+//                    (a root process wrote there) go back to it with a chown limited to that checkout, and its
+//                    `git fetch` must work, every round (the Forge 0.3.1, ticket 08, issue #157)
 //   memory < 15 %    fewer laps: MAX_LAPS in the factory's .factory-env goes down one (and back to what
 //                    it was once memory is plentiful again). OFF unless env.LOWER_LAPS: nothing reads
 //                    MAX_LAPS yet (2026-11-18 ruling), so tight memory goes to the ops helper instead
@@ -24,6 +27,7 @@ import { spawnSync } from "node:child_process";
 import { ANONYMOUS_UNIT, isLegacy, isStageStop, writerRuns } from "./world.mjs";
 import { forgeArgv } from "./release-driver/release-driver-owner-steps.mjs";
 import { linkLogins, signinCheck, actDefaults } from "./onduty.mjs";
+import { isRoot, inside } from "./checkout-guard.mjs";
 
 export const RELEASE_PROGRAMS = /^(auto-stage|stage|freeze|stage-server)$/, STOP_MAX_HOURS = 2;
 // A scenario run the stage step started shows on GitHub within its dispatch grace (10 minutes by default): a stage STOP
@@ -46,14 +50,17 @@ export const hkDefaults = (e = process.env) => ({
   SYSTEMCTL: e.FD_SYSTEMCTL || "systemctl",
   FACTORY_ENV: e.FD_FACTORY_ENV || "/home/factory/.factory-env",
   FACTORY_CHECKOUT: e.FD_FACTORY_CHECKOUT || "/home/factory/repository",
+  // the factory user's home and each project's checkout ({ project: folder }), as the settings name them (world.mjs reads the same)
+  FORGE_HOME: e.FD_FORGE_HOME || `/home/${e.FORGE_USER || "factory"}`,
+  PROJECT_CHECKOUTS: (() => { try { const v = JSON.parse(e.FD_PROJECT_CHECKOUTS || "{}"); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch { return {}; } })(),
   STALE_MINUTES: Number(e.FD_STALE_MINUTES || 180),
   LOWER_LAPS: e.FD_LOWER_LAPS === "1",
   LOGIN_UNIT: e.FD_LOGIN_UNIT || "",
   LEGACY_UNITS: String(e.FD_LEGACY_UNITS || "").split(",").map(x => x.trim()).filter(Boolean),
 });
 
-function run(argv) {
-  const r = spawnSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: 10 * 60000, env: { PATH: SYSTEM_PATH } });
+function run(argv, { maxBuffer, timeout } = {}) {
+  const r = spawnSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: timeout || 10 * 60000, env: { PATH: SYSTEM_PATH }, ...(maxBuffer ? { maxBuffer } : {}) }); // SIGTERM at the limit: runuser hands it on
   return { status: r.status, stdout: r.stdout || "", stderr: (r.stderr || "") + (r.error ? r.error.message : "") };
 }
 const lastLine = t => String(t || "").trim().split("\n").pop() || "";
@@ -83,17 +90,18 @@ export function takeAwayStop(file, line) {
   return same;
 }
 
-// deps: {run(argv) -> {status, stdout, stderr}, sleep(ms), now(), readFile, writeFile, remove(file, line) -> false when kept}
-// -> {done: [string], failed: [string]}
+// deps: {run(argv, {maxBuffer}) -> {status, stdout, stderr}, sleep(ms), now(), readFile, writeFile, root, exists(path),
+//        remove(file, line) -> false when kept}
+// -> {done: [string], failed: [string], repairs: [what a repair changed, for the round's record]}
 export async function housekeep(env0, world, deps = {}) {
   const env = { ...hkDefaults(process.env), ...env0 };
-  const exec = argv => {
+  const exec = (argv, opts) => {
     const line = argv.join(" ");
     if (FORBIDDEN.test(line)) throw new Error(`refused: ${line.slice(0, 200)} touches a service of the owner's that the factory never touches`);
-    return (deps.run || run)(argv);
+    return (deps.run || run)(argv, opts);
   };
   const sleep = deps.sleep || (ms => new Promise(r => setTimeout(r, ms)));
-  const out = { done: [], failed: [] };
+  const out = { done: [], failed: [], repairs: [] };
   const server = (world && world.server) || {};
 
   // ---- stale processes: read again, then stop only what is still exactly the same process
@@ -174,6 +182,62 @@ export async function housekeep(env0, world, deps = {}) {
       if (check.ok) { out.done.push(`the acting runs sign in to ${provider} again: ${what}, and a sign-in check (${check.why}) worked`); ((world.actLoginsRepaired ||= [])).push(provider); }
       else out.failed.push(`the acting runs still cannot sign in to ${provider}: ${what}, but the sign-in check failed (${check.why})`);
     } catch (e) { out.failed.push(`the acting runs' ${provider} sign-in: ${lastLine(e.message).slice(0, 200)}`); }
+  }
+
+  // ---- the factory's checkouts (the Forge 0.3.1, ticket 08, issue #157): each one is the factory user's alone, and its fetch works.
+  // On 2026-11-22 a root process checked out a branch in the main checkout; from then on the factory user's `git fetch` failed on a
+  // file root owned and the factory built on a main a day old until a person gave the files back two days later. Every round, for
+  // each checkout in the factory user's home: the files another user owns are found and given back with a chown limited to that
+  // checkout, on its own filesystem, never through a link, and `git fetch` runs as the factory user to prove it works. Only as root
+  // (only root can give files back). A factory that runs as root owns its checkouts as root and no file can stop root's fetch, so
+  // there only the fetch is checked.
+  const root = deps.root !== undefined ? !!deps.root : isRoot();
+  const user = String(env.FORGE_USER || ""), home = String(env.FORGE_HOME || "").replace(/\/+$/, "");
+  const absolute = p => /^(\/|[A-Za-z]:\/)[^\s]*$/.test(p); // the server's folders (a Windows test machine's C:/ too), none with a space
+  if (root && user && home.length > 1 && absolute(home)) {
+    const named = [...Object.values(env.PROJECT_CHECKOUTS || {}), env.FACTORY_CHECKOUT].filter(c => typeof c === "string" && c);
+    const exists = deps.exists || (p => fs.existsSync(p));
+    const real = deps.realpath || (p => fs.realpathSync(p));
+    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+    for (const c of [...new Set(named)]) {
+      // only a folder strictly inside the factory user's home, named plainly, holding a git checkout, and none of the owner's own
+      if (!absolute(c) || path.posix.normalize(c) !== c || c.endsWith("/") || c === home || !inside(c, home) || FORBIDDEN.test(c) || !exists(path.posix.join(c, ".git"))) continue;
+      // and reached through no link: the factory's laps run as that user and could point a link elsewhere, where a chown must never go
+      let through = ""; try { through = String(real(c)).replace(/\\/g, "/"); } catch { continue; }
+      if (through !== c) { out.failed.push(`the factory's checkout ${c} is reached through a link (it is ${through.slice(0, 200)}), so its owners were not checked`); continue; }
+      // `find` walks the checkout itself: one filesystem (-xdev), links never followed; -execdir gives each file back from its own folder
+      const notTheirs = ["find", c, "-xdev", "!", "-user", user];
+      const foreign = () => {
+        const r = exec([...notTheirs, "-printf", "%u\\t%P\\n"], { maxBuffer: 256 * 1024 * 1024, timeout: 120000 });
+        if (r.status !== 0) return { error: lastLine(r.stderr) || `exit ${r.status}` };
+        const files = String(r.stdout || "").split("\n").filter(Boolean).map(l => { const i = l.indexOf("\t"); return { owner: l.slice(0, i), rel: l.slice(i + 1) }; });
+        return { files };
+      };
+      try {
+        const seen = user === "root" ? { files: [] } : foreign();
+        if (seen.error) { out.failed.push(`the owners of the files in the factory's checkout ${c} could not be read: ${seen.error.slice(0, 200)}`); continue; }
+        let repair = null;
+        if (seen.files.length) {
+          const gitOwn = seen.files.filter(f => f.rel === ".git" || f.rel.startsWith(".git/"));
+          const owners = [...new Set(seen.files.map(f => f.owner))].sort();
+          const sample = [...gitOwn, ...seen.files.filter(f => !gitOwn.includes(f))].slice(0, 3).map(f => f.rel);
+          const ch = exec([...notTheirs, "-execdir", "chown", "-h", "--", `${user}:`, "{}", "+"], { timeout: 300000 });
+          const left = ch.status === 0 ? foreign() : null;
+          if (ch.status !== 0 || !left || left.error || left.files.length) {
+            const why = ch.status !== 0 ? lastLine(ch.stderr) || `exit ${ch.status}` : left && left.error ? `its owners could not be read again: ${left.error}` : `${plural(left.files.length, "file is", "files are")} still not its`;
+            out.failed.push(`the factory's checkout ${c} has ${plural(seen.files.length, "file that is", "files that are")} not ${user}'s (${owners.join(", ")}: ${sample.join(", ")}), and it could not be given back: ${why.slice(0, 200)}`);
+          } else repair = { what: "checkout ownership", checkout: c, files: seen.files.length, gitFiles: gitOwn.length, owners, sample };
+        }
+        // a minute at most: one stalled remote must never hold the round (it has ten minutes in all)
+        const f = exec(asForge(env, ["git", "-C", c, "fetch", "--quiet", "--no-write-fetch-head", "origin"], [`HOME=${home}`, "GIT_TERMINAL_PROMPT=0"]), { timeout: 60000 });
+        const fetched = f.status === 0;
+        if (!fetched) out.failed.push(`the factory's checkout ${c} cannot fetch: ${(lastLine(f.stderr) || `exit ${f.status}`).slice(0, 200)}`);
+        if (repair) {
+          out.repairs.push({ ...repair, fetch: fetched ? "works" : `fails: ${(lastLine(f.stderr) || `exit ${f.status}`).slice(0, 200)}` });
+          out.done.push(`gave the factory's checkout ${c} back to ${user}: ${plural(repair.files, "file was", "files were")} not its (${repair.owners.join(", ")})${repair.gitFiles ? `, ${repair.gitFiles} of them git's own (${repair.sample.filter(s => s === ".git" || s.startsWith(".git/")).slice(0, 1).join("")})` : ""}; its git fetch ${fetched ? "works again" : "still fails"}`);
+        }
+      } catch (e) { out.failed.push(`the factory's checkout ${c}: ${lastLine(e.message).slice(0, 200)}`); }
+    }
   }
 
   // ---- disk: Archon's own cleanup (worktrees idle a day; it skips any a live run holds), then Docker
