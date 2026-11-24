@@ -1,5 +1,5 @@
 // node --disable-warning=ExperimentalWarning driver/test/steps/test-question-review.mjs
-// test cases: 14
+// test cases: 17
 // What the first independent review of the question work (Codex, 2026-11-24) found, each kept from coming back.
 import { testCase } from "../../../test/cases.mjs";
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
@@ -207,4 +207,54 @@ testCase("the two-hour message is never lost: with Telegram down and the journal
   const r = await check.run(ctx(126 * MIN));
   assert.equal(sent.length, 2, "said again, since nothing held it"); assert.match(r.summary, /receipt 9/);
   await check.run(ctx(131 * MIN)); assert.equal(sent.length, 2, "and then never again");
+}
+
+// ---- the third round of the review
+testCase("outward wording the list missed pages; 'not recommended' is never the recommendation; an audience change is never taken");
+{
+  for (const t of ["email the newsletter to subscribers", "share it on social media", "launch it in the App Store"]) assert.equal((categoryOf(t) || {}).category, "publish", t);
+  for (const t of ["launch the next lap", "a share button for social media", "keep the app store link"]) assert.equal(categoryOf(t), null, t);
+  const p = pickOption({ heading: "h", body: "- **A.** Rewrite it all. Not recommended: too much.\n- **B.** Keep it." });
+  assert.equal(p.how, "most reversible"); assert.equal(p.option.label, "b");
+  assert.equal(pickOption({ heading: "h", body: "- **A.** Rewrite it all (not recommended).\n- **B.** Keep it." }).option.label, "b");
+  assert.equal(pickOption({ heading: "h", body: "Options: (a) change who the app serves to teams; (b) change who the app serves to families." }), null);
+}
+
+testCase("a question the manager removed after honouring the decide helper's decision is still journaled as decided");
+{
+  const d = setup("rv3-gone-"); const g = github();
+  issue(d, "### Status of #80 (#80)\nFor your information.\n");
+  await run(env(d), T0, quiet, deps(g, channels()));
+  const key = keyOf("Status of #80 (#80)");
+  g.comments[80] = [{ body: `Manager decision (Mission Control, on Alex's standing instruction of 2026-11-24): nothing to change.\n<!-- factory-question:${idOf(key)} -->` }];
+  issue(d, "no questions left");
+  await run(env(d), T0 + 5 * MIN, quiet, deps(g, channels()));
+  const s = JSON.parse(fs.readFileSync(path.join(d, "state.json"), "utf8"));
+  assert.ok(!s.routed[key] && s.decided[key]); assert.ok(fs.readFileSync(path.join(d, "journal.jsonl"), "utf8").includes("nothing to change."));
+  // the same words about another item are a new question (the key leaves numbers out), and one withdrawn with no
+  // decision simply leaves
+  issue(d, "### Status of #81 (#81)\nFor your information.\n");
+  const r81 = await run(env(d), T0 + 10 * MIN, quiet, deps(g, channels()));
+  assert.deepEqual(r81.routed, ["Status of #81 (#81)"], "not taken for the earlier, decided question");
+  issue(d, "no questions left");
+  await run(env(d), T0 + 15 * MIN, quiet, deps(g, channels()));
+  const s2 = JSON.parse(fs.readFileSync(path.join(d, "state.json"), "utf8"));
+  assert.ok(!s2.routed[keyOf("Status of #81 (#81)")] && !s2.decided[keyOf("Status of #81 (#81)")]);
+}
+
+testCase("a two-hour message Telegram took while the journal could not be written is written down, with its receipt, on a later round");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rv3-alarm-"));
+  const jdir = path.join(tmp, "s", "journal.jsonl"); fs.mkdirSync(jdir, { recursive: true });
+  const settings = { owner: { github_login: "boss", name: "Alex" }, server: { factory_user: "b", factory_home: "/h", state_dir: path.join(tmp, "s"), questions_dir: path.join(tmp, "q") }, steps: { questions: { godspeed_dir: tmp, hermes_home: tmp } } };
+  const sent = [];
+  const ctx = at => ({ settings, main: { repository: "acme/app" }, projects: [{ repository: "acme/app" }], env: {}, stateDir: path.join(tmp, "s", "steps", "question-check"), now: T0 + at,
+    accountantDeps: { ownerIssue: () => ({ number: 7, body: "### Nobody has it\nx\n", url: "u" }), comments: () => [], telegram: async t => { sent.push(t); return { ok: true, receipt: "77" }; } } });
+  await check.run(ctx(0)); await check.run(ctx(121 * MIN));
+  assert.equal(sent.length, 1);
+  fs.rmdirSync(jdir);
+  await check.run(ctx(126 * MIN));
+  assert.equal(sent.length, 1, "never sent twice");
+  const j = fs.readFileSync(jdir, "utf8");
+  assert.ok(j.includes('"t":"notice"') && j.includes('"telegram":"77"'), "in the journal with its receipt");
 }

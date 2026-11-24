@@ -57,7 +57,7 @@ export function parseOptions(body) {
 // -> {text, label} | null. The first recommendation line; it ends where the line's default starts.
 export function parseRecommendation(body) {
   for (const line of String(body || "").replace(/\r/g, "").split("\n")) {
-    const m = /(?:^|[\s.])(?:My\s+)?[Rr]ecommend(?:ation|ed)\s*:\s*(.+?)(?=\s+Default\b|$)/.exec(line) || /\bWhat Mission Control would do:\s*(.+)$/.exec(line);
+    const m = /(?:^|[\s.])(?<![Nn]ot\s)(?:My\s+)?[Rr]ecommend(?:ation|ed)\s*:\s*(.+?)(?=\s+Default\b|$)/.exec(line) || /\bWhat Mission Control would do:\s*(.+)$/.exec(line); // "Not recommended:" is no recommendation
     if (!m) continue;
     const text = String(m[1]).replace(/\*\*/g, "").trim().replace(/\s+/g, " ");
     if (!text) continue;
@@ -73,7 +73,7 @@ const FINAL = /\b(delete|deleted|remove|removes|drop|close|closes|replace|retire
 const score = t => (String(t).match(UNDOABLE) || []).length - 2 * (String(t).match(FINAL) || []).length;
 // what the project is: its mission, its purpose, who it is for. An option that changes one of these is never taken for
 // him; the option that keeps it is.
-const MISSION = /\b(?:mission|purpose|target (?:audience|group|users)|(?:new|different|another|other) (?:audience|kind of users|market)|who (?:it|the (?:product|app|project)) is for|what the (?:product|app|project) is)\b/i;
+const MISSION = /\b(?:mission|purpose|audience|target (?:group|users|market)|(?:new|different|another|other) (?:kind of users|market)|who (?:it|the (?:\w+ )?(?:product|app|project|site|service)) (?:is for|serves|is meant for)|whom (?:it|the \w+) serves|what the (?:product|app|project) is)\b/i;
 const CHANGES = /\b(?:amend|amends|amendment|change|changes|changing|new|different|another|widen|widens|narrow|narrows|redefine|redefines|replace|replaces|pivot|serve|serves)\b/i;
 
 // The option Mission Control takes for a question the owner is not asked.
@@ -83,7 +83,7 @@ export function pickOption(q) {
   const body = String(q.body || "");
   const options = parseOptions(body);
   // an option can carry the recommendation itself ("- **A.** Now: ... **Recommended:** visitors get the fixes")
-  const marked = options.find(o => /\brecommended\b\s*[:)]|\(recommended\)/i.test(o.text));
+  const marked = options.find(o => /(?<!\bnot\s)\brecommended\b\s*[:)]|\(recommended\)/i.test(o.text)); // "not recommended" never marks one
   const rec = marked ? { text: marked.text, label: marked.label } : parseRecommendation(body);
   const byLabel = l => options.find(o => o.label === l) || (/^[1-9]$/.test(l || "") ? options[Number(l) - 1] : null) || (/^[a-e]$/.test(l || "") && options[0] && /^[1-9]$/.test(options[0].label) ? options[l.charCodeAt(0) - 97] : null);
   if (rec) {

@@ -53,6 +53,8 @@ export async function run(ctx) {
   const file = path.join(ctx.stateDir, "state.json");
   const st = readJson(file, {});
   for (const k of ["issues", "firstSeen", "decided", "alarmed", "counts"]) st[k] ||= {};
+  // messages to the owner that went out but could not be written to the journal then: written now
+  if ((st.unjournaled || []).length && env.JOURNAL && !ctx.dry) { try { appendEvents(env.JOURNAL, st.unjournaled); delete st.unjournaled; } catch { /* next round */ } }
   const halts = [], unreadable = [], late = [];
   const seenNow = new Set();
   for (const p of env.PROJECTS) {
@@ -94,10 +96,13 @@ export async function run(ctx) {
     const text = alarmText(late.length);
     const r = await io.telegram(text);
     const at = new Date(now).toISOString();
+    const event = { t: "notice", id: alarmId(late), at, title: "Factory questions reached nobody", text, receipts: r && r.ok ? { telegram: r.receipt } : {}, failed: r && r.ok ? [] : [(r && r.why) || "no answer"], entries: [] };
     let journaled = false;
-    if (env.JOURNAL) { try { appendEvents(env.JOURNAL, [{ t: "notice", id: alarmId(late), at, title: "Factory questions reached nobody", text, receipts: r && r.ok ? { telegram: r.receipt } : {}, failed: r && r.ok ? [] : [(r && r.why) || "no answer"], entries: [] }]); journaled = true; } catch { /* not durable: see below */ } }
+    if (env.JOURNAL) { try { appendEvents(env.JOURNAL, [event]); journaled = true; } catch { /* not durable yet: see below */ } }
     // once per question, and never lost: it counts as said when Telegram took it, or when the journal holds it for the
-    // driver's delivery retry; with neither, this check says it again next round
+    // driver's delivery retry; with neither, this check says it again next round. Said but not yet written down, it is
+    // kept with its receipt and written on a later round.
+    if (r && r.ok && !journaled && env.JOURNAL) (st.unjournaled ||= []).push(event);
     if ((r && r.ok) || journaled) for (const k of late) st.alarmed[k] = at;
     alarm = r && r.ok ? `; the owner was told about ${late.length} (receipt ${r.receipt})` : journaled ? `; telling the owner about ${late.length} failed (${(r && r.why) || "no answer"}), the driver retries` : `; telling the owner about ${late.length} failed and could not be written down; tried again next round`;
   }

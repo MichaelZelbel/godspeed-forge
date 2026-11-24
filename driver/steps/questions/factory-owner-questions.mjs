@@ -820,14 +820,16 @@ async function runLocked(env, now, log, deps) {
     const link = c.link = issue ? issue.html_url || `https://github.com/${project.repo}/issues/${issue.number}` : "";
     const open = new Set(questions.map(q => q.key));
     for (const k of Object.keys(state.tries)) if (!open.has(k)) delete state.tries[k]; // gone: say nothing
-    // what the driver's decide helper took: off the list once its decision is on GitHub, or when the question is gone
+    // what the driver's decide helper took: off the list once its decision is on GitHub (and in the journal), or when the
+    // question is gone and no decision was made (a manager that removed it after honouring the decision is the first case)
     for (const [k, v] of Object.entries(state.routed || {})) {
-      if (!open.has(k)) { if (!env.DRY) delete state.routed[k]; continue; }
-      if (!v.mc || !v.issue) continue;
+      const gone = !open.has(k);
+      if (!v.mc || !v.issue) { if (gone && !env.DRY) delete state.routed[k]; continue; }
       // decided once the decision is on every item the question names (the driver posts it on each)
       let hit = null, all = true;
-      try { for (const n of (v.items && v.items.length ? v.items : [v.issue])) { const h = io.comments(project.repo, n).find(x => decidesQuestion(x.body, k)); if (!h) { all = false; break; } hit ||= h; } } catch { continue; }
-      if (all && hit && !env.DRY) {
+      try { for (const n of (v.items && v.items.length ? v.items : [v.issue])) { const h = io.comments(project.repo, n).find(x => decidesQuestion(x.body, k)); if (!h) { all = false; break; } hit ||= h; } } catch { continue; } // unreadable: looked at again next run
+      if (!(all && hit)) { if (gone && !env.DRY) { delete state.routed[k]; c.save(); } continue; }
+      if (!env.DRY) {
         // the decision goes into the driver's journal first; unwritten, the question stays the driver's and is looked at again
         const choice = firstLine(hit.body).replace(/^[\s#>*_`~]*manager decision \([^)]*\)\s*:?\s*/i, "").slice(0, 400);
         const targets = v.items && v.items.length ? v.items : [v.issue];
@@ -841,6 +843,16 @@ async function runLocked(env, now, log, deps) {
         if (state.routed) delete state.routed[q.key];
         if (state.told[q.key] && !state.told[q.key].answered) state.told[q.key].answered = { at: nowIso, by: "chat" };
         continue;
+      }
+      // a record under this key from a question that named other items ("Status of #80" then "Status of #81": the key
+      // leaves numbers out) belongs to an earlier question: this one is new. An open page is the same question edited.
+      const itemsNow = (q.driver ? [q.issue] : itemsOf(q.heading)).join(",");
+      const earlier = rec => rec && rec.heading && !rec.driver && !q.driver && itemsOf(rec.heading).join(",") !== itemsNow;
+      if (!env.DRY) {
+        if (earlier((state.decided || {})[q.key])) delete state.decided[q.key];
+        if (earlier((state.routed || {})[q.key])) delete state.routed[q.key];
+        const t0 = state.told[q.key];
+        if (earlier(t0) && (t0.answered || !t0.page || t0.page.closed)) delete state.told[q.key];
       }
       if ((state.decided || {})[q.key] || state.told[q.key] || (state.routed || {})[q.key]) continue;
       const qLink = q.driver ? `https://github.com/${project.repo}/issues/${q.issue}` : link;

@@ -34,14 +34,16 @@
       "\\bpost(?:s|ed|ing)? (?:it |this |them )?(?:publicly|in public|on (?:social media|linkedin|x|twitter|facebook|instagram|reddit|youtube|tiktok|mastodon|bluesky|hacker news))",
       "\\bannounce(?:s|d)? (?:it |this |them |the \\w+ )?(?:publicly|to (?:users|customers|everyone|the public|subscribers|members))",
       "\\bpublic announcement\\b",
-      "\\bsend (?:out )?(?:the |a |our )?newsletter\\b",
+      "\\b(?:send|email|e-mail|mail)(?:s|ed|ing)? (?:out )?(?:the |a |our |this )?newsletter\\b",
       "\\bpress release\\b",
       "\\b(?:email|e-mail|mail|message|notify|write to|text|contact) (?:all |the |our |every |each |existing )?(?:users|customers|subscribers|members|clients|mailing list|list|people on)\\b",
       "\\bsend (?:\\w+ ){0,3}to (?:all |the |our |every |each |existing )?(?:users|customers|subscribers|members|clients|mailing list|people)\\b",
       "\\binvit(?:e|es|ing|ations?) (?:\\w+ ){0,2}(?:users|customers|people|members|clients|testers|subscribers)\\b",
       "\\bdeploy(?:s|ed|ing)? (?:it |this )?(?:to|on) (?:production|the public|the live)",
-      "\\b(?:submit|publish|release|upload|ship|put)(?:s|ted|ed|ing)? (?:\\w+ ){0,3}(?:to|on|in) the (?:app|play) store\\b",
-      "\\bsubmit (?:it |this )?(?:to|for) (?:review|the store|app review)"
+      "\\b(?:submit|publish|release|upload|ship|put|launch|list)(?:s|ted|ed|es|ing)? (?:\\w+ ){0,3}(?:to|on|in|into) the (?:app|play|chrome web|microsoft) store\\b",
+      "\\bsubmit (?:it |this )?(?:to|for) (?:review|the store|app review)",
+      "\\b(?:share|post|promote|advertise|announce)(?:s|d|ed|ing)? (?:\\w+ ){0,3}(?:on|to|via|in) (?:social media|linkedin|x|twitter|facebook|instagram|reddit|youtube|tiktok|mastodon|bluesky|threads|hacker news|product hunt|discord|slack)\\b",
+      "\\blaunch(?:es|ed|ing)? (?:it |this |them |the \\w+ )?(?:publicly|to the public|to (?:users|customers|everyone|subscribers))"
     ]
   },
   "delete": {
