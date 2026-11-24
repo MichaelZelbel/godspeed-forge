@@ -13,17 +13,19 @@
 //                    MAX_LAPS yet (2026-11-18 ruling), so tight memory goes to the ops helper instead
 //   STOP file        the factory's .factory/STOP (or PAUSE) whose writer has ended while no candidate's
 //                    scenarios run is removed (the release step forgot it; it stops every lap silently),
-//                    after the file and the process were read again (2026-11-18 ruling)
+//                    after the file and the process were read again (2026-11-18 ruling); the stage step's
+//                    at once, any other release program's after its own maximum (2026-11-24: a stage STOP
+//                    whose step had ended halted the factory for two hours)
 // Michael's live Godspeed always comes first and is never touched: not its notebook, not Hermes, not
 // the owner's own folders and ports.
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { ANONYMOUS_UNIT, isLegacy } from "./world.mjs";
+import { ANONYMOUS_UNIT, isLegacy, isStageStop, writerRuns } from "./world.mjs";
 import { forgeArgv } from "./release-driver/release-driver-owner-steps.mjs";
 import { linkLogins, signinCheck, actDefaults } from "./onduty.mjs";
 
-export const RELEASE_PROGRAMS = /^(auto-stage|freeze|stage-server)$/, STOP_MAX_HOURS = 2;
+export const RELEASE_PROGRAMS = /^(auto-stage|stage|freeze|stage-server)$/, STOP_MAX_HOURS = 2;
 export const ALLOWED_RESTART = String(process.env.FD_RESTART_UNITS || "").split(",").map(x => x.trim()).filter(Boolean);
 export const NEVER_TOUCH = String(process.env.FD_NEVER_TOUCH || "").split(",").map(x => x.trim()).filter(Boolean);
 const FORBIDDEN = process.env.FD_NEVER_TOUCH_PATTERN ? new RegExp(process.env.FD_NEVER_TOUCH_PATTERN, "i") : /(?!)/;
@@ -197,7 +199,11 @@ export async function housekeep(env0, world, deps = {}) {
     if (st.kind === "PAUSE" || /\/\.factory\/PAUSE$/.test(String(st.file || ""))) continue;
     if (!RELEASE_PROGRAMS.test(String(st.writer))) continue;
     const ageMs = (deps.now ? deps.now() : Date.now()) - Date.parse(st.at);
-    if (!(ageMs >= STOP_MAX_HOURS * 3600000)) continue;
+    // The stage step makes its STOP only while a candidate's scenarios run and ends its look within its own limit: once the
+    // look has ended and no candidate's scenarios run, nothing is left for the STOP to hold (2026-11-24: the step ended at
+    // 13:42 UTC, its run had failed at 13:40, and the STOP halted the factory until a person removed it at 14:00).
+    const stageDone = isStageStop(st) && st.scenariosRunning === false;
+    if (!stageDone && !(ageMs >= STOP_MAX_HOURS * 3600000)) continue;
     // scenarios still running keep a STOP for a while (their own maximum); a STOP older than twice its writer's maximum goes anyway
     if (st.scenariosRunning !== false && !(ageMs >= 2 * STOP_MAX_HOURS * 3600000)) continue;
     // a PAUSE that is a link to this STOP would be deleted with it: then the STOP stays
@@ -215,8 +221,8 @@ export async function housekeep(env0, world, deps = {}) {
       let now = ""; try { now = String(read(st.file)).split(/\r?\n/)[0].trim(); } catch { out.done.push(`${st.file} is gone already`); continue; }
       if (now !== st.line) { out.failed.push(`${st.file} not removed: it changed since the round read it`); continue; }
       const r = exec(["ps", "-o", "args=", "-p", String(st.pid)]);
-      if (r.status === 0 && String(r.stdout || "").includes(st.writer)) { out.failed.push(`${st.file} not removed: its writer ${st.writer} ${st.pid} runs again`); continue; }
-      const dead = (r.status === 1 && !String(r.stdout || "").trim()) || (r.status === 0 && !String(r.stdout || "").includes(st.writer));
+      if (r.status === 0 && writerRuns(st.writer, r.stdout)) { out.failed.push(`${st.file} not removed: its writer ${st.writer} ${st.pid} runs again`); continue; }
+      const dead = (r.status === 1 && !String(r.stdout || "").trim()) || (r.status === 0 && !writerRuns(st.writer, r.stdout));
       if (!dead) { out.failed.push(`${st.file} not removed: the process table could not be read, so the writer is not known to have ended`); continue; } // fails closed
       (deps.remove || (p => fs.rmSync(p, { force: true })))(st.file);
       out.done.push(`removed ${st.file} ("${st.line}"): its writer ${st.writer} ${st.pid} has ended and no candidate's scenarios run, so the factory runs again`);

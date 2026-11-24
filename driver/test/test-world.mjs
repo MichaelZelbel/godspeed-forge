@@ -2,7 +2,8 @@ import { TEST_ENV } from "./env.mjs";
 import test from "./harness.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { readWorld, parseDecisions, parseStale, ticketSize, parseRuns, parseProjects, parseStop } from "../world.mjs";
+import { readWorld, parseDecisions, parseStale, ticketSize, parseRuns, parseProjects, parseStop, writerRuns } from "../world.mjs";
+import { housekeep } from "../housekeeping.mjs";
 
 const here = p => new URL(p, import.meta.url);
 const PLAN = "release: x\nrepository: MichaelZelbel/godspeed-mission-control\nstatus: approved\n\n- Issues: item 1 #10, 2 #11 (x).\n";
@@ -301,4 +302,62 @@ test("failed one-off units from systemd-run are collected apart; a named failed 
 test("when both a STOP and a PAUSE file exist, both are read: the PAUSE is never hidden by the STOP", async () => {
   const src = fs.readFileSync(new URL("../world.mjs", import.meta.url), "utf8");
   assert.ok(/if \(name === "PAUSE"\) f\.pause = s;/.test(src) && !/f\.stop = s;\s*break;/.test(src), "the loop no longer stops at the first file");
+});
+
+// ---------------------------------------------------------------- issue #155 (2026-11-24)
+// The stage step runs as `node .../driver.mjs --step stage`, while its STOP names "auto-stage": the writer of a STOP that
+// was holding a running step looked ended, a helper relabelled the STOP "stage", and nothing removed it afterwards.
+const STAGE_ARGS = "/usr/bin/node /usr/local/lib/godspeed-factory/driver/driver.mjs --step stage --scheduled --settings-dir /etc/godspeed-forge\n";
+const BETA31_STOP = label => `${label} 2639648 2026-11-24T12:47:44.892Z\nThe release step pauses the factory while the scenarios run (the driver's stage step).\n`;
+const BETA31_RUN = status => ({ id: 45396974921, status, conclusion: status === "completed" ? "failure" : null, head_branch: "candidate/2.0.0-beta.31", display_title: "scenarios candidate/2.0.0-beta.31" });
+
+test("issue #155: the stage step's STOP has a running writer while `driver.mjs --step stage` runs, under either label; another step or program is not its writer", async () => {
+  assert.equal(writerRuns("auto-stage", STAGE_ARGS), true);
+  assert.equal(writerRuns("stage", STAGE_ARGS), true);
+  assert.equal(writerRuns("auto-stage", "/usr/bin/node /usr/local/lib/godspeed-factory/driver/driver.mjs --step stage-server\n"), false);
+  assert.equal(writerRuns("auto-stage", "/usr/bin/node /usr/local/lib/godspeed-factory/driver/driver.mjs --step plan --scheduled\n"), false);
+  assert.equal(writerRuns("auto-stage", "/usr/bin/sleep 100\n"), false);
+  assert.equal(writerRuns("freeze", "/usr/bin/node /x/release/freeze.mjs o/r 1.0.0\n"), true);
+  assert.equal(writerRuns("", STAGE_ARGS), false);
+  for (const label of ["auto-stage", "stage"]) {
+    const w = await readWorld(TEST_ENV, projectDeps({ stop: BETA31_STOP(label), writerArgs: STAGE_ARGS, scenarios: [BETA31_RUN("in_progress")] }));
+    const s = w.factories[0].stop;
+    assert.deepEqual([s.writer, s.pid, s.writerAlive, s.scenariosRunning], [label, 2639648, true, true], label);
+  }
+});
+
+test("issue #155, exactly today's case: the stage's STOP, its writer gone, its candidate run completed with failure and the run's jobs answering 502, is removed by housekeeping at the next round", async () => {
+  for (const label of ["auto-stage", "stage"]) {
+    const d = projectDeps({ stop: BETA31_STOP(label), writerArgs: "", scenarios: [BETA31_RUN("completed")] });
+    const gh = d.gh, asked = [];
+    d.gh = args => { const a = args.join(" "); asked.push(a); if (/actions\/runs\/45396974921\/jobs/.test(a)) throw new Error("HTTP 502: Bad Gateway"); return gh(args); };
+    const world = await readWorld(TEST_ENV, d);
+    const s = world.factories[0].stop;
+    assert.deepEqual([s.writer, s.writerAlive, s.scenariosRunning, s.at], [label, false, false, "2026-11-24T12:47:44.892Z"], label);
+    const removed = [], ps = [];
+    const r = await housekeep({}, world, {
+      run: argv => { ps.push(argv.join(" ")); return argv[0] === "ps" ? { status: 1, stdout: "", stderr: "" } : { status: 0, stdout: "", stderr: "" }; },
+      sleep: async () => {},
+      now: () => Date.parse("2026-11-24T13:45:00Z"), // 58 minutes after the STOP was made, five after the step ended
+      readFile: f => { assert.equal(f, s.file); return BETA31_STOP(label); },
+      lstat: () => ({ isSymbolicLink: () => false }),
+      realpath: p => { if (/PAUSE$/.test(p)) { const e = new Error("no PAUSE"); e.code = "ENOENT"; throw e; } return p; },
+      remove: f => removed.push(f),
+    });
+    assert.deepEqual(removed, ["/home/godspeed-forge/godspeed-mission-control/.factory/STOP"], `${label}: ${JSON.stringify(r)}`);
+    assert.ok(r.done.includes(`removed ${s.file} ("${label} 2639648 2026-11-24T12:47:44.892Z"): its writer ${label} 2639648 has ended and no candidate's scenarios run, so the factory runs again`), r.done.join("\n"));
+    assert.ok(ps.some(c => c === "ps -o args= -p 2639648"), "the writer was looked for again");
+    assert.ok(!asked.some(a => /\/jobs/.test(a)), "nothing of it needs the run's jobs");
+  }
+});
+
+test("issue #155: the stage's STOP stays while its step runs, and while its candidate's scenarios run again", async () => {
+  const cases = [[STAGE_ARGS, "completed"], ["", "in_progress"], ["", "queued"]];
+  for (const [writerArgs, status] of cases) {
+    const world = await readWorld(TEST_ENV, projectDeps({ stop: BETA31_STOP("stage"), writerArgs, scenarios: [BETA31_RUN(status)] }));
+    const removed = [];
+    await housekeep({}, world, { run: argv => (argv[0] === "ps" ? { status: writerArgs ? 0 : 1, stdout: writerArgs, stderr: "" } : { status: 0, stdout: "", stderr: "" }), sleep: async () => {}, now: () => Date.parse("2026-11-24T13:45:00Z"),
+      readFile: () => BETA31_STOP("stage"), lstat: () => ({ isSymbolicLink: () => false }), realpath: p => { if (/PAUSE$/.test(p)) { const e = new Error("x"); e.code = "ENOENT"; throw e; } return p; }, remove: f => removed.push(f) });
+    assert.deepEqual(removed, [], `${writerArgs ? "the step runs" : "no step"}, the run is ${status}`);
+  }
 });

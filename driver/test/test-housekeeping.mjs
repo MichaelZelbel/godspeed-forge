@@ -182,6 +182,30 @@ test("a STOP is never removed while its writer lives, while scenarios run or are
   }
 });
 
+test("issue #155: the stage step's STOP goes as soon as its writer has ended and no candidate's scenarios run, under either label; another release program's still waits its two hours", async () => {
+  const at = Date.parse("2026-11-18T13:47:26.709Z") + 23 * 60000; // 23 minutes after it was made
+  const cases = [
+    [{ writer: "auto-stage" }, true],
+    [{ writer: "stage", line: "stage 1424860 2026-11-18T13:47:26.709Z" }, true],
+    [{ writer: "freeze", line: "freeze 1424860 2026-11-18T13:47:26.709Z" }, false],
+    [{ writer: "stage", line: "stage 1424860 2026-11-18T13:47:26.709Z", scenariosRunning: null }, false], // not known: never on a guess
+  ];
+  for (const [o, gone] of cases) {
+    const s = server();
+    const removed = [];
+    await housekeep({}, stopWorld(o), { ...s.deps, now: () => at, readFile: () => `${o.line || LINE}\nx\n`, remove: f => removed.push(f) });
+    assert.deepEqual(removed, gone ? [STOPFILE] : [], JSON.stringify(o));
+  }
+});
+
+test("issue #155: a stage STOP whose step still runs as `driver.mjs --step stage` is never removed, though the round's read called its writer ended", async () => {
+  const s = server({ 1424860: { uid: 0, etimes: 600, cmd: "/usr/bin/node /usr/local/lib/godspeed-factory/driver/driver.mjs --step stage --scheduled --settings-dir /etc/godspeed-forge" } });
+  const removed = [];
+  const r = await housekeep({}, stopWorld(), { ...s.deps, now: () => Date.parse("2026-11-18T16:00:00Z"), readFile: () => `${LINE}\nx\n`, remove: f => removed.push(f) });
+  assert.deepEqual(removed, []);
+  assert.match(r.failed.join("\n"), /not removed: its writer auto-stage 1424860 runs again/);
+});
+
 test("a stopped factory timer the round names is started again as the factory user, in its namespace; nothing else is started", async () => {
   const s = server();
   const r = await housekeep({}, { server: { failedUnits: [], staleProcs: [], logins: { gh: true } }, timersToStart: ["archonfactory-querino.timer", "evil.timer", "archonfactory-x.service"] }, s.deps);
@@ -218,10 +242,12 @@ test("a PAUSE file is never removed by any program, whoever wrote it, however ma
   }
 });
 
-test("a STOP is removed only when a release program wrote it, it has ended, and only after that program's own maximum of 2 hours; an operator's STOP is never removed", async () => {
+test("a STOP is removed only when a release program wrote it, it has ended, and only after that program's own maximum of 2 hours (the stage step's at once, issue #155); an operator's STOP is never removed", async () => {
   const run = async (o, nowIso) => { const removed = []; const s = server(); await housekeep({}, stopWorld(o), { ...s.deps, now: () => Date.parse(nowIso), readFile: () => `${LINE}`, remove: f => removed.push(f) }); return removed; };
-  assert.deepEqual(await run({}, "2026-11-18T14:30:00Z"), [], "writer ended 43 minutes ago: not yet");
-  assert.deepEqual(await run({}, "2026-11-18T16:00:00Z"), [STOPFILE], "past 2 hours: the forgotten STOP goes");
+  assert.deepEqual(await run({ writer: "freeze" }, "2026-11-18T14:30:00Z"), [], "the freeze's writer ended 43 minutes ago: not yet");
+  assert.deepEqual(await run({ writer: "freeze" }, "2026-11-18T16:00:00Z"), [STOPFILE], "past 2 hours: the forgotten STOP goes");
+  assert.deepEqual(await run({}, "2026-11-18T14:30:00Z"), [STOPFILE], "the stage step's, its writer ended 43 minutes ago and no candidate's scenarios run: it goes at once");
+  assert.deepEqual(await run({ scenariosRunning: true }, "2026-11-18T14:30:00Z"), [], "the stage step's while scenarios run: not yet");
   assert.deepEqual(await run({ writer: "operator" }, "2026-11-20T00:00:00Z"), [], "a person's STOP stays");
 });
 

@@ -188,6 +188,19 @@ export function parseProjects(text, main) {
   }
   return out;
 }
+// The stage step's STOP: its first line names "auto-stage" (the program the step grew out of), or "stage" once
+// somebody relabelled it (a helper did on 2026-11-24, which hid it from the step and from housekeeping both).
+export const STAGE_WRITER = /^(auto-stage|stage)$/;
+export const isStageStop = st => !!st && STAGE_WRITER.test(String(st.writer || ""));
+// Whether the process <args> (ps -o args=) is the writer the STOP names. The stage step runs as
+// `node .../driver.mjs --step stage ...`, so its STOP's "auto-stage" is never in its command line: reading
+// it that way called a running step's STOP abandoned and sent a helper to "repair" it (2026-11-24).
+export function writerRuns(writer, args) {
+  const a = String(args || ""), w = String(writer || "");
+  if (!w) return false;
+  if (STAGE_WRITER.test(w)) return a.includes("auto-stage") || (/\bdriver\.mjs\b/.test(a) && /(^|\s)--step\s+stage(\s|$)/.test(a));
+  return a.includes(w);
+}
 // A STOP or PAUSE file's first line: "<writer> <pid> <iso time>" (auto-stage's), or anything else.
 export function parseStop(text, mtimeMs) {
   const line = String(text || "").split(/\r?\n/)[0].trim();
@@ -330,7 +343,7 @@ function readFactory(env, deps, project, primary, world, unreadable) {
     const s = { file, kind: name, ...parseStop(text, mt), writerAlive: null, scenariosRunning: null };
     if (s.pid && s.writer) {
       const args = tryRun(deps, `if command -v ps >/dev/null 2>&1; then ps -p ${s.pid} -o args= 2>/dev/null || true; else echo __unknown__; fi`, false, unreadable, `${part}/stop-writer`);
-      if (args !== null) s.writerAlive = String(args).includes("__unknown__") ? null : String(args).includes(s.writer); // unknown stays unknown: nothing is removed on a guess
+      if (args !== null) s.writerAlive = String(args).includes("__unknown__") ? null : writerRuns(s.writer, args); // unknown stays unknown: nothing is removed on a guess
     } else s.writerAlive = false;
     if (f.repo) {
       try {
