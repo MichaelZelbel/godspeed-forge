@@ -54,8 +54,8 @@ export const hkDefaults = (e = process.env) => ({
   LEGACY_UNITS: String(e.FD_LEGACY_UNITS || "").split(",").map(x => x.trim()).filter(Boolean),
 });
 
-function run(argv, { maxBuffer } = {}) {
-  const r = spawnSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: 10 * 60000, env: { PATH: SYSTEM_PATH }, ...(maxBuffer ? { maxBuffer } : {}) });
+function run(argv, { maxBuffer, timeout } = {}) {
+  const r = spawnSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: timeout || 10 * 60000, env: { PATH: SYSTEM_PATH }, ...(maxBuffer ? { maxBuffer } : {}) }); // SIGTERM at the limit: runuser hands it on
   return { status: r.status, stdout: r.stdout || "", stderr: (r.stderr || "") + (r.error ? r.error.message : "") };
 }
 const lastLine = t => String(t || "").trim().split("\n").pop() || "";
@@ -168,13 +168,14 @@ export async function housekeep(env0, world, deps = {}) {
   // ---- the factory's checkouts (the Forge 0.3.1, ticket 08, issue #157): each one is the factory user's alone, and its fetch works.
   // On 2026-11-22 a root process checked out a branch in the main checkout; from then on the factory user's `git fetch` failed on a
   // file root owned and the factory built on a main a day old until a person gave the files back two days later. Every round, for
-  // each checkout in the factory user's home: the files another user owns are found, given back with a chown limited to that
-  // checkout (never following a link out of it), and `git fetch` runs as the factory user to prove it works. Only as root, and only
-  // for a factory user that is not root (a factory that runs as root owns its checkouts as root).
+  // each checkout in the factory user's home: the files another user owns are found and given back with a chown limited to that
+  // checkout, on its own filesystem, never through a link, and `git fetch` runs as the factory user to prove it works. Only as root
+  // (only root can give files back). A factory that runs as root owns its checkouts as root and no file can stop root's fetch, so
+  // there only the fetch is checked.
   const root = deps.root !== undefined ? !!deps.root : isRoot();
   const user = String(env.FORGE_USER || ""), home = String(env.FORGE_HOME || "").replace(/\/+$/, "");
   const absolute = p => /^(\/|[A-Za-z]:\/)[^\s]*$/.test(p); // the server's folders (a Windows test machine's C:/ too), none with a space
-  if (root && user && user !== "root" && home.length > 1 && absolute(home)) {
+  if (root && user && home.length > 1 && absolute(home)) {
     const named = [...Object.values(env.PROJECT_CHECKOUTS || {}), env.FACTORY_CHECKOUT].filter(c => typeof c === "string" && c);
     const exists = deps.exists || (p => fs.existsSync(p));
     const real = deps.realpath || (p => fs.realpathSync(p));
@@ -185,29 +186,31 @@ export async function housekeep(env0, world, deps = {}) {
       // and reached through no link: the factory's laps run as that user and could point a link elsewhere, where a chown must never go
       let through = ""; try { through = String(real(c)).replace(/\\/g, "/"); } catch { continue; }
       if (through !== c) { out.failed.push(`the factory's checkout ${c} is reached through a link (it is ${through.slice(0, 200)}), so its owners were not checked`); continue; }
-      // the stage step's own STOP is the one file root writes there on purpose (and removes itself): it is not a repair
+      // `find` walks the checkout itself: one filesystem (-xdev), links never followed; -execdir gives each file back from its own folder
+      const notTheirs = ["find", c, "-xdev", "!", "-user", user];
       const foreign = () => {
-        const r = exec(["find", c, "-xdev", "!", "-path", `${c}/.factory/STOP`, "!", "-user", user, "-printf", "%u\\t%P\\n"], { maxBuffer: 256 * 1024 * 1024 });
+        const r = exec([...notTheirs, "-printf", "%u\\t%P\\n"], { maxBuffer: 256 * 1024 * 1024, timeout: 120000 });
         if (r.status !== 0) return { error: lastLine(r.stderr) || `exit ${r.status}` };
         const files = String(r.stdout || "").split("\n").filter(Boolean).map(l => { const i = l.indexOf("\t"); return { owner: l.slice(0, i), rel: l.slice(i + 1) }; });
         return { files };
       };
       try {
-        const seen = foreign();
+        const seen = user === "root" ? { files: [] } : foreign();
         if (seen.error) { out.failed.push(`the owners of the files in the factory's checkout ${c} could not be read: ${seen.error.slice(0, 200)}`); continue; }
         let repair = null;
         if (seen.files.length) {
           const gitOwn = seen.files.filter(f => f.rel === ".git" || f.rel.startsWith(".git/"));
           const owners = [...new Set(seen.files.map(f => f.owner))].sort();
           const sample = [...gitOwn, ...seen.files.filter(f => !gitOwn.includes(f))].slice(0, 3).map(f => f.rel);
-          const ch = exec(["chown", "-R", "-P", "-h", "--", `${user}:`, c]);
+          const ch = exec([...notTheirs, "-execdir", "chown", "-h", "--", `${user}:`, "{}", "+"], { timeout: 300000 });
           const left = ch.status === 0 ? foreign() : null;
           if (ch.status !== 0 || !left || left.error || left.files.length) {
             const why = ch.status !== 0 ? lastLine(ch.stderr) || `exit ${ch.status}` : left && left.error ? `its owners could not be read again: ${left.error}` : `${plural(left.files.length, "file is", "files are")} still not its`;
             out.failed.push(`the factory's checkout ${c} has ${plural(seen.files.length, "file that is", "files that are")} not ${user}'s (${owners.join(", ")}: ${sample.join(", ")}), and it could not be given back: ${why.slice(0, 200)}`);
           } else repair = { what: "checkout ownership", checkout: c, files: seen.files.length, gitFiles: gitOwn.length, owners, sample };
         }
-        const f = exec(asForge(env, ["git", "-C", c, "fetch", "--quiet", "--no-write-fetch-head", "origin"], ["GIT_TERMINAL_PROMPT=0"]));
+        // a minute at most: one stalled remote must never hold the round (it has ten minutes in all)
+        const f = exec(asForge(env, ["git", "-C", c, "fetch", "--quiet", "--no-write-fetch-head", "origin"], [`HOME=${home}`, "GIT_TERMINAL_PROMPT=0"]), { timeout: 60000 });
         const fetched = f.status === 0;
         if (!fetched) out.failed.push(`the factory's checkout ${c} cannot fetch: ${(lastLine(f.stderr) || `exit ${f.status}`).slice(0, 200)}`);
         if (repair) {

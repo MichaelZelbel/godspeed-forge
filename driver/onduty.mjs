@@ -71,7 +71,7 @@ export function readSettingsEnvFile(file) {
 }
 // Where an acting run works on code, and where it never writes (issue #157). "" when the settings name no checkout.
 export const checkoutsBrief = a => (a.CHECKOUTS || []).length && a.FACTORY_USER && a.FACTORY_USER !== "root"
-  ? `THE FACTORY'S CHECKOUTS (${a.CHECKOUTS.join(", ")}) belong to ${a.FACTORY_USER} and are read-only for you: never run git or anything else that writes in them as root, and never add a checkout to git's safe.directory (on 2026-11-22 an acting run checked out a branch in one as root, and the factory could not fetch for two days). To work on a pull request's code, clone it into a folder of your own (mktemp -d) and push from there. A git command a checkout itself needs runs as ${a.FACTORY_USER}, outside your sandbox: systemd-run --uid=${a.FACTORY_USER} --pipe --wait --quiet git -C <checkout> <command>.\n\n`
+  ? `THE FACTORY'S CHECKOUTS (${a.CHECKOUTS.join(", ")}) belong to ${a.FACTORY_USER} and are read-only for you. Never write in them by any route: not with git or any other program, not through systemd-run or another unit, not as another user, and never add a checkout to git's safe.directory (on 2026-11-22 an acting run checked out a branch in one as root, and the factory could not fetch for two days). To work on a pull request's code, clone it into a folder of your own (mktemp -d) and push from there. A checkout that itself needs a change is the factory's own work or the driver's housekeeping, never yours: say what it needs in your note.\n\n`
   : "";
 // The control plane (9.7, 8.9): what an acting run on a RELEASE may read and never write. A DRIVER-REPAIR run (started by
 // the dead-man) may write the driver's install, and never the dead-man, the journal or the units.

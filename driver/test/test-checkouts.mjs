@@ -45,6 +45,20 @@ test("issue #157: git as root in the factory user's home is refused however it n
   assert.equal(rootGitRefusal("git", ["-C", "/root/projects/o/r", "fetch"], {}, { account: { user: "root", home: "/root" }, root: true }), "", "a factory that runs as root (a server the Forge set up) owns its folders as root");
   assert.equal(rootGitRefusal("git", ["-C", CHECKOUT, "fetch"], {}, { account: { user: "", home: "" }, root: true }), "", "no factory user named: nothing to keep");
   assert.deepEqual(gitFolders(["-C", "a", "-C", "b", "status"], "/x"), ["/x/a/b"]);
+  // the same git in a shell command line
+  for (const [file, args, opts] of [
+    ["bash", ["-c", `cd ${CHECKOUT} && git checkout archon/task-archon-loop-0601e400`], {}],
+    ["/bin/sh", ["-ec", `git -C '${HOME}/querino' fetch origin`], {}],
+    ["bash", ["-lc", "git status --short"], { cwd: CHECKOUT }],
+    ["env", ["-i", "PATH=/usr/bin", "bash", "-c", `git config --file "${CHECKOUT}/.git/config" --get remote.origin.url`], {}],
+    [`git -C ${CHECKOUT} merge origin/main`, [], { shell: true }],
+  ]) assert.match(rootGitRefusal(file, args, opts, AS_ROOT), /^refused: a shell command that runs git as root names \/home\/godspeed-forge/, `${file} ${args.join(" ")}`);
+  for (const [file, args] of [
+    ["runuser", ["-u", "godspeed-forge", "--", "bash", "-c", `git -C ${CHECKOUT} fetch`]], // wrapped
+    ["bash", ["-c", `ls ${CHECKOUT}/.factory; cat ${HOME}/.factory-env`]], // no git
+    ["bash", ["-c", "git -C /usr/local/lib/godspeed-forge/godspeed-dev pull --ff-only -q"]], // git elsewhere
+    ["bash", ["-c", `curl -s https://github.com/o/r; ls ${HOME}/.digit`]], // the word git only inside other words
+  ]) assert.equal(rootGitRefusal(file, args, {}, AS_ROOT), "", `${file} ${args.join(" ")}`);
 });
 
 test("issue #157: every driver process (a round, a step) puts the guard up with the factory user its settings name, and the installer's records pull runs as that user when the records live in its home", async () => {
@@ -106,10 +120,11 @@ test("issue #157: in the driver's process the guard stands in front of child_pro
     }
     assert.throws(() => cp.execFileSync("git", ["-C", repo, "status"]), /refused: git/);
     assert.throws(() => cp.spawn("git", ["fetch"], { cwd: repo }), /refused: git/);
+    assert.throws(() => cp.execSync("git commit --allow-empty -m x", { cwd: repo }), /refused: a shell command that runs git as root/);
     assert.equal(spawnSync("git", ["--version"], { encoding: "utf8", cwd: os.tmpdir() }).status, 0, "git elsewhere runs");
     assert.equal(spawnSync(process.execPath, ["-e", "process.exit(0)"]).status, 0, "anything else runs");
-    assert.equal(refusedGit.length - before, 4);
-    assert.equal(said.length, 4, "each refusal is said where the round's log goes");
+    assert.equal(refusedGit.length - before, 5);
+    assert.equal(said.length, 5, "each refusal is said where the round's log goes");
   } finally { off(); }
   assert.equal(spawnSync("git", ["-C", repo, "log", "--oneline"], { encoding: "utf8" }).stdout, "", "nothing was committed in the checkout");
   assert.equal(spawnSync("git", ["-C", repo, "status", "--short"]).status, 0, "taken off: git runs there again");
@@ -129,7 +144,8 @@ test("issue #157: an acting run and a dead-man repair run have the factory's che
   const brief = prompt({ kind: "pr", title: "pull request 804", evidence: [] }, [], "/x/onduty.mjs", a);
   assert.match(brief, /THE FACTORY'S CHECKOUTS \(\/home\/godspeed-forge\/godspeed-mission-control, \/home\/godspeed-forge\/querino\) belong to godspeed-forge and are read-only for you/);
   assert.match(brief, /clone it into a folder of your own \(mktemp -d\)/);
-  assert.match(brief, /systemd-run --uid=godspeed-forge --pipe --wait --quiet git -C <checkout>/);
+  assert.match(brief, /Never write in them by any route: not with git or any other program, not through systemd-run or another unit, not as another user/);
+  assert.ok(!/systemd-run --uid/.test(brief), "it is never shown a way around its sandbox");
   assert.match(brief, /never add a checkout to git's safe\.directory/);
   const dir = tmp(), calls = [];
   launchAct({}, { ...a, ACT_DIR: dir }, { unit: "factory-act-abc-1", entry: { kind: "pr", title: "t", evidence: [] }, provider: "codex" }, (c, args) => { calls.push(args); return { status: 0 }; });
@@ -168,17 +184,22 @@ function checkoutFixture(rootOwned = []) {
   const walk = (dir, rel = "") => { for (const d of fs.readdirSync(dir, { withFileTypes: true })) { const r = rel ? `${rel}/${d.name}` : d.name; owner.set(r, FORGE_USER); if (d.isDirectory()) walk(path.join(dir, d.name), r); } };
   walk(checkout);
   for (const r of rootOwned) { assert.ok(owner.has(r), `the fixture has ${r}`); owner.set(r, "root"); }
-  const calls = [];
+  const calls = [], opts = [];
   const fetchError = "error: unable to append to '.git/logs/refs/remotes/origin/main': Permission denied\nerror: cannot update ref 'refs/remotes/origin/main': unable to append to '.git/logs/refs/remotes/origin/main': Permission denied";
   const deps = { root: true, sleep: async () => {}, exists: p => fs.existsSync(p),
-    run: argv => {
-      calls.push(argv);
+    run: (argv, o) => {
+      calls.push(argv); opts.push(o || {});
       if (argv[0] === "find") {
-        const user = argv[argv.indexOf("-user") + 1], skip = argv.includes("-path") ? argv[argv.indexOf("-path") + 1] : null;
+        const user = argv[argv.indexOf("-user") + 1];
         if (argv[1] !== checkout) return { status: 1, stdout: "", stderr: `find: '${argv[1]}': No such file or directory` };
-        return { status: 0, stdout: [...owner].filter(([r, u]) => u !== user && `${checkout}/${r}` !== skip).map(([r, u]) => `${u}\t${r}\n`).join(""), stderr: "" };
+        const theirs = [...owner].filter(([, u]) => u !== user);
+        if (argv.includes("-execdir")) { // find ... -execdir chown -h -- <user>: {} +: what it found is the user's now
+          const to = argv[argv.indexOf("--") + 1].replace(/:$/, "");
+          for (const [r] of theirs) owner.set(r, to);
+          return { status: 0, stdout: "", stderr: "" };
+        }
+        return { status: 0, stdout: theirs.map(([r, u]) => `${u}\t${r}\n`).join(""), stderr: "" };
       }
-      if (argv[0] === "chown") { const to = argv.at(-2).replace(/:$/, ""); if (argv.at(-1) === checkout) for (const r of owner.keys()) owner.set(r, to); return { status: 0, stdout: "", stderr: "" }; }
       const g = argv.indexOf("git");
       if (g > 0 && argv.includes("fetch")) {
         // the factory user's git: it cannot write what root owns under .git
@@ -189,10 +210,11 @@ function checkoutFixture(rootOwned = []) {
       return { status: 0, stdout: "", stderr: "" };
     } };
   const env = { FORGE_USER, FORGE_UID: "1001", FORGE_NETNS: "godspeed-forge", FORGE_HOME: home, PROJECT_CHECKOUTS: { "godspeed-mission-control": checkout }, FACTORY_CHECKOUT: "" };
-  return { top, home, checkout, origin, newest, owner, calls, deps, env, git };
+  return { top, home, checkout, origin, newest, owner, calls, opts, deps, env, git };
 }
 const hkWorld = () => ({ server: { failedUnits: [], diskPct: 50, memAvailPct: 60, staleProcs: [], logins: { gh: true } } });
-const chowns = calls => calls.filter(c => c[0] === "chown");
+const chowns = calls => calls.filter(c => c[0] === "chown" || (c[0] === "find" && c.includes("chown")));
+const giveBack = c => ["find", c, "-xdev", "!", "-user", FORGE_USER, "-execdir", "chown", "-h", "--", `${FORGE_USER}:`, "{}", "+"];
 const fetches = calls => calls.filter(c => c.includes("git") && c.includes("fetch"));
 const escape = s => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 
@@ -200,21 +222,24 @@ test("ticket 08 (#157): a checkout with a root-owned .git/logs file goes back to
   const f = checkoutFixture([".git/logs/refs/remotes/origin/main", "README.md"]);
   // as on the AX41: the factory user's own fetch fails on the file root owns
   assert.match(f.deps.run(["ip", "netns", "exec", "godspeed-forge", "runuser", "-u", FORGE_USER, "--", "git", "-C", f.checkout, "fetch", "origin"]).stderr, /unable to append to '\.git\/logs\/refs\/remotes\/origin\/main': Permission denied/);
-  f.calls.length = 0;
+  f.calls.length = 0; f.opts.length = 0;
   const out = await housekeep(f.env, hkWorld(), f.deps);
-  assert.deepEqual(chowns(f.calls), [["chown", "-R", "-P", "-h", "--", `${FORGE_USER}:`, f.checkout]], "one chown, limited to that checkout, never following a link out of it");
+  assert.deepEqual(chowns(f.calls), [giveBack(f.checkout)], "one chown, of what is not the factory user's in that checkout: its own filesystem, never through a link");
   assert.ok([...f.owner.values()].every(u => u === FORGE_USER), "every file is the factory user's again");
   const fx = fetches(f.calls);
   assert.equal(fx.length, 1, "one fetch, after the repair");
   assert.deepEqual(fx[0].slice(0, 8), ["ip", "netns", "exec", "godspeed-forge", "runuser", "-u", FORGE_USER, "--"], "as the factory user, inside its network");
+  assert.ok(fx[0].includes(`HOME=${f.home}`), "in its own home");
   assert.ok(fx[0].includes("--no-write-fetch-head"), "the factory's own FETCH_HEAD is left alone");
+  assert.equal(f.opts[f.calls.indexOf(fx[0])].timeout, 60000, "a stalled remote holds the round a minute at most");
+  assert.ok(f.calls.every((c, i) => f.opts[i].timeout > 0 && f.opts[i].timeout <= 300000), "every command of this check has its own limit");
   assert.equal(f.git("-C", f.checkout, "rev-parse", "origin/main"), f.newest, "origin/main is today's main again");
   assert.deepEqual(out.failed, []);
   assert.equal(out.done.length, 1);
   assert.match(out.done[0], new RegExp(`^gave the factory's checkout ${escape(f.checkout)} back to godspeed-forge: 2 files were not its \\(root\\), 1 of them git's own \\(\\.git/logs/refs/remotes/origin/main\\); its git fetch works again$`));
   assert.deepEqual(out.repairs, [{ what: "checkout ownership", checkout: f.checkout, files: 2, gitFiles: 1, owners: ["root"], sample: [".git/logs/refs/remotes/origin/main", "README.md"], fetch: "works" }]);
   // the next round finds nothing to do and says nothing
-  f.calls.length = 0;
+  f.calls.length = 0; f.opts.length = 0;
   const again = await housekeep(f.env, hkWorld(), f.deps);
   assert.deepEqual(chowns(f.calls), []);
   assert.deepEqual([again.done, again.failed, again.repairs], [[], [], []]);
@@ -223,26 +248,26 @@ test("ticket 08 (#157): a checkout with a root-owned .git/logs file goes back to
 
 test("ticket 08 (#157): a checkout that cannot fetch for another reason, or whose files could not be given back, is reported and never hidden", async () => {
   const f = checkoutFixture();
-  const offline = { ...f.deps, run: argv => (argv.includes("fetch") ? (f.calls.push(argv), { status: 128, stdout: "", stderr: "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com" }) : f.deps.run(argv)) };
+  const offline = { ...f.deps, run: (argv, o) => (argv.includes("fetch") ? (f.calls.push(argv), { status: 128, stdout: "", stderr: "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com" }) : f.deps.run(argv, o)) };
   const out = await housekeep(f.env, hkWorld(), offline);
   assert.deepEqual(chowns(f.calls), [], "nothing of root's in it: no chown");
   assert.deepEqual(out.failed, [`the factory's checkout ${f.checkout} cannot fetch: fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com`]);
   assert.deepEqual(out.repairs, []);
   const g = checkoutFixture([".git/HEAD"]);
-  const stuck = { ...g.deps, run: argv => (argv[0] === "chown" ? (g.calls.push(argv), { status: 1, stdout: "", stderr: "chown: changing ownership of '.git/HEAD': Operation not permitted" }) : g.deps.run(argv)) };
+  const stuck = { ...g.deps, run: (argv, o) => (argv.includes("chown") ? (g.calls.push(argv), { status: 1, stdout: "", stderr: "chown: changing ownership of './HEAD': Operation not permitted" }) : g.deps.run(argv, o)) };
   const out2 = await housekeep(g.env, hkWorld(), stuck);
   assert.equal(chowns(g.calls).length, 1);
-  assert.deepEqual(out2.failed, [`the factory's checkout ${g.checkout} has 1 file that is not godspeed-forge's (root: .git/HEAD), and it could not be given back: chown: changing ownership of '.git/HEAD': Operation not permitted`,
+  assert.deepEqual(out2.failed, [`the factory's checkout ${g.checkout} has 1 file that is not godspeed-forge's (root: .git/HEAD), and it could not be given back: chown: changing ownership of './HEAD': Operation not permitted`,
     `the factory's checkout ${g.checkout} cannot fetch: error: cannot update ref 'refs/remotes/origin/main': unable to append to '.git/logs/refs/remotes/origin/main': Permission denied`]);
   assert.deepEqual(out2.repairs, []);
   const h = checkoutFixture();
-  const unreadable = { ...h.deps, run: argv => (argv[0] === "find" ? (h.calls.push(argv), { status: 1, stdout: "", stderr: "find: '/x': Input/output error" }) : h.deps.run(argv)) };
+  const unreadable = { ...h.deps, run: (argv, o) => (argv[0] === "find" ? (h.calls.push(argv), { status: 1, stdout: "", stderr: "find: '/x': Input/output error" }) : h.deps.run(argv, o)) };
   const out3 = await housekeep(h.env, hkWorld(), unreadable);
   assert.deepEqual(chowns(h.calls), [], "an owner list that could not be read changes nothing");
   assert.deepEqual(out3.failed, [`the owners of the files in the factory's checkout ${h.checkout} could not be read: find: '/x': Input/output error`]);
 });
 
-test("ticket 08 (#157): housekeeping changes owners only inside a checkout in the factory user's home, only as root, and only for a factory user that is not root", async () => {
+test("ticket 08 (#157): housekeeping changes owners only inside a checkout in the factory user's home and only as root; a factory that runs as root gets its fetch checked; the stage step's STOP is given back like any other file", async () => {
   const f = checkoutFixture([".git/index"]);
   const look = async (env, deps = f.deps) => { f.calls.length = 0; await housekeep(env, hkWorld(), deps); return f.calls.filter(c => ["find", "chown"].includes(c[0]) || c.includes("fetch")); };
   for (const bad of ["/root/godspeed", f.home, `${f.home}/../other`, "relative/checkout", `${f.top}/origin.git`, "/", `${f.home}/a b`]) {
@@ -255,13 +280,18 @@ test("ticket 08 (#157): housekeeping changes owners only inside a checkout in th
   assert.ok(!f.calls.some(c => c[0] === "chown" || c[0] === "find"), "never looked at or changed through the link");
   assert.match(linked.failed[0], new RegExp(`^the factory's checkout ${escape(f.home)}/linked is reached through a link \\(it is .*godspeed-mission-control\\), so its owners were not checked$`));
   assert.deepEqual(await look(f.env, { ...f.deps, root: false }), [], "not root: it could not give anything back, and nothing of root's can be there");
-  assert.deepEqual(await look({ ...f.env, FORGE_USER: "root" }), [], "a factory that runs as root");
-  assert.deepEqual(chowns(await look({ ...f.env, PROJECT_CHECKOUTS: {}, FACTORY_CHECKOUT: f.checkout })), [["chown", "-R", "-P", "-h", "--", `${FORGE_USER}:`, f.checkout]], "the main checkout counts when only main.checkout names it");
-  // the stage step writes the factory's STOP as root on purpose and removes it itself: that one file is no repair
+  // a factory that runs as root (a server the Forge set up) owns its checkouts as root, and no file can stop root's fetch:
+  // nothing is given back there, but its fetch is checked like every other's
+  const asRoot = await look({ ...f.env, FORGE_USER: "root", FORGE_HOME: f.home, FORGE_NETNS: "" });
+  assert.deepEqual(asRoot.map(c => c[0] === "find" ? "find" : c.includes("fetch") ? "fetch" : c[0]), ["fetch"]);
+  assert.deepEqual(asRoot[0].slice(0, 4), ["runuser", "-u", "root", "--"]);
+  assert.deepEqual(chowns(await look({ ...f.env, PROJECT_CHECKOUTS: {}, FACTORY_CHECKOUT: f.checkout })), [giveBack(f.checkout)], "the main checkout counts when only main.checkout names it");
+  // the stage step writes the factory's STOP as root: it is given back and said like any other file of root's, never hidden
   const s = checkoutFixture();
   fs.mkdirSync(`${s.checkout}/.factory`); fs.writeFileSync(`${s.checkout}/.factory/STOP`, "auto-stage 4242 2026-11-24T13:00:00Z\n");
   s.owner.set(".factory", FORGE_USER); s.owner.set(".factory/STOP", "root");
   const staged = await housekeep(s.env, hkWorld(), s.deps);
-  assert.deepEqual([chowns(s.calls), staged.repairs, staged.done, staged.failed], [[], [], [], []]);
-  assert.equal(s.owner.get(".factory/STOP"), "root");
+  assert.deepEqual(chowns(s.calls), [giveBack(s.checkout)]);
+  assert.equal(s.owner.get(".factory/STOP"), FORGE_USER);
+  assert.deepEqual(staged.repairs.map(r => [r.files, r.sample]), [[1, [".factory/STOP"]]]);
 });

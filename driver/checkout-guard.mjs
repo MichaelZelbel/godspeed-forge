@@ -8,9 +8,10 @@
 // "Permission denied accessing repository", until a session gave the files back by hand on 2026-11-24.
 //
 // The locks on that door:
-//   - in the driver's own processes (a round, a step) git as root in a folder inside the factory user's home is refused unless
-//     it is wrapped (runuser -u <factory user> --): enforceCheckoutGuard() puts that check in front of child_process, the one
-//     runner every step's git goes through, and gitAs() / gitInDir() are the ways to run git there as the factory user;
+//   - in the driver's own processes (a round, a step) git as root in a folder inside the factory user's home, called directly or
+//     in a shell command line, is refused unless it is wrapped (runuser -u <factory user> --): enforceCheckoutGuard() puts that
+//     check in front of child_process, the one runner every step's git goes through, and gitAs() / gitInDir() are the ways to
+//     run git there as the factory user;
 //   - an acting run and a dead-man's repair run (an AI with a root shell) have the factory's checkouts read-only in their unit
 //     (onduty.mjs controlPlane, deadman.mjs launchRepair), and their briefs say where they work instead;
 //   - housekeeping gives every checkout back to the factory user each round and proves its `git fetch` works (housekeeping.mjs).
@@ -97,13 +98,41 @@ function unwrapEnv(cmd, args) {
   return { cmd: String(args[i] || ""), args: args.slice(i + 1), vars };
 }
 
+// A shell command line (bash -c, sh -c, shell: true, execSync): it runs git as root in the factory user's home when it calls git
+// and names a folder there or starts in one. A reading of the script, not a parse: a script that does both is refused, which only
+// ever makes a careful caller run it as the factory user.
+const GIT_WORD = /(^|[\s;&|(`'"])(\S*\/)?git(\s|$)/m;
+const PATHS = /(?:^|[\s'"=:(])(\/[^\s'"`;|&()<>:]*)/g;
+export function scriptRefusal(script, cwd, account) {
+  const s = String(script || "");
+  if (!GIT_WORD.test(s)) return "";
+  const hit = [...s.matchAll(PATHS)].map(m => P.normalize(m[1])).find(p => inside(p, account.home)) || (cwd && inside(abs("/", cwd), account.home) ? abs("/", cwd) : "");
+  if (!hit) return "";
+  return `refused: a shell command that runs git as root names ${hit}, which is inside the factory user's home (${account.home}); there git runs as ${account.user} (runuser -u ${account.user} --), never as root, so no file of the factory's becomes root's (${s.replace(/\s+/g, " ").slice(0, 120)})`;
+}
+const SHELL = /(^|\/)(ba|da|z|k)?sh$/;
+// The script of `bash -c <script>` (any flags joined with c, as -lc or -ec), or null.
+function shellScript(cmd, args) {
+  if (!SHELL.test(cmd)) return null;
+  for (let i = 0; i < args.length; i++) {
+    const a = String(args[i]);
+    if (/^-[a-z]*c[a-z]*$/.test(a)) return String(args[i + 1] || "");
+    if (!a.startsWith("-")) return null; // a script file: not read here
+  }
+  return null;
+}
+
 // The sentence that refuses a git command root would run in the factory user's home, or "" when it may run. `file`, `args`
 // and `opts` are what child_process gets. A command wrapped as another user (runuser -u <factory user> -- git ...) is not git
 // as root, so it passes.
 export function rootGitRefusal(file, args, opts = {}, { account = factoryAccount(), root = isRoot() } = {}) {
   if (!root || !guarded(account)) return "";
   const o = opts && typeof opts === "object" ? opts : {};
-  const u = unwrapEnv(String(file || ""), Array.isArray(args) ? args.map(String) : []);
+  const list = Array.isArray(args) ? args.map(String) : [];
+  if (o.shell) return scriptRefusal([file, ...list].join(" "), o.cwd, account);
+  const u = unwrapEnv(String(file || ""), list);
+  const script = shellScript(u.cmd, u.args);
+  if (script !== null) return scriptRefusal(script, o.cwd, account);
   if (!/(^|\/)git$/.test(u.cmd)) return "";
   const env = { ...(o.env || process.env), ...u.vars };
   const hit = gitFolders(u.args, o.cwd, env).find(d => inside(d, account.home));
@@ -129,24 +158,25 @@ export const refusedGit = [];
 let restore = null;
 // Puts rootGitRefusal in front of child_process for the whole process (a round, a step), the way readonly.mjs puts the dry run's
 // lock there. spawnSync answers a refused command the way it answers one that could not start (status null, error set), so a
-// caller that checks the answer fails closed and a round goes on; execFileSync, spawn and execFile throw. Only for root: for
-// anyone else it installs nothing. -> the function that takes it away again
+// caller that checks the answer fails closed and a round goes on; execFileSync, spawn, execFile, execSync and exec throw. Only
+// for root: for anyone else it installs nothing. -> the function that takes it away again
 export function enforceCheckoutGuard(account = factoryAccount(), { root = isRoot(), log = m => console.error(m) } = {}) {
   if (restore) restore();
   if (!root || !guarded(account)) { restore = null; return () => {}; }
   const saved = [];
+  const said = w => { if (w) { refusedGit.push(w); try { log(w); } catch { /* the refusal stands without its line */ } } return w; };
   const why = (file, args, opts) => {
     const list = Array.isArray(args) ? args : [];
     const o = Array.isArray(args) ? opts : args;
-    const w = rootGitRefusal(file, list, o || {}, { account, root });
-    if (w) { refusedGit.push(w); try { log(w); } catch { /* the refusal stands without its line */ } }
-    return w;
+    return said(rootGitRefusal(file, list, o && typeof o === "object" ? o : {}, { account, root }));
   };
-  const wrap = (name, refuse) => {
+  // execSync and exec take one shell command line and its options
+  const whyLine = (line, opts) => said(scriptRefusal(line, opts && typeof opts === "object" ? opts.cwd : undefined, account));
+  const wrap = (name, refuse, check = why) => {
     const orig = cp[name];
     if (typeof orig !== "function") return;
     saved.push([name, orig]);
-    cp[name] = function (...a) { const w = why(a[0], a[1], a[2]); return w ? refuse(w, a[1], a[2]) : orig.apply(this, a); };
+    cp[name] = function (...a) { const w = check(a[0], a[1], a[2]); return w ? refuse(w, a[1], a[2]) : orig.apply(this, a); };
   };
   const thrown = w => { const e = new Error(w); e.code = "EROOTGIT"; throw e; };
   wrap("spawnSync", (w, args, opts) => {
@@ -157,6 +187,7 @@ export function enforceCheckoutGuard(account = factoryAccount(), { root = isRoot
     return { pid: 0, output: [null, empty, text], stdout: empty, stderr: text, status: null, signal: null, error };
   });
   for (const n of ["execFileSync", "spawn", "execFile"]) wrap(n, thrown);
+  for (const n of ["execSync", "exec"]) wrap(n, thrown, whyLine);
   syncBuiltinESMExports();
   restore = () => { for (const [name, orig] of saved.reverse()) cp[name] = orig; syncBuiltinESMExports(); restore = null; };
   return restore;

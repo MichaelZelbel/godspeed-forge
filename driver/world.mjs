@@ -315,7 +315,8 @@ function readFactory(env, deps, project, primary, world, unreadable) {
   }
   if (runsCmd) { const runs = tryRun(deps, runsCmd, true, unreadable, `${part}/runs`); if (runs !== null) f.activeRuns = parseRuns(runs); }
   if (!primary) {
-    const url = tryRun(deps, `git config --file ${q(path.posix.join(checkout, ".git", "config"))} --get remote.origin.url`, false, unreadable, `${part}/repository`);
+    // read as the factory user: root's git never runs in the factory's checkout, not even to read (checkout-guard.mjs, issue #157)
+    const url = tryRun(deps, `git config --file ${q(path.posix.join(checkout, ".git", "config"))} --get remote.origin.url`, true, unreadable, `${part}/repository`);
     f.repo = repoOf(url);
   }
   if (primary) f.board = world.board.openNeedsOwner;
