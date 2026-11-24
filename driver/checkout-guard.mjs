@@ -93,11 +93,14 @@ const WRAPPERS = {
   nohup: {}, setsid: {},
   stdbuf: { value: ["-i", "-o", "-e", "--input", "--output", "--error"] },
   timeout: { value: ["-s", "--signal", "-k", "--kill-after"], words: 1 },
-  sudo: { value: ["-u", "--user", "-g", "--group", "-D", "--chdir", "-C", "--close-from", "-h", "--host", "-p", "--prompt", "-T", "--command-timeout"], chdir: ["-D", "--chdir"], user: ["-u", "--user"] },
+  sudo: { value: ["-u", "--user", "-g", "--group", "-D", "--chdir", "-C", "--close-from", "-h", "--host", "-p", "--prompt", "-T", "--command-timeout"], chdir: ["-D", "--chdir"], user: ["-u", "--user"],
+    noRun: ["-l", "--list", "-v", "--validate", "-K", "--remove-timestamp", "-e", "--edit", "-V"] },
   runuser: { value: ["-u", "--user", "-g", "--group", "-G", "--supp-group", "-w", "--whitelist-environment"], user: ["-u", "--user"] },
 };
 // `env -C dir X=1 nice -n 5 git ...` -> { cmd: "git", args, vars, cwd, as } with the folder it starts in and the user it runs as
-// ("" while still root). A wrapper that runs it as someone else ends the reading: that is no longer root's git.
+// ("" while still root). A wrapper that runs it as someone else ends the reading: that is no longer root's git. So does one asked
+// for something that runs no command (--help, --version, sudo -l): cmd "".
+const NO_RUN = ["--help", "--version"];
 function unwrap(cmd, args, cwd) {
   const vars = {};
   let as = "";
@@ -112,6 +115,7 @@ function unwrap(cmd, args, cwd) {
       const long = /^(--[a-z-]+)=(.*)$/s.exec(a), short = /^(-[a-zA-Z])(.+)$/s.exec(a);
       const [opt, val] = long ? [long[1], long[2]] : value.has(a) ? [a, String(args[++i] ?? "")] : short && value.has(short[1]) ? [short[1], short[2]] : [a, null];
       if (val !== null || a.startsWith("-")) {
+        if ([...NO_RUN, ...(w.noRun || [])].includes(opt)) return { cmd: "", args: [], vars, cwd, as };
         if ((w.chdir || []).includes(opt) && val !== null) cwd = abs(cwd || process.cwd(), val);
         if ((w.user || []).includes(opt) && val !== null) as = val;
         if ((w.split || []).includes(opt) && val !== null) next = val.trim().split(/\s+/);

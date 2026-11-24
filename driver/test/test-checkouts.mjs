@@ -49,6 +49,9 @@ test("issue #157: git as root in the factory user's home is refused however it n
     ["ip", ["netns", "exec", "godspeed-forge", "runuser", "-u", "godspeed-forge", "--", "git", "-C", CHECKOUT, "fetch"], {}],
     ["timeout", ["60", "sudo", "-u", "godspeed-forge", "git", "-C", CHECKOUT, "fetch"], {}], // as the factory user, through wrappers
     ["timeout", ["60", "git", "-C", "/var/lib/x", "fetch"], { cwd: CHECKOUT }], // -C takes it out of the home
+    ["sudo", ["-l", "git", "-C", CHECKOUT, "status"], {}], // asks what may run, runs nothing
+    ["env", ["--help", "git", "-C", CHECKOUT, "status"], {}],
+    ["nohup", ["--version", "git", "-C", CHECKOUT, "status"], {}],
     ["git", ["-C", "/usr/local/lib/godspeed-forge/godspeed-dev", "pull", "--ff-only"], {}], // the release records: root's own clone
     ["git", ["-C", "/var/lib/godspeed-keep-main-green/product.git", "fetch"], {}], // a step's own clone
     ["git", ["-C", "/var/lib/x", "push", "origin", "HEAD:refs/heads/fix/a-b", "https://github.com/o/r.git"], {}], // refs and addresses are no folders
