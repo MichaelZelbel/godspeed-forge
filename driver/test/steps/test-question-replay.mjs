@@ -40,9 +40,9 @@ fs.writeFileSync(path.join(qdir, "driver-questions.json"), JSON.stringify(dq));
 fs.copyFileSync(path.join(FIX, "mission-control-queue.json"), path.join(qdir, RETIRED_QUEUE));
 // the product's state from before: three questions told only through the notices file, no receipt
 const toldBefore = ["The empty Recent People card still shows a heart (look and feel)", "Raise or replace the scenarios' OpenRouter key (monthly limit reached)", "Fix the release step that opened a lower version (#726)"];
-fs.writeFileSync(path.join(qdir, "state.json"), JSON.stringify({ told: Object.fromEntries(toldBefore.map(h => [keyOf(h), { at: "2026-11-16T08:00:00.000Z", heading: h, notice: "factory-question-x", handle: "x", sent: "..." }])), tries: {}, last_message_id: 0 }));
+fs.writeFileSync(path.join(qdir, "state.json"), JSON.stringify({ told: Object.fromEntries(toldBefore.map((h, i) => [keyOf(h), { at: "2026-11-16T08:00:00.000Z", heading: h, notice: `factory-question-${i}`, handle: "x", sent: "..." }])), tries: {}, last_message_id: 0 }));
 fs.mkdirSync(path.join(tmp, "g", ".godspeed"), { recursive: true });
-fs.writeFileSync(path.join(tmp, "g", ".godspeed", "notices.json"), JSON.stringify({ notices: toldBefore.map((h, i) => ({ id: `factory-question-${i}`, text: h, at: "2026-11-16T08:00:00.000Z" })) }));
+fs.writeFileSync(path.join(tmp, "g", ".godspeed", "notices.json"), JSON.stringify({ notices: [...toldBefore.map((h, i) => ({ id: `factory-question-${i}`, text: h, at: "2026-11-16T08:00:00.000Z" })), { id: "notebook-backup-failed", text: "not ours" }] }));
 fs.writeFileSync(path.join(tmp, "messages.json"), "[]");
 
 // GitHub, Telegram, email and the urgent issue, in memory: what the step posts is what the accountant reads
@@ -108,13 +108,13 @@ testCase("one round: every question of the four projects is decided, delivered w
   globalThis.__replayTally = { tally, telegram: sent.tg.length, routed: routed.length };
 }
 
-testCase("the retired queue was handed over entry by entry and set aside; the old notices file was not written; Godspeed's 26 were read");
+testCase("the retired queue was handed over entry by entry and set aside; the old unreceipted notices were taken back; Godspeed's 26 were read");
 {
   assert.ok(!fs.existsSync(path.join(qdir, RETIRED_QUEUE)));
   const j = fs.readFileSync(path.join(tmp, "driver", "journal.jsonl"), "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
   assert.equal(j.filter(e => e.t === "handover").length, 14);
   assert.ok(j.filter(e => e.t === "decision").length >= 25, "every decision is in the driver's journal");
-  assert.equal(JSON.parse(fs.readFileSync(path.join(tmp, "g", ".godspeed", "notices.json"), "utf8")).notices.length, 3, "nothing more is put into the notices file");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tmp, "g", ".godspeed", "notices.json"), "utf8")).notices.map(n => n.id), ["notebook-backup-failed"], "the three old notices with no receipt are taken out, so the old route never asks again; nothing else changes and nothing is added");
   assert.equal(headingsOf(ownerIssues[P].body).length, 26);
   const st = loadState(path.join(qdir, "state.json"));
   assert.equal(Object.keys(st.decided).length + Object.values(st.told).filter(t => t.page).length + Object.keys(st.routed || {}).length >= 26, true);

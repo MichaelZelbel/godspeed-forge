@@ -216,6 +216,8 @@ function toMichael(env, obstacle, targets, why, text, report, deps, out, now) {
 
 async function postDecision(env, obstacle, text, report, deps, out, now, flagged = "") {
   let targets = [...new Set([obstacle.issue, obstacle.pr].filter(n => Number.isInteger(n) && n > 0))];
+  // a factory question's decision goes on every item it names (the questions step counts it as decided only then)
+  if (obstacle.kind === "question" && obstacle.question) targets = [...new Set([...targets, ...(obstacle.question.items || []).filter(n => Number.isInteger(n) && n > 0)])];
   // an idle factory has no item of its own: the decision goes on the one parked board item the helper
   // named, and only when that item is on the board the round read (never anywhere else)
   if (!targets.length && Array.isArray(obstacle.board)) {

@@ -71,10 +71,14 @@ export function parseRecommendation(body) {
 const UNDOABLE = /\b(keep|kept|leave|left as|as it is|as is|unchanged|wait|for now|until|do nothing|nothing changes|no change|stays?|later|follow-up|optional)\b/gi;
 const FINAL = /\b(delete|deleted|remove|removes|drop|close|closes|replace|retire|migrate|rewrite|permanent(?:ly)?|for good|cannot)\b/gi;
 const score = t => (String(t).match(UNDOABLE) || []).length - 2 * (String(t).match(FINAL) || []).length;
-const MISSION = /\bmission\b/i;
+// what the project is: its mission, its purpose, who it is for. An option that changes one of these is never taken for
+// him; the option that keeps it is.
+const MISSION = /\b(?:mission|purpose|target (?:audience|group|users)|(?:new|different|another|other) (?:audience|kind of users|market)|who (?:it|the (?:product|app|project)) is for|what the (?:product|app|project) is)\b/i;
+const CHANGES = /\b(?:amend|amends|amendment|change|changes|changing|new|different|another|widen|widens|narrow|narrows|redefine|redefines|replace|replaces|pivot|serve|serves)\b/i;
 
 // The option Mission Control takes for a question the owner is not asked.
-// -> {how: "recommended" | "keeps the mission" | "most reversible", label, option, text, recommendation} | null (nothing to pick from)
+// -> {how: "recommended" | "keeps the mission" | "most reversible", label, option, text, recommendation} | null (nothing to pick
+// from, or only options that change the mission)
 export function pickOption(q) {
   const body = String(q.body || "");
   const options = parseOptions(body);
@@ -84,9 +88,10 @@ export function pickOption(q) {
     const opt = rec.label ? byLabel(rec.label) : null;
     const said = opt ? opt.text : rec.text;
     // a mission change is never taken for him: the option that keeps the mission as it is
-    if (MISSION.test(said) && /\b(amend|amendment|change|changes|new)\b/i.test(said)) {
-      const keep = options.filter(o => !MISSION.test(o.text)).sort((a, b) => score(b.text) - score(a.text))[0];
+    if (MISSION.test(said) && CHANGES.test(said)) {
+      const keep = options.filter(o => !(MISSION.test(o.text) && CHANGES.test(o.text))).sort((a, b) => score(b.text) - score(a.text))[0];
       if (keep) return { how: "keeps the mission", label: keep.label, option: keep, text: keep.text, recommendation: rec.text, options };
+      return null; // no option keeps it: nothing is taken by rule, the driver's decide helper settles it
     }
     return { how: "recommended", label: opt ? opt.label : null, option: opt || null, text: said, recommendation: rec.text, options, labelUnresolved: !!(rec.label && !opt) };
   }

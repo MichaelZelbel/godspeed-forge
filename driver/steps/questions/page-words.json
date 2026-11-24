@@ -1,24 +1,26 @@
 {
-  "_about": "The only questions from the factory that stop anything and page the owner (2026-11-24, the owner's standing instruction: 'only do this for life-or-death questions'). A question pages only when the action Mission Control would take for it (the manager's recommendation, or with none the most reversible option) matches a pattern below. Everything else (scope, mission, look and feel, product behaviour, wording, privacy-facing behaviour, tests, checks, laps) is decided by Mission Control at once. Patterns are JavaScript regular expressions, matched case-insensitively. Publishing legal or privacy text is already behind the owner's release go, so wording is not here.",
+  "_about": "The only questions from the factory that stop anything and page the owner (2026-11-24, the owner's standing instruction: 'only do this for life-or-death questions'). A question pages only when the action Mission Control would take for it (the manager's recommendation, or with none the most reversible option; with nothing to pick from, the question itself) matches a pattern below that no negation just before it ('do not', 'never', 'without', 'instead of', ...) turns around. Everything else (scope, mission, look and feel, product behaviour, wording, privacy-facing behaviour, tests, checks, laps) is decided by Mission Control at once. Patterns are JavaScript regular expressions, matched case-insensitively. Publishing legal or privacy text is already behind the owner's release go, so wording is not here.",
   "money": {
     "why": "it would spend money or raise a spending limit, subscription or paid plan",
     "patterns": [
-      "\\bspend(?:s|ing)?\\b",
-      "\\bpay(?:s|ing|ment|ments)?\\b",
-      "\\bpaid (?:plan|tier|account|version|service|subscription)",
-      "\\bpurchas",
-      "\\bbuy(?:s|ing)?\\b",
-      "\\bbilling\\b",
-      "\\binvoice",
-      "\\bsubscri(?:be|bes|bing|ption|ptions)\\b",
-      "\\b(?:monthly|spend(?:ing)?|key|credit|usage|account|budget)(?:'s)? (?:monthly )?limit",
-      "\\braise (?:the |its |a )?(?:\\w+ )?(?:limit|budget|quota|plan|tier)",
-      "\\b(?:upgrade|raise) (?:the |our |to a )?(?:paid |bigger |higher )?(?:plan|tier)\\b",
+      "\\bspend(?:s|ing)? (?:money|more|\\$|€|£|\\d|on )",
+      "\\bpay (?:for|\\$|€|£|\\d|more|the (?:invoice|bill|fee))",
+      "\\bpayment of\\b",
+      "\\bpaid (?:plan|tier|account|version|service|subscription|add-on|seat)",
+      "\\bpurchas(?:e|es|ing) (?:a|an|the|more|extra|another|credits?|seats?|licen[cs]es?)\\b",
+      "\\bbuy(?:s|ing)? (?:a|an|the|more|extra|another|credits?|seats?|licen[cs]es?|tokens?)\\b",
+      "\\b(?:start|take out|upgrade|renew|raise|add|buy) (?:a |the |our |its |another )?(?:paid |new |bigger )?subscriptions?\\b",
+      "\\bsubscribe to\\b",
+      "\\bbilling (?:plan|account|tier|limit|cap)\\b",
+      "\\binvoice\\b",
+      "\\b(?:monthly|spend(?:ing)?|key|credit|usage|account|budget|billing|rate)(?:'s)? (?:monthly )?(?:limit|cap|quota)\\b",
+      "\\b(?:raise|increase|lift|bump|double|extend) (?:the |our |its |a |his |her |their )?(?:\\w+(?:'s)? ){0,2}(?:limit|cap|budget|quota|allowance)\\b",
+      "\\b(?:upgrade|raise|move) (?:the |our |its )?(?:\\w+ )?(?:plan|tier) to\\b",
+      "\\bupgrade (?:to )?(?:the |a )?(?:paid|pro|team|business|bigger|higher) (?:plan|tier)\\b",
       "\\btop(?:-| )?up\\b",
-      "\\bbuy (?:more )?credits\\b",
       "\\bmoney\\b",
       "[$€£]\\s?\\d",
-      "\\d\\s?(?:usd|eur|dollars?|euros?)\\b"
+      "\\d\\s?(?:usd|eur|gbp|dollars?|euros?)\\b"
     ]
   },
   "publish": {
@@ -35,7 +37,9 @@
       "\\bnewsletter\\b",
       "\\bpress release\\b",
       "\\bsocial media\\b",
-      "\\b(?:email|e-mail|mail|message|notify|write to|text) (?:all |the |our |every |each )?(?:users|customers|subscribers|members|clients|mailing list|list)\\b",
+      "\\b(?:email|e-mail|mail|message|notify|write to|text|contact) (?:all |the |our |every |each |existing )?(?:users|customers|subscribers|members|clients|mailing list|list|people on)\\b",
+      "\\bsend (?:\\w+ ){0,3}to (?:all |the |our |every |each |existing )?(?:users|customers|subscribers|members|clients|mailing list|people)\\b",
+      "\\binvit(?:e|es|ing|ations?) (?:\\w+ ){0,2}(?:users|customers|people|members|clients|testers|subscribers)\\b",
       "\\bdeploy(?:s|ed|ing)? (?:it |this )?(?:to|on) (?:production|the public|the live)",
       "\\b(?:app|play) store\\b",
       "\\bsubmit (?:it |this )?(?:to|for) (?:review|the store|app review)"
@@ -50,7 +54,8 @@
       "\\berase\\b",
       "\\bwipe\\b",
       "\\bpurge\\b",
-      "\\bdelete (?:all|every|the|old|inactive|existing) (?:people's |users'? |persons'? )?(?:data|accounts|records|users|profiles|notes|messages|chats|backups)\\b",
+      "\\b(?:delete|remove|drop) (?:all |every |the |old |inactive |existing |their |its )?(?:\\w+ )?(?:people's|users'?|user|customers'?|customer|members'?|member|persons'?|person's) (?:data|accounts?|records|profiles|notes|messages|chats|history|files)\\b",
+      "\\b(?:delete|remove) (?:all|every|the|old|inactive|existing) (?:data|accounts|records|users|profiles|notes|messages|chats|backups)\\b",
       "\\bdrop (?:the )?(?:table|database|tables)\\b"
     ]
   }

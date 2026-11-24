@@ -414,7 +414,7 @@ testCase("no code path writes the retired queue file (only the drain sets it asi
     lines.forEach((l, i) => { if (/mission-control-queue|RETIRED_QUEUE/.test(l)) assert.ok(!/write|append|copyFile/.test(l), `${path.relative(root, f)}:${i + 1} writes the retired queue: ${l.trim()}`); });
   }
   const src = fs.readFileSync(path.join(root, "steps", "questions", "factory-owner-questions.mjs"), "utf8");
-  assert.ok(!/writeMissionControlQueue|Factory questions for Mission Control\.md|notices\.json/.test(src.replace(/\/\/.*$/gm, "")), "no queue and no notice file is written by the questions step");
+  assert.ok(!/writeMissionControlQueue|Factory questions for Mission Control\.md|queueNotice/.test(src.replace(/\/\/.*$/gm, "")), "no queue is written and no notice is queued by the questions step");
 }
 
 testCase("state from before 2026-11-24: questions told only through the notices file (no receipt) and those routed to the queue are looked at again; answered ones stay");

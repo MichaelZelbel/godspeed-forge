@@ -6,7 +6,7 @@ import { testCase } from "../../../test/cases.mjs";
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
 import * as check from "../../steps/question-check.mjs";
 import { headingsOf, names, deliveredKeys, account, alarmText } from "../../steps/questions/accountant.mjs";
-import { keyOf, idOf, decisionMarker, markerOf } from "../../steps/questions/factory-owner-questions.mjs";
+import { keyOf, idOf, decisionMarker, markerOf, parseQuestions } from "../../steps/questions/factory-owner-questions.mjs";
 import { questionCounts, decisionLines, NEW_OWNER_OFF } from "../../cli.mjs";
 import { stepEntries } from "../../steps.mjs";
 import { readJournal, view } from "../../journal.mjs";
@@ -16,7 +16,9 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "qcheck-"));
 
 testCase("the accountant reads every ### heading itself and names each question's state");
 {
-  assert.deepEqual(headingsOf("x\n### 7. Dark mode (#5)\na\n### The card\nb\n### The card\n").map(q => [q.title, q.items]), [["Dark mode (#5)", [5]], ["The card", []]]);
+  assert.deepEqual(headingsOf("x\n### 7. Dark mode (#5)\na\n### The card\nb\n### The card\n").map(q => [q.title, q.items]), [["Dark mode (#5)", [5]], ["The card", []], ["The card", []]]);
+  assert.deepEqual(headingsOf("### Should it sync? (#12)\n### Should it sync? (#13)").map(q => q.key), ["should it sync", "should it sync items 13"], "two questions that differ only in their numbers are two, with the keys the questions step gives them");
+  assert.deepEqual(headingsOf("### Should it sync? (#12)\n### Should it sync? (#13)").map(q => q.key), parseQuestions("### Should it sync? (#12)\nx\n### Should it sync? (#13)\ny").map(q => q.key));
   const k = keyOf("The card");
   assert.ok(names(`Manager decision (Mission Control, on Alex's standing instruction of 2026-11-24) on the question "The card": option (b).\n${decisionMarker(k)}`, k));
   assert.ok(names(`Owner decision (question 3: The card)\n\n> yes\n${markerOf(9, k)}`, k));

@@ -63,6 +63,8 @@ export async function sendMail(env, { subject, text, idem }, doFetch = fetch) {
     return j && j.message_id ? { ok: true, receipt: String(j.message_id), thread: j.thread_id ? String(j.thread_id) : undefined } : { ok: false, why: `email http ${r.status}` };
   } catch (e) { return { ok: false, why: `email not reached: ${String(e.message).slice(0, 80)}` }; }
 }
+// "Name <a@b.c>" or "a@b.c" -> "a@b.c" (exactly his address counts, never one that only contains it)
+export const addressOf = from => { const t = String(Array.isArray(from) ? from[0] : from || "").trim(); const m = /<([^<>\s]+@[^<>\s]+)>\s*$/.exec(t); return (m ? m[1] : t).trim().toLowerCase(); };
 // His replies to a page's email: received mail from his address whose subject carries the page's reference.
 // -> [{id, at, subject, text}] | null (unreadable: nothing is concluded)
 export async function mailReplies(env, after, doFetch = fetch) {
@@ -73,7 +75,7 @@ export async function mailReplies(env, after, doFetch = fetch) {
   try {
     const list = await get(`${base}?labels=received&limit=50&after=${encodeURIComponent(new Date(after).toISOString())}`);
     const out = [];
-    for (const m of (list.messages || []).filter(m => String(m.from || "").toLowerCase().includes(String(env.OWNER_EMAIL).toLowerCase()) && /\[q:[0-9a-f]{10}\]/.test(String(m.subject || "")))) {
+    for (const m of (list.messages || []).filter(m => addressOf(m.from) === String(env.OWNER_EMAIL).trim().toLowerCase() && /\[q:[0-9a-f]{10}\]/.test(String(m.subject || "")))) {
       const full = await get(`${base}/${encodeURIComponent(m.message_id)}`);
       out.push({ id: String(m.message_id), at: Date.parse(m.timestamp || full.timestamp || 0) || after, subject: String(m.subject || ""), text: String(full.extracted_text || full.text || m.preview || "") });
     }
@@ -89,6 +91,18 @@ const rootGh = (args, input) => {
 export function openUrgent(env, { title, body }, gh = rootGh) {
   if (!env.URGENT_REPO || !env.URGENT_LABEL) return { ok: false, off: true, why: "no urgent repository on this server" };
   try { gh(["api", "-X", "POST", `repos/${env.URGENT_REPO}/labels`, "--input", "-"], JSON.stringify({ name: env.URGENT_LABEL, color: "B60205", description: "A question only the owner can answer; closes itself when answered" })); } catch { /* it exists already */ }
+  // one urgent issue per page: an issue opened before whose answer was lost is found by the page's marker, not opened again
+  const marker = (/<!-- factory-question:[\w-]+ -->/.exec(String(body)) || [])[0];
+  if (marker) {
+    try {
+      for (let p = 1; p <= 5; p++) {
+        const rows = gh(["api", `repos/${env.URGENT_REPO}/issues?state=open&labels=${encodeURIComponent(env.URGENT_LABEL)}&per_page=100&page=${p}`]) || [];
+        const hit = rows.find(i => !i.pull_request && String(i.body || "").includes(marker));
+        if (hit) return { ok: true, receipt: String(hit.html_url || `https://github.com/${env.URGENT_REPO}/issues/${hit.number}`), number: hit.number };
+        if (rows.length < 100) break;
+      }
+    } catch (e) { return { ok: false, why: `issue: ${e.message}` }; } // unreadable: never a second issue on a guess
+  }
   try {
     const r = gh(["api", "-X", "POST", `repos/${env.URGENT_REPO}/issues`, "--input", "-"], JSON.stringify({ title, body, labels: [env.URGENT_LABEL] }));
     return r && r.number ? { ok: true, receipt: String(r.html_url || `https://github.com/${env.URGENT_REPO}/issues/${r.number}`), number: r.number } : { ok: false, why: "the issue was not opened" };

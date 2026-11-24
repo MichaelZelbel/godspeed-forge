@@ -10,7 +10,7 @@
 //   nobody     none of these: a driver obstacle "factory question reached nobody", and after ALARM_MIN minutes one
 //              fixed message to the owner per question, never repeated
 import crypto from "node:crypto";
-import { keyOf, idOf } from "./factory-owner-questions.mjs";
+import { keyOf, idOf, numberAndKey } from "./factory-owner-questions.mjs";
 import { itemsOf } from "./choices.mjs";
 import { receipts } from "./pager.mjs";
 
@@ -18,19 +18,16 @@ export const YOUNG_MIN = 60;
 export const ALARM_MIN = 120;
 const MIN = 60000;
 
-// every "### " heading, numbered or not -> [{title, key, items}]
+// every "### " heading, numbered or not -> [{title, key, items}] (keys as the questions step gives them, numberAndKey)
 export function headingsOf(body) {
-  const out = [], seen = new Set();
+  const out = [];
   for (const line of String(body || "").replace(/\r/g, "").split("\n")) {
     const m = /^###\s+(.+?)\s*$/.exec(line);
     if (!m) continue;
-    const title = m[1].replace(/^\d+\.\s+/, "");
-    const key = keyOf(title);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push({ title, key, items: itemsOf(title) });
+    const n = /^(\d+)\.\s+(.+)$/.exec(m[1]);
+    out.push({ number: n ? Number(n[1]) : null, heading: n ? n[2] : m[1] });
   }
-  return out;
+  return numberAndKey(out).map(q => ({ title: q.heading, key: q.key, items: itemsOf(q.heading) }));
 }
 
 const HEAD = /^[\s#>*_`~]*(?:manager decision \(mission control|owner decision)\b/i;

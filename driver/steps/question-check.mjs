@@ -16,6 +16,7 @@ import { appendEvents } from "../journal.mjs";
 export const STEP = { name: "question-check", everyMinutes: 5, maxMinutes: 5, inRound: true };
 export const SETTINGS = [];
 const MIN = 60000;
+export const RECHECK_MIN = 60;
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
 function writeJson(f, data) { fs.mkdirSync(path.dirname(f), { recursive: true }); const t = `${f}.${process.pid}.tmp`; fs.writeFileSync(t, JSON.stringify(data, null, 2) + "\n"); fs.renameSync(t, f); }
 const slug = repo => String(repo).toLowerCase().replace("/", "__");
@@ -64,7 +65,8 @@ export async function run(ctx) {
     let qs = {}; try { qs = loadState(stateFileOf(env, p)); } catch { qs = {}; }
     const delivered = deliveredKeys(qs);
     const fs0 = Object.fromEntries(Object.entries(st.firstSeen).filter(([k]) => k.startsWith(`${repo}\n`)).map(([k, v]) => [k.slice(repo.length + 1), v]));
-    const decided = new Set(questions.filter(q => st.decided[`${repo}\n${q.key}`]).map(q => q.key));
+    // a decision seen on GitHub is believed for an hour, then looked for again (a deleted decision is no decision)
+    const decided = new Set(questions.filter(q => { const at = Date.parse(st.decided[`${repo}\n${q.key}`] || ""); return Number.isFinite(at) && now - at < RECHECK_MIN * MIN; }).map(q => q.key));
     // only a question that would otherwise count as reaching nobody costs a look at the comments
     const open = questions.filter(q => !decided.has(q.key) && !delivered.has(q.key) && now - (fs0[q.key] || now) >= 60 * MIN);
     if (open.length) {

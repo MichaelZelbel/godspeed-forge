@@ -11,6 +11,7 @@
 // The step reports a halt on every run while it holds; it ends when the condition does.
 import path from "node:path";
 import { run as askRun, genericProject } from "./questions/factory-owner-questions.mjs";
+import { readEnvFile } from "../facts.mjs";
 
 export const STEP = { name: "questions", everyMinutes: 5, maxMinutes: 15, inRound: false };
 export const SETTINGS = [
@@ -62,6 +63,10 @@ export function envFor(ctx) {
     MAIL_API: get(s, "notices.email.api") || "",
     KEYS_FILE: get(s, "keys.env_file") || (ctx.settingsDir ? path.posix.join(ctx.settingsDir, "keys.env") : ""),
     TG_ENV: get(s, "notices.telegram_env_file") || "",
+    // his replies count only from his own Telegram account: the settings' ids, else the chat bot's allowed users
+    OWNER_TELEGRAM_IDS: (Array.isArray(get(s, "owner.telegram_user_ids")) && get(s, "owner.telegram_user_ids").length ? get(s, "owner.telegram_user_ids")
+      : String(readEnvFile(get(s, "notices.telegram_env_file") || "").TELEGRAM_ALLOWED_USERS || "").split(",")).map(x => String(x).trim()).filter(Boolean),
+    NOTICES_FILE: get(s, "notices.godspeed_notices_file") || path.posix.join(godspeedDir, ".godspeed", "notices.json"),
     TG_MACHINE_ENV: get(s, "notices.telegram_machine_env_file") || "",
     URGENT_REPO: get(s, "steps.questions.urgent_repo") || get(s, "notices.watch_issues_repo") || get(s, "notices.watch_repo") || "",
     URGENT_LABEL: get(s, "steps.questions.urgent_label") || urgentLabelFor(get(s, "owner.name")),
