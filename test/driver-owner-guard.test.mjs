@@ -16,7 +16,7 @@ import {
   findingOf, findingMarker, findingsIn, stateText, commentOf, findingWhy, ownerWhy, tokenIdentity, decide, prepareAppRun, appVars,
   mintAppToken, runRepos, asOwnerObstacles, readGuardLog, GUARD_FILE, AS_OWNER_MINUTES,
 } from '../driver/owner-guard.mjs';
-import { prompt, launchAct, actResult, runJob, sandboxProps, actDefaults, noticeId, queueNotice, sameFindingAgain } from '../driver/onduty.mjs';
+import { prompt, launchAct, actResult, runJob, sandboxProps, actDefaults, noticeHeld, sameFindingAgain } from '../driver/onduty.mjs';
 import { advance, buildInventory, KNOWN_OBSTACLES } from '../driver/inventory.mjs';
 import { nextStep } from '../driver/ladder.mjs';
 import { obstacleId } from '../driver/obstacles.mjs';
@@ -68,6 +68,12 @@ testCase('a note is read from every way gh posts one; other calls are not notes'
   assert.equal(commentOf(['api', 'graphql', '-f', 'query={ viewer { login } }'], d), null, 'a read is not a note');
   assert.equal(commentOf(['api', `repos/${REPO}/issues/895/comments`], d), null, 'reading comments is not a note');
   for (const a of [['pr', 'view', '895'], ['pr', 'merge', '895', '--squash'], ['workflow', 'run', 'x.yml']]) assert.equal(commentOf(a, d), null, a.join(' '));
+  // taking a note away or rewriting it would let the same finding be posted again: those are refused as edits
+  for (const a of [['pr', 'comment', '895', '--delete-last', '--yes'], ['issue', 'comment', '12', '--edit-last', '--body', 'x'], ['api', '-X', 'DELETE', `repos/${REPO}/issues/comments/5`],
+    ['api', '-X', 'PATCH', `repos/${REPO}/issues/comments/5`, '-f', 'body=x'], ['api', '-X', 'PUT', `repos/${REPO}/pulls/895/reviews/7/dismissals`, '-f', 'message=x']]) assert.equal(commentOf(a, d).edit, true, a.join(' '));
+  assert.ok(commentOf(['api', 'graphql', '-f', 'query=mutation { deleteIssueComment(input: {id: "x"}) { clientMutationId } }'], d).graphql);
+  assert.ok(commentOf(['api', 'graphql', '-f', 'query=mutation { minimizeComment(input: {subjectId: "x", classifier: OUTDATED}) { clientMutationId } }'], d).graphql);
+  assert.equal(commentOf(['api', '-X', 'POST', `repos/${REPO}/issues/comments/5/reactions`, '-f', 'content=+1'], d), null, 'a reaction is no note');
 }
 
 testCase('a note without the run\'s finding line, or with another, is refused; one whose finding is on the item already is refused as unchanged');
@@ -81,8 +87,16 @@ testCase('a note without the run\'s finding line, or with another, is refused; o
   assert.match(findingWhy(c(`x\n${findingMarker('0123456789 0123456789ab')}`), { finding: f }, none).why, /its own finding line and no other/);
   assert.match(findingWhy({ ...c(null) }, { finding: f }, none).why, /not on stdin/);
   assert.match(findingWhy({ repo: null, number: 895, body: `x ${mark}` }, { finding: f }, none).why, /-R <owner\/repo>/);
-  const there = findingWhy(c(`said again\n${mark}`), { finding: f }, () => ['an older note', `said first\n${mark}`]);
-  assert.equal(there.unchanged, true); assert.match(there.why, /^unchanged: this finding is already on MichaelZelbel\/godspeed-mission-control#895/);
+  const said = [{ event: 'commented', at: '2026-11-24T05:02:23Z', body: 'an older note' }, { event: 'commented', at: '2026-11-24T05:03:00Z', body: `said first\n${mark}` }];
+  const quiet = [...said, { event: 'commented', at: '2026-11-24T05:07:19Z', body: `another run's note ${findingMarker('0123456789 0123456789ab')}` }, { event: 'subscribed', at: '2026-11-24T05:08:00Z', body: '' }];
+  const there = findingWhy(c(`said again\n${mark}`), { finding: f }, () => quiet);
+  assert.equal(there.unchanged, true); assert.match(there.why, /^unchanged: this finding is already on MichaelZelbel\/godspeed-mission-control#895, and nothing has happened there since/);
+  const at = '2026-11-24T05:30:00Z';
+  for (const [what, e] of [['a commit', { event: 'committed', at }], ['the head arriving (an older commit pushed late)', { event: 'head-arrived', at }], ['a person\'s comment', { event: 'commented', at, body: 'Owner decision: one more lap' }],
+    ['a label', { event: 'unlabeled', at }], ['a review', { event: 'reviewed', at, body: '' }], ['a close', { event: 'closed', at }]])
+    assert.deepEqual(findingWhy(c(`said again\n${mark}`), { finding: f }, () => [...said, e]), { why: '' }, `${what} after the note: a new state, a new note`);
+  assert.match(findingWhy({ repo: REPO, number: 895, body: null, edit: true }, { finding: f }, none).why, /never edited, deleted or hidden/);
+  assert.match(findingWhy(c(`x ${mark}`), { finding: f }, () => { throw new Error('HTTP 502'); }).why, /could not be read \(HTTP 502\); try again/);
   assert.deepEqual(findingWhy(c('anything'), { finding: '' }, none), { why: '' }, 'no finding: no check');
   assert.match(findingWhy({ graphql: true, body: 'x' }, { finding: f }, none).why, /gh issue comment or gh pr comment/);
 }
@@ -150,17 +164,34 @@ testCase('a helper run with the owner\'s login stored in the default gh config c
   assert.equal(readGuardLog(path.join(dir, 'guard.log')).at(-1).unchanged, true);
 }
 
-testCase('git: a push with the owner\'s stored login is refused before it leaves; other git commands are not asked about');
+testCase('git: a push goes out only over https and never with the owner\'s login; where it goes is read the way git reads it');
 {
   const root = tmp('git');
   const gh = fakeGitHub(root);
   const gcfg = path.join(root, 'gitconfig');
   fs.writeFileSync(gcfg, `[credential]\n\thelper =\n[credential "https://github.com"]\n\thelper =\n\thelper = "!f() { echo username=${OWNER}; echo password=${STORED_OWNER_TOKEN}; }; f"\n`);
   const env = cleanEnv({ GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: gcfg });
-  const cfg = { owner: OWNER, realGit, realGh: gh.realGh };
-  assert.match(decide('git', ['push', 'origin', 'fix'], cfg, { env, cwd: root }).why, /owner's own GitHub account/);
-  assert.equal(decide('git', ['push', 'origin', 'fix'], cfg, { env: { ...env, ...appVars({ ghDir: path.join(root, 'gh'), token: APP_TOKEN, realGh: gh.realGh }) }, cwd: root }).why, '', 'the run\'s own environment: the App token');
-  assert.equal(decide('git', ['status'], cfg, { env, cwd: root }).why, '');
+  const repo = path.join(root, 'repo');
+  fs.mkdirSync(repo);
+  const git = (...args) => { const r = spawnSync(realGit, args, { cwd: repo, encoding: 'utf8', env }); assert.equal(r.status, 0, r.stderr); };
+  git('init', '-q'); git('remote', 'add', 'origin', `https://github.com/${REPO}.git`); git('remote', 'add', 'ssh', `git@github.com:${REPO}.git`);
+  const app = { ...env, ...appVars({ ghDir: path.join(root, 'gh'), token: APP_TOKEN, realGh: gh.realGh }) };
+  const d = (args, e = app) => decide('git', args, { owner: OWNER, realGit, realGh: gh.realGh }, { env: e, cwd: repo }).why;
+  assert.match(d(['push', 'origin', 'fix'], env), /owner's own GitHub account/, 'root\'s stored helper hands out the owner\'s login');
+  assert.equal(d(['push', 'origin', 'fix']), '', 'the run\'s own environment: the App token');
+  assert.equal(d(['push']), '', 'no remote named: origin');
+  assert.match(d(['push', 'ssh', 'fix']), /pushes only over https/, 'an ssh remote');
+  assert.match(d(['push', `git@github.com:${REPO}.git`, 'fix']), /pushes only over https.*git@github\.com/, 'an ssh address');
+  assert.match(d(['push', `ssh://git@github.com/${REPO}.git`, 'fix']), /pushes only over https/);
+  assert.match(d(['push', `https://x:${STORED_OWNER_TOKEN}@github.com/${REPO}.git`, 'fix']), /owner's own GitHub account/, 'a login written into the address');
+  git('config', 'remote.pushDefault', 'ssh');
+  assert.match(d(['push']), /pushes only over https/, 'the push default, read as git reads it');
+  git('config', '--unset', 'remote.pushDefault');
+  git('config', 'url.git@github.com:.pushInsteadOf', 'https://github.com/');
+  assert.match(d(['push', 'origin', 'fix']), /pushes only over https/, 'a remote rewritten to ssh');
+  assert.match(d(['push', `https://github.com/${REPO}.git`, 'fix']), /pushes only over https/, 'an address rewritten to ssh');
+  assert.equal(d(['push', '../elsewhere', 'fix']), '', 'a folder on this machine');
+  assert.equal(d(['status'], env), '', 'nothing else is asked about');
 }
 
 testCase('the acting run: its unit cannot read root\'s gh folder, its job and brief carry the App token\'s repositories and the finding, never the owner\'s login');
@@ -215,12 +246,10 @@ testCase('a run whose note was refused as unchanged answers "unchanged"; the nex
   assert.match(again, /spending money .*publishing .*sending anything to anyone but the owner.*deleting people's data/);
   assert.equal(sameFindingAgain([{ result: 'unresolved' }], a), '');
   assert.match(prompt(prEntry('x'), [{ at: 't', provider: 'codex', result: 'notice', summary: 's' }], '/x/onduty.mjs', a), /say it is the owner's step\.\n\nTHE SAME FINDING AGAIN/);
-  const f = findingOf(prEntry('x'));
-  assert.equal(noticeId('pr-895', f), `on-call-finding-${f.replace(' ', '-')}`);
-  assert.equal(noticeId('pr-895', ''), 'on-call-pr-895');
-  const nf = path.join(dir, 'notices.json');
-  assert.ok(queueNotice(nf, noticeId('one-id', f), 'One sentence.'));
-  assert.ok(!queueNotice(nf, noticeId('another-id', f), 'The same, worded otherwise.'), 'a second run on the same state is told "already queued"');
+  assert.match(noticeHeld(path.join(dir, unit)), /^unchanged: .*nothing queued/, 'a run whose note was unchanged tells the owner nothing new');
+  const fresh = path.join(dir, 'factory-act-abc-3'); fs.mkdirSync(fresh);
+  assert.equal(noticeHeld(fresh), '', 'a run with something new queues its notice as before');
+  assert.equal(noticeHeld(''), '');
 }
 
 testCase('the chain: a backlog entry whose rung 1 run told the owner climbs to rung 2 and is never started on rung 1 again; after rung 2 it rests a day');

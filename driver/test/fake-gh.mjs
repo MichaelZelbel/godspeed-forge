@@ -56,7 +56,15 @@ if (group === "api") {
     const per = Number(m[3]), page = Number(m[4]);
     out(JSON.stringify(all.slice((page - 1) * per, page * per)));
   }
-  if (/^repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews\?/.test(ep)) out("[]");
+  // the timeline: the comments, and whatever else happened (state.events["owner/repo#n"]: [{event, created_at, ...}])
+  if ((m = /^repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/timeline\?per_page=(\d+)&page=(\d+)$/.exec(ep))) {
+    const key = `${m[1]}#${m[2]}`;
+    const all = [...((s.comments || {})[key] || []).map(c => ({ event: "commented", created_at: c.created_at, body: c.body, user: c.user })), ...((s.events || {})[key] || [])];
+    const per = Number(m[3]), page = Number(m[4]);
+    out(JSON.stringify(all.slice((page - 1) * per, page * per)));
+  }
+  if ((m = /^repos\/([^/]+\/[^/]+)\/pulls\/(\d+)$/.exec(ep))) { const p = (s.pulls || {})[`${m[1]}#${m[2]}`]; if (!p) fail("HTTP 404: Not Found"); out(JSON.stringify(p)); }
+  if ((m = /^repos\/[^/]+\/[^/]+\/commits\/(\w+)\/check-suites\?/.exec(ep))) out(JSON.stringify({ check_suites: (s.suites || {})[m[1]] || [] }));
   out("{}");
 }
 if (group === "repo" && sub === "view") out(`${s.repo}\n`);

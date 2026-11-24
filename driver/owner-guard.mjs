@@ -79,11 +79,59 @@ export function ghIdentity({ env = process.env, realGh = "/usr/bin/gh", cache = 
   const r = run(realGh, ["auth", "token"], { env, cwd });
   return tokenIdentity(r.status === 0 ? r.stdout.trim() : "", { env, realGh, cache });
 }
-// The login a git push made with `env` would use: the password git's credential helpers hand out for github.com.
-export function gitIdentity({ env = process.env, realGit = "/usr/bin/git", realGh = "/usr/bin/gh", pre = [], cwd, cache = "" } = {}) {
-  const r = run(realGit, [...pre, "credential", "fill"], { env: { ...env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" }, cwd, input: "protocol=https\nhost=github.com\n\n" });
+// The login a git push over https to `host` made with `env` would use: the password git's credential helpers hand out for it.
+export function gitIdentity({ env = process.env, realGit = "/usr/bin/git", realGh = "/usr/bin/gh", pre = [], cwd, cache = "", host = "github.com" } = {}) {
+  const r = run(realGit, [...pre, "credential", "fill"], { env: { ...env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" }, cwd, input: `protocol=https\nhost=${host}\n\n` });
   const token = r.status === 0 ? ((/^password=(.*)$/m.exec(r.stdout) || [])[1] || "").trim() : "";
   return tokenIdentity(token, { env, realGh, cache });
+}
+// Where a push goes, the way git decides it: the repository it names (a URL, a path, or a remote and that remote's push
+// addresses after insteadOf), else the branch's push remote, remote.pushDefault, the branch's remote, origin.
+// args: what follows `push`; git(argv) -> {status, stdout}. -> [address]
+const PUSH_VALUE_FLAGS = ["-o", "--push-option", "--receive-pack", "--exec", "--repo"];
+const localPath = s => /^(\/|\.\.?(\/|$)|[A-Za-z]:[\\/]|file:\/\/)/.test(String(s));
+const urlLike = s => /^[a-z][\w+.-]*:\/\//i.test(String(s)) || /^[^/\s]*@?[^/\s:]+:(?!\/\/)/.test(String(s));
+export function pushAddresses(args, git) {
+  const pos = [];
+  for (let i = 0; i < args.length; i++) { const x = String(args[i]); if (x.startsWith("-")) { if (PUSH_VALUE_FLAGS.includes(x)) i++; continue; } pos.push(x); }
+  const named = flagValue(args, ["--repo"]) || pos[0] || "";
+  if (named && (localPath(named) || urlLike(named))) return [rewritten(named, git)];
+  const get = key => { const r = git(["config", "--get", key]); return r.status === 0 ? String(r.stdout).trim() : ""; };
+  let remote = named;
+  if (!remote) {
+    const b = git(["symbolic-ref", "--short", "-q", "HEAD"]);
+    const branch = b.status === 0 ? String(b.stdout).trim() : "";
+    remote = (branch && get(`branch.${branch}.pushRemote`)) || get("remote.pushDefault") || (branch && get(`branch.${branch}.remote`)) || "origin";
+  }
+  const r = git(["remote", "get-url", "--push", "--all", remote]);
+  return r.status === 0 ? String(r.stdout).split(/\r?\n/).map(s => s.trim()).filter(Boolean) : [remote];
+}
+// A push address after git's url.<base>.pushInsteadOf and insteadOf rewriting (a remote's get-url already has it applied).
+function rewritten(address, git) {
+  const r = git(["config", "--get-regexp", "^url\\..*\\.(push)?insteadof$"]);
+  if (r.status !== 0) return address;
+  let best = null;
+  for (const line of String(r.stdout).split(/\r?\n/)) {
+    const m = /^url\.(.*)\.(pushinsteadof|insteadof)\s+(.*)$/i.exec(line.trim());
+    if (!m || !address.startsWith(m[3])) continue;
+    const score = m[3].length + (m[2].toLowerCase() === "pushinsteadof" ? 1e6 : 0);
+    if (!best || score > best.score) best = { base: m[1], prefix: m[3], score };
+  }
+  return best ? best.base + address.slice(best.prefix.length) : address;
+}
+const maskUrl = u => String(u).replace(/\/\/[^@/]*@/, "//***@");
+// -> "" when every address the push goes to is local or https with a login that is not the owner's, else why it is refused.
+// Only https: over ssh the login is whatever key the machine holds, which the guard cannot see (root's may be the owner's).
+export function pushWhy(addresses, owner, ctx) {
+  for (const a of addresses) {
+    if (localPath(a)) continue;
+    const m = /^https:\/\/(?:([^@/]*)@)?([^/:]+)/i.exec(a);
+    if (!m) return `a helper pushes only over https, where it signs in with the App token; this push goes to ${maskUrl(a)}`;
+    const inUrl = m[1] && m[1].includes(":") ? m[1].slice(m[1].indexOf(":") + 1) : "";
+    const why = ownerWhy(inUrl ? tokenIdentity(decodeURIComponent(inUrl), ctx) : gitIdentity({ ...ctx, host: m[2] }), owner);
+    if (why) return why;
+  }
+  return "";
 }
 const same = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
 // -> "" when the call may go on, else why it is refused
@@ -121,14 +169,15 @@ function apiComment(args, cwd) {
   const method = String(explicit || (fields ? "POST" : "GET")).toUpperCase();
   if (endpoint === "graphql") {
     const t = apiPayload(args, cwd);
-    if (t !== null && !(/\bmutation\b/i.test(t) && /\b(addComment|addPullRequestReview\w*|addDiscussionComment|updateIssueComment|updatePullRequestReview\w*)\b/.test(t))) return null;
+    if (t !== null && !(/\bmutation\b/i.test(t) && /\b(add|update|delete|minimize)(Comment|IssueComment|DiscussionComment|PullRequestReview\w*)\b/.test(t))) return null;
     return { repo: null, number: null, body: t, graphql: true };
   }
+  // a note taken away or rewritten: the record of what was found, which "unchanged" reads, would no longer hold
+  const e = /^repos\/([^/]+\/[^/]+)\/(?:issues|pulls)\/(?:comments|reviews)\/\d+(?:\/(?!reactions)[a-z]+)?(?:\?.*)?$|^repos\/([^/]+\/[^/]+)\/pulls\/\d+\/reviews\/\d+(?:\/[a-z]+)?(?:\?.*)?$/.exec(endpoint);
+  if (e && method !== "GET" && method !== "HEAD") return { repo: e[1] || e[2], number: null, body: null, edit: true };
   if (method !== "POST" && method !== "PATCH" && method !== "PUT") return null;
   const m = /^repos\/([^/]+\/[^/]+)\/(issues|pulls)\/(\d+)\/(comments|reviews)(?:\?.*)?$/.exec(endpoint);
   if (m) return { repo: m[1], number: Number(m[3]), body: apiBody(args, cwd), review: m[4] === "reviews" || m[2] === "pulls" };
-  const e = /^repos\/([^/]+\/[^/]+)\/(?:issues|pulls)\/comments\/\d+(?:\?.*)?$/.exec(endpoint);
-  if (e) return { repo: e[1], number: null, body: apiBody(args, cwd), edit: true };
   return null;
 }
 // A gh call that posts a note on an issue or pull request -> {repo, number, body} (repo or number null when the call does not
@@ -144,7 +193,10 @@ export function commentOf(args, cwd) {
     const n = pos.find(p => /^#?\d+$/.test(p));
     return { repo: repoFlag, number: n ? Number(n.replace("#", "")) : null };
   };
-  if ((group === "issue" || group === "pr") && sub === "comment") return a.includes("--delete-last") ? null : { ...target(VALUE_FLAGS.comment), body: bodyOf(a, cwd), review: group === "pr" };
+  if ((group === "issue" || group === "pr") && sub === "comment") {
+    if (a.includes("--delete-last") || a.includes("--edit-last")) return { ...target(VALUE_FLAGS.comment), body: null, edit: true };
+    return { ...target(VALUE_FLAGS.comment), body: bodyOf(a, cwd), review: group === "pr" };
+  }
   if ((group === "issue" || group === "pr") && sub === "close") { const c = flagValue(a, ["--comment", "-c"]); return c === null ? null : { ...target(VALUE_FLAGS.close), body: c, review: group === "pr" }; }
   if (group === "pr" && sub === "review") {
     if (flagValue(a, ["--body", "-b"]) === null && flagValue(a, ["--body-file", "-F"]) === null) return null;
@@ -153,39 +205,56 @@ export function commentOf(args, cwd) {
   if (group === "api") return apiComment(a.slice(1), cwd);
   return null;
 }
-// What is already on an item: its comments, and on a pull request its reviews. -> [body]
-export const existingBodies = ({ env = process.env, realGh = "/usr/bin/gh" } = {}) => (repo, n, review) => {
-  const out = [];
-  const pages = ep => {
-    const rows = [];
-    for (let p = 1; p <= 30; p++) {
-      const r = run(realGh, ["api", `${ep}?per_page=100&page=${p}`], { env });
-      if (r.status !== 0) throw new Error(r.stderr.trim().split("\n").pop() || `exit ${r.status}`);
-      const page = JSON.parse(r.stdout || "[]");
-      rows.push(...(Array.isArray(page) ? page : []));
-      if (!Array.isArray(page) || page.length < 100) break;
-    }
-    return rows;
-  };
-  out.push(...pages(`repos/${repo}/issues/${n}/comments`).map(c => String((c && c.body) || "")));
-  if (review) { try { out.push(...pages(`repos/${repo}/pulls/${n}/reviews`).map(c => String((c && c.body) || ""))); } catch { /* an issue has no reviews */ } }
+// What happened on an item, from GitHub's timeline: its comments and reviews with their text, its commits, labels, closes and
+// the rest, each with its time. -> [{event, at, body}]
+const eventAt = e => (e && (e.created_at || e.submitted_at || (e.committer && e.committer.date) || (e.author && e.author.date))) || "";
+export const itemHistory = ({ env = process.env, realGh = "/usr/bin/gh" } = {}) => (repo, n) => {
+  const rows = [];
+  for (let p = 1; p <= 30; p++) {
+    const r = run(realGh, ["api", `repos/${repo}/issues/${n}/timeline?per_page=100&page=${p}`], { env });
+    if (r.status !== 0) throw new Error(r.stderr.trim().split("\n").pop() || `exit ${r.status}`);
+    const page = JSON.parse(r.stdout || "[]");
+    rows.push(...(Array.isArray(page) ? page : []));
+    if (!Array.isArray(page) || page.length < 100) break;
+  }
+  const out = rows.map(e => ({ event: String((e && e.event) || ""), at: eventAt(e), body: String((e && e.body) || "") }));
+  // a commit carries the time it was made, not when it reached the pull request: when its head arrived is when GitHub made
+  // its first check suite
+  const pr = run(realGh, ["api", `repos/${repo}/pulls/${n}`], { env });
+  if (pr.status === 0) {
+    try {
+      const sha = (JSON.parse(pr.stdout || "{}").head || {}).sha;
+      const cs = sha ? run(realGh, ["api", `repos/${repo}/commits/${sha}/check-suites?per_page=100`], { env }) : { status: 1 };
+      const first = cs.status === 0 ? ((JSON.parse(cs.stdout || "{}").check_suites || []).map(s => s && s.created_at).filter(Boolean).sort()[0]) : null;
+      if (first) out.push({ event: "head-arrived", at: first, body: "" });
+    } catch { /* the timeline alone */ }
+  }
   return out;
 };
+// Events that change nothing about an item: someone was notified or mentioned.
+const QUIET = new Set(["subscribed", "unsubscribed", "mentioned"]);
+const isNote = e => e.event === "commented" || e.event === "reviewed";
 // -> {why, unchanged?}: why is "" when the note may be posted. cfg.finding: the run's finding ("" = no finding check).
-export function findingWhy(c, cfg, existing) {
+// history(repo, n) -> the item's events (itemHistory). A finding is unchanged when a note with it is on the item and nothing
+// has happened there since except notes of the driver's helpers (a commit, a label, a person's comment, a review: all new).
+export function findingWhy(c, cfg, history) {
   if (!c || !cfg || !cfg.finding) return { why: "" };
   const mark = findingMarker(cfg.finding);
-  if (c.graphql) return { why: "post a note with gh issue comment or gh pr comment (or the REST comments endpoint), so the guard can read it" };
-  if (c.edit) return { why: "a note is posted as a new comment, never by editing an earlier one" };
+  if (c.graphql) return { why: "post a note with gh issue comment or gh pr comment (or the REST comments endpoint), so the guard can read it; a note is never edited, deleted or hidden" };
+  if (c.edit) return { why: "a note is never edited, deleted or hidden: what was found stays on the record, and something new is a new comment" };
   if (c.body === null || c.body === undefined) return { why: "give the note's text with --body or --body-file <file> (not on stdin), so the guard can read it" };
   const marks = findingsIn(c.body);
   if (!marks.length) return { why: `every note of this run ends with this hidden line, exactly: ${mark}` };
   if (marks.some(f => f !== cfg.finding)) return { why: `this run's notes carry its own finding line and no other, exactly: ${mark}` };
   if (!c.repo || !c.number) return { why: "name the issue or pull request by its number, and the repository with -R <owner/repo>, so the guard can see what is already there" };
-  let bodies;
-  try { bodies = existing(c.repo, c.number, !!c.review); } catch (e) { return { why: `the notes already on ${c.repo}#${c.number} could not be read (${String(e.message).slice(0, 160)}); try again` }; }
-  if (bodies.some(b => findingsIn(b).includes(cfg.finding))) return { unchanged: true, why: `unchanged: this finding is already on ${c.repo}#${c.number}, for the item in this same state, so nothing new is posted. Post nothing else about it.` };
-  return { why: "" };
+  let events;
+  try { events = history(c.repo, c.number); } catch (e) { return { why: `what is already on ${c.repo}#${c.number} could not be read (${String(e.message).slice(0, 160)}); try again` }; }
+  const said = events.filter(e => isNote(e) && findingsIn(e.body).includes(cfg.finding)).map(e => Date.parse(e.at)).filter(Number.isFinite);
+  if (!said.length) return { why: "" };
+  const last = Math.max(...said);
+  const moved = events.some(e => Date.parse(e.at) > last && !QUIET.has(e.event) && !(isNote(e) && e.body.includes("factory-driver:")));
+  if (moved) return { why: "" }; // the item changed since that note: this one is about its new state
+  return { unchanged: true, why: `unchanged: this finding is already on ${c.repo}#${c.number}, and nothing has happened there since, so nothing new is posted. Post nothing else about it.` };
 }
 
 // ---------------------------------------------------------------- the guard
@@ -203,13 +272,16 @@ export function decide(tool, args, cfg = {}, { env = process.env, cwd = process.
       const r = run(realGh, ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], { env, cwd });
       c.repo = r.status === 0 && /^[\w.-]+\/[\w.-]+$/.test(r.stdout.trim()) ? r.stdout.trim() : null;
     }
-    return findingWhy(c, cfg, existingBodies({ env, realGh }));
+    return findingWhy(c, cfg, itemHistory({ env, realGh }));
   }
   if (tool === "git") {
     const g = gitCommand(a);
     const pushing = g.cmd ? g.cmd === "push" : a.includes("push");
     if (cfg.owner && pushing) {
-      const why = ownerWhy(gitIdentity({ env, realGit, realGh, pre: g.cmd ? g.pre : [], cwd, cache }), cfg.owner);
+      const pre = g.cmd ? g.pre : [];
+      const rest = g.cmd ? g.rest : a.slice(a.indexOf("push") + 1);
+      const where = pushAddresses(rest, argv => run(realGit, [...pre, ...argv], { env, cwd }));
+      const why = pushWhy(where, cfg.owner, { env, realGit, realGh, pre, cwd, cache });
       if (why) return { why, owner: true };
     }
     return { why: "" };

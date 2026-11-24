@@ -16,7 +16,7 @@
 // GitHub only as the Apps (issue #152): root's own gh login is the owner's, so the run never sees it (the unit cannot read root's gh
 // folder) and signs in as the release App (githubFor); its gh and git go through owner-guard.mjs, which refuses a call made as the
 // owner and a note whose finding (the item in its present state) is already on the item. A run whose note was refused that way
-// answers "unchanged" (actResult), and its notice is kept by the finding, so the same thing is told once.
+// answers "unchanged" (actResult) and queues no notice (noticeHeld), so the same thing is told once.
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -114,7 +114,7 @@ ${(entry.evidence || []).map(e => `- ${fence(e)}`).join("\n")}${prior}
 DATA>>>
 
 TOOLS (all as root): gh and git sign in as the release App: its token is in GH_TOKEN${runRepos(entry, a).length ? ` (for ${runRepos(entry, a).join(", ")})` : ""}. The owner's own GitHub login is not available to this run and is never used: gh and git refuse a call made with it, and nothing you do may appear under the owner's account. Keys: set -a; . ${a.KEYS_FILE}; set +a. App tokens: node ${a.TOKEN_SCRIPT} release <owner/repo> (the release App approves a pull request pinned to its exact head sha, re-runs a stale failed required run, squash-merges once every check passed) or ... builder <owner/repo>; use one as GH_TOKEN=<token> gh .... Release scripts: ${a.DEV_DIR} (node scripts/release/auto-stage.mjs --dry-run, --explain <release>; markTicket writes a ticket's "Status: done (merge <sha>)" line). You may: run a check the factory's reviewer cannot run, review, approve as the release App pinned to the head, merge once every check passes, close an issue with the merge that fixed it, write a ticket's done line, re-run a stale check, dispatch a workflow on main (gh workflow run <file> -R <repo> --ref main; e.g. a missing server image for main's head), decide a question of HOW and post it as "Manager decision (Mission Control, not Michael)".
-FINDINGS: every note you post on GitHub ends with this hidden line, exactly: ${findingMarker(findingOf(entry))}. It stands for this item in its present state. The same finding is never posted twice: when gh refuses your note as unchanged, it is already there, so post nothing else about it.
+FINDINGS: every note you post on GitHub ends with this hidden line, exactly: ${findingMarker(findingOf(entry))}. It stands for this item in its present state. The same finding is never posted twice: when gh refuses your note as unchanged, it is already there and nothing has happened since, so post nothing else about it and queue no notice.
 
 NEVER: remove or undo a pause, a parked project, a HOLD, PAUSE or STOP file (the owner may have set it on purpose), anything outward to people (mail, posts, messages), spending money, publishing or promoting a release, recording the owner's go, posting as the owner ("Owner decision" is only his own words), loosening or skipping a check or giving a bot more permissions, editing the product's .github/ files, moving an item out of a release (only the factory driver's own cut does that, and only when the item itself cannot be built; an item whose trouble is our own setup stays in and you fix the setup), deciding what the software does for its users or how it looks or is worded (that is his). Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step.${again}
 
@@ -150,9 +150,10 @@ export function queueNotice(file, id, text, now = new Date()) {
   writeJson(file, { notices }); return true;
   });
 }
-// The notice of a run with a finding is kept by the finding, whatever id the run chose: the same item in the same state is
-// told once, however many runs look at it (issue #152). -> the notice id
-export const noticeId = (id, finding) => (FINDING_SHAPE.test(String(finding || "")) ? `on-call-finding-${String(finding).replace(" ", "-")}` : `on-call-${id}`);
+// A run whose note was refused as unchanged (its finding is on the item and nothing has happened there since) has nothing new to
+// tell the owner either: its notice is not queued (issue #152). runDir: the run's folder (FD_ACT_RUN_DIR). -> why not, or ""
+export const noticeHeld = runDir => (runDir && readGuardLog(path.join(runDir, "guard.log")).some(l => l.unchanged)
+  ? "unchanged: this finding is already on the item and nothing has happened there since, so the owner was told before; nothing queued" : "");
 export function markHandled(file, repo, heading) {
   const d = readJson(file, {}); const obj = Array.isArray(d) ? { [repo]: d } : d;
   obj[repo] = [...new Set([...(obj[repo] || []), heading])]; writeJson(file, obj);
@@ -271,7 +272,7 @@ export function githubFor(job, dir, own = process.env, mint = mintAppToken) {
   const token = mint({ node: process.execPath, tokenScript: g.tokenScript || s.FD_TOKEN_SCRIPT || "/usr/local/bin/gh-app-token.mjs", keysFile: g.keysFile || s.FD_KEYS_FILE || "/etc/godspeed-forge/keys-file", app: "release", repos });
   const p = prepareAppRun({ dir, token, owner: g.owner !== undefined ? g.owner : s.FD_OWNER_LOGIN || "", finding: FINDING_SHAPE.test(String(g.finding || "")) ? g.finding : "", repo: repos[0] || "",
     realGh: g.realGh || s.FD_REAL_GH || "/usr/bin/gh", realGit: g.realGit || s.FD_REAL_GIT || "/usr/bin/git" });
-  return { bin: p.bin, vars: { ...p.vars, ...(FINDING_SHAPE.test(String(g.finding || "")) ? { FD_ACT_FINDING: g.finding } : {}) }, token: !!token };
+  return { bin: p.bin, vars: { ...p.vars, FD_ACT_RUN_DIR: dir, ...(FINDING_SHAPE.test(String(g.finding || "")) ? { FD_ACT_FINDING: g.finding } : {}) }, token: !!token };
 }
 export function runJob(dir, spawn = spawnSync, own = process.env, mint = mintAppToken) {
   const job = readJson(path.join(dir, "job.json"), null);
@@ -305,7 +306,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     if (ni >= 0) {
       const [id, text] = argv.slice(ni + 1);
       if (!id || !text || /\n/.test(text) || text.length > 600) throw new Error("a notice is one plain sentence of at most 600 characters");
-      console.log(queueNotice(a.NOTICES, noticeId(id, process.env.FD_ACT_FINDING), text) ? "queued" : "already queued"); process.exit(0);
+      const held = noticeHeld(process.env.FD_ACT_RUN_DIR);
+      if (held) { console.log(held); process.exit(0); }
+      console.log(queueNotice(a.NOTICES, `on-call-${id}`, text) ? "queued" : "already queued"); process.exit(0);
     }
     const qi = argv.indexOf("--repair-request");
     if (qi >= 0) {
