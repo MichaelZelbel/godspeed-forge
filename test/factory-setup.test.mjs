@@ -369,7 +369,7 @@ testCase('a mission without the template\'s out-of-scope section gets one before
   assert.equal(withOutOfScope(withOutOfScope(TEMPLATE_MISSION, ['One.']), ['One.']), withOutOfScope(TEMPLATE_MISSION, ['One.']), 'writing it twice is writing it once');
 }
 
-testCase('setup runs the factory\'s setup after the mission questions and before the final check, and its messages are plain');
+testCase('setup runs the final check before the factory\'s mission questions and Apps, and its messages are plain');
 {
   const p = await project();
   const order = [];
@@ -393,7 +393,7 @@ testCase('setup runs the factory\'s setup after the mission questions and before
     prompt: async () => answers.shift(), output: line => said.push(line), factorySetup: createFactorySetup({ home: p.home })
   });
   const agentAt = order.indexOf('claude -p');
-  assert(agentAt > 0 && agentAt < order.lastIndexOf('python3 factory/consumer.py'), order.join(', '));
+  assert(agentAt > 0 && order.indexOf('python3 factory/consumer.py') < agentAt, order.join(', '));
   assert(said.at(-1).startsWith('Setup is complete for owner/app.'));
   for (const message of [...said, ...Object.values(FACTORY_MESSAGES).map(m => (typeof m === 'function' ? m('Claude Code', 'https://github.com/o/r/pull/1') : m))]) {
     assert((message.match(/https?:\/\//g) ?? []).length <= 1, message);
