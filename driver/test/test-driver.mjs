@@ -646,7 +646,7 @@ test("a resend only happens while the condition the notice was about still holds
 // dead end and waited for the driver to move it, and the driver, which counted it as done, never did. Now the driver and the release
 // step read the App's "Already delivered on main by #N" alike (delivery.mjs), and a ticket closed with nothing named is cut at once.
 const MERGE_876 = "5d29db0" + "4".repeat(33);
-function closedTicketFixture({ closedAgoMin, comments = [] }) {
+function closedTicketFixture({ closedAgoMin, comments = [], refs = [] }) {
   const f = fixture();
   const closedAt = new Date(NOW - closedAgoMin * 60000).toISOString();
   const gh0 = f.deps.gh;
@@ -655,8 +655,9 @@ function closedTicketFixture({ closedAgoMin, comments = [] }) {
     const a = args.join(" ");
     f.ghCalls.push(a);
     if (/issueOrPullRequest\(number: 861\)/.test(a)) return { data: { repository: { a861: { __typename: "Issue", number: 861, state: "CLOSED", closedByPullRequestsReferences: { nodes: [{ number: 876, merged: true, mergedAt: "2026-11-17T10:00:00Z", baseRefName: "main", mergeCommit: { oid: MERGE_876 }, repository: { nameWithOwner: REPO } }] } } } } };
-    if (/issue\(number: 704\)/.test(a)) return { data: { repository: { issue: { closedByPullRequestsReferences: { nodes: [] }, timelineItems: { nodes: [] } } } } };
-    if (/issues\/704\/comments/.test(a)) return comments;
+    // the issue as GitHub's GraphQL gives it: its newest comments with their authors' type, and the merged pull requests that mention it
+    if (/issue\(number: 704\)/.test(a)) return { data: { repository: { issue: { closedByPullRequestsReferences: { nodes: [] }, timelineItems: { nodes: [] }, refs: { nodes: refs.map(source => ({ source: { __typename: "PullRequest", merged: true, ...source } })) }, comments: { nodes: comments } } } } };
+    if (/issues\/704\/comments/.test(a)) return [];
     if (/issues\/704$/.test(a)) return { state: "closed", state_reason: "completed", closed_at: closedAt, labels: [] };
     return gh0(args, input);
   };
@@ -685,7 +686,7 @@ test("ticket 03: a ticket whose issue was closed as completed with nothing named
 });
 
 test("ticket 03: the builder App's 'Already delivered on main by #861' (an issue closed by the merged #876) counts as done in the driver: no dead end, no cut, the ticket resolved; the same words by a person are nothing named", async () => {
-  const said = type => [{ user: { login: "godspeed-dev-builder[bot]", type }, body: "Already delivered on main by #861 with #590 and #795.", created_at: "2026-11-18T13:00:00Z" }];
+  const said = __typename => [{ author: { login: "godspeed-dev-builder", __typename }, body: "Already delivered on main by #861 with #590 and #795." }];
   const f = closedTicketFixture({ closedAgoMin: 120, comments: said("Bot") });
   const out = await round(f.env, f.deps);
   assert.ok(!out.obstacles.some(o => o.kind === "dead-end"), "two hours after the close, still not a dead end: it is delivered");
@@ -708,4 +709,16 @@ test("ticket 03: rung 0 writes the done line of a ticket the App delivered, from
   const out = await rung0({ REPO }, world, {}, NOW, () => ({ status: 0, stdout: "enabled" }), async (rel, t, sha) => { wrote.push([rel.id, t.item, sha]); return true; });
   assert.deepEqual(wrote, [[ID, 1, MERGE_876]]);
   assert.match(out[0].did, /wrote the done line of item 1 \(merge 5d29db0\)/);
+});
+
+test("ticket 03: a ticket closed as completed that a merged pull request into main only mentions is done for the driver, and rung 0 writes its done line from that merge, so the release step counts it done too", async () => {
+  const f = closedTicketFixture({ closedAgoMin: 120, refs: [{ number: 876, mergedAt: "2026-11-17T10:00:00Z", baseRefName: "main", mergeCommit: { oid: MERGE_876 } }] });
+  const wrote = [];
+  const { rung0 } = await import("../duties.mjs");
+  f.deps.rung0 = (env, world, state, now, run, write) => rung0(env, world, state, now, () => ({ status: 0, stdout: "enabled" }), write);
+  f.records.read = p => (/plan\.md$/.test(p) ? PLAN : /tickets\//.test(p) ? "# a ticket\n" : null);
+  const out = await round(f.env, f.deps);
+  assert.ok(!out.obstacles.some(o => o.kind === "dead-end"), "never cut: its change is on main");
+  for (const w of f.records.writes) for (const [file, text] of Object.entries(w.files)) if (/tickets\//.test(file)) wrote.push([file, text.split("\n")[0]]);
+  assert.deepEqual(wrote, [[`releases/${ID}/tickets/${TICKETS[0]}`, `Status: done (merge ${MERGE_876})`]], "the done line, which the release step honours, so it never waits for a cut");
 });

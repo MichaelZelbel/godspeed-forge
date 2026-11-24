@@ -88,7 +88,7 @@ export function readTickets(rel, deps) {
 }
 
 // ------------------------------------------------------------ GitHub
-const comments = rows => (Array.isArray(rows) ? rows : []).map(c => ({ author: c.user ? c.user.login : "", type: c.user ? c.user.type || "" : "", body: String(c.body || ""), at: iso(c.created_at) }));
+const comments = rows => (Array.isArray(rows) ? rows : []).map(c => ({ author: c.user ? c.user.login : "", body: String(c.body || ""), at: iso(c.created_at) }));
 const labelNames = x => ((x && x.labels) || []).map(l => (typeof l === "string" ? l : l.name));
 
 function readPr(env, deps, n, unreadable) {
@@ -117,26 +117,32 @@ function readItem(env, deps, n, unreadable) {
   const item = { number: n, mergedRefs: [], state: String(issue.state || "").toLowerCase(), stateReason: issue.state_reason ? String(issue.state_reason).toLowerCase() : null, labels: labelNames(issue), closedAt: iso(issue.closed_at), prs: [], comments: [], partial: false };
   try { item.comments = comments(deps.gh([`repos/${env.REPO}/issues/${n}/comments?per_page=50`])); }
   catch (e) { unreadable.push({ part: `issue#${n}/comments`, error: e.message }); item.partial = true; }
-  let nums = [];
+  let nums = [], appComments;
   try {
-    const q = `query { repository(owner: ${JSON.stringify(env.REPO.split("/")[0])}, name: ${JSON.stringify(env.REPO.split("/")[1])}) { issue(number: ${n}) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number } } timelineItems(last: 40, itemTypes: [CONNECTED_EVENT]) { nodes { ... on ConnectedEvent { subject { __typename ... on PullRequest { number } } } } } refs: timelineItems(last: 60, itemTypes: [CROSS_REFERENCED_EVENT]) { nodes { ... on CrossReferencedEvent { source { __typename ... on PullRequest { number merged } } } } } } } }`;
+    // the issue's newest 30 comments with their authors' type: the same window and shape the release step reads (auto-stage.mjs)
+    const q = `query { repository(owner: ${JSON.stringify(env.REPO.split("/")[0])}, name: ${JSON.stringify(env.REPO.split("/")[1])}) { issue(number: ${n}) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number } } timelineItems(last: 40, itemTypes: [CONNECTED_EVENT]) { nodes { ... on ConnectedEvent { subject { __typename ... on PullRequest { number } } } } } refs: timelineItems(last: 60, itemTypes: [CROSS_REFERENCED_EVENT]) { nodes { ... on CrossReferencedEvent { source { __typename ... on PullRequest { number merged mergedAt baseRefName mergeCommit { oid } } } } } } comments(last: 30) { nodes { body author { __typename login } } } } } }`;
     const d = deps.gh(["graphql", "-f", `query=${q}`]);
     const i = d.data.repository.issue;
     nums = [...new Set([...i.closedByPullRequestsReferences.nodes.map(x => x.number), ...i.timelineItems.nodes.filter(e => e && e.subject && e.subject.number).map(e => e.subject.number)])];
     // a merged pull request that only mentions the issue (seen live: #679 closed by #714, which does not
     // close it by keyword): the item's change is on main, so it is never a dead end
-    item.mergedRefs = [...new Set(((i.refs && i.refs.nodes) || []).filter(e => e && e.source && e.source.__typename === "PullRequest" && e.source.merged).map(e => e.source.number))];
+    const refs = ((i.refs && i.refs.nodes) || []).filter(e => e && e.source && e.source.__typename === "PullRequest" && e.source.merged).map(e => e.source);
+    item.mergedRefs = [...new Set(refs.map(p => p.number))];
+    // their merges into main, newest first: rung 0 writes the ticket's done line from one, so the release step counts it done too
+    item.mergedRefMerges = refs.filter(p => p.mergeCommit && p.mergeCommit.oid && p.baseRefName === "main").map(p => ({ number: p.number, commit: p.mergeCommit.oid, mergedAt: p.mergedAt })).sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt));
+    appComments = i.comments && Array.isArray(i.comments.nodes) ? i.comments.nodes : undefined;
   } catch (e) { unreadable.push({ part: `issue#${n}/prs`, error: e.message }); item.partial = true; }
   for (const pn of nums) { const p = readPr(env, deps, pn, unreadable); if (p) item.prs.push(p); else item.partial = true; }
-  readDelivery(env, deps, item, unreadable);
+  readDelivery(env, deps, item, appComments, unreadable);
   return item;
 }
 // An issue closed as completed with no merged change linked to it: the builder or release App's comment may name where its work
 // is on main ("Delivered by <pull request URL>", "Already delivered on main by #N"), read exactly as the release step reads it
-// (delivery.mjs), so the two never disagree. item.claims: how many such comments; item.delivered: the newest merge they prove.
-function readDelivery(env, deps, item, unreadable) {
-  if (item.state !== "closed" || (item.stateReason && item.stateReason !== "completed") || item.prs.some(p => p.merged) || item.mergedRefs.length) return;
-  const claims = deliveryClaims(item.comments, { repo: env.REPO, apps: env.APPS });
+// (delivery.mjs), from the same comments, so the two never disagree. item.claims: how many such comments (left unset when the
+// comments were not read: then nothing is concluded from their absence); item.delivered: the newest merge they prove.
+function readDelivery(env, deps, item, comments, unreadable) {
+  if (item.state !== "closed" || (item.stateReason && item.stateReason !== "completed") || item.prs.some(p => p.merged) || item.mergedRefs.length || !comments) return;
+  const claims = deliveryClaims(comments, { repo: env.REPO, apps: env.APPS });
   item.claims = claims.length;
   if (!claims.length) return;
   try {
