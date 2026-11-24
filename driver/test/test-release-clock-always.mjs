@@ -352,6 +352,8 @@ test("a halt's rung that ended on the clock remembers which AI it ran on, so run
 test("the release is missing from a round's read (the records checkout could not be read): its tickets keep their states and the clock goes on", async () => {
   const s = server({ worldAt: (now, m) => { const w = world32(now, m); if (m >= 10) { w.releases = []; w.staging = {}; } return w; }, look: () => LOOK32 });
   s.deps.releaseFiles = () => ({ autoStage: { blocked: {} }, staging: null });
-  for (let m = 0; m <= 40; m += 5) await s.round(m);
+  for (let m = 0; m <= 70; m += 5) await s.round(m);
   assert.deepEqual(s.launched.filter(l => l.entry === `standstill:${ID32}`).map(l => l.minute), [15, 35], "a release that vanished from the read is not progress");
+  assert.equal(s.requests.length, 1, "and the repair request still comes by minute 60, the gate judging it the same way");
+  assert.equal(s.told.filter(t => /has not moved for about an hour/.test(t.text)).length, 1, "with its one notice");
 });

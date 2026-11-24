@@ -586,7 +586,9 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       if (!freshWorld) return "the tickets could not be read again";
       if (freshActivity && freshActivity.unreadable) return "GitHub's runs could not be read in the fresh read, so it did not confirm the standstill";
       const freshRel = (freshWorld.releases || []).find(r => r.id === k.id) || null;
-      const freshBld = (() => { try { return freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity, prevTokens: sc.buildTokens || ((jv.clocks || {})[k.id] || {}).buildTokens || null }) : null; } catch { return null; } })();
+      const lastTokens = sc.buildTokens || ((jv.clocks || {})[k.id] || {}).buildTokens || null;
+      // a release the read does not list (the records checkout) is judged as the clock judges it: its tickets as they were last, unchanged
+      const freshBld = (() => { try { return !freshRel ? (lastTokens ? { ...buildFromTokens(lastTokens), unread: false } : null) : freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity, prevTokens: sc.buildTokens || ((jv.clocks || {})[k.id] || {}).buildTokens || null }) : null; } catch { return null; } })();
       if (freshBld && freshBld.unread) return "a ticket could not be read in the fresh read, so it did not confirm the standstill";
       if (freshRel && (() => { try { return pageNamesRelease(freshWorld.deliveredPages, freshRel); } catch { return false; } })()) return "a question of money, publishing or deleting that names this release reached the owner since the round began";
       const about = !!(text2 && parseStage(text2).id === k.id);
