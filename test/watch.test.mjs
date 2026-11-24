@@ -46,7 +46,7 @@ function nativeGodspeed(root, { host = 'srv2.example.org', addons = true } = {})
 function server(root, { tailnet = null, hostname = null, addresses = '', caddyInstalled = true, apt = true, restartFails = false, listening = '', validateFails = false, buildFails = false, answersOutside = true, active = [], refuse = null, badRevision = null } = {}) {
   const calls = [];
   // frontImage: the image Godspeed's own Caddy runs; an image in brokenImages does not start, one in stoppingImages stops at once.
-  const state = { caddy: caddyInstalled, active: new Set(active), container: null, restarts: 0, runs: 0, frontImage: 'caddy:2.10.2-alpine', brokenImages: new Set(), stoppingImages: new Set() };
+  const state = { caddy: caddyInstalled, active: new Set(active), container: null, restarts: 0, runs: 0, frontImage: 'caddy:2.10.2-alpine', brokenImages: new Set(), stoppingImages: new Set(), forgeDisableFails: false };
   const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
   const run = async (command, args = [], options = {}) => {
     calls.push({ command, args, options });
@@ -60,6 +60,7 @@ function server(root, { tailnet = null, hostname = null, addresses = '', caddyIn
     if (command === 'systemctl') {
       const [verb, ...rest] = args;
       if (verb === 'restart' && restartFails && rest[0] === FORGE_UNIT) return { status: 1, stdout: '', stderr: 'Job for godspeed-forge-https.service failed' };
+      if (verb === 'disable' && rest.includes(FORGE_UNIT) && state.forgeDisableFails) return { status: 1, stdout: '', stderr: 'Failed to disable unit: Access denied' };
       if (verb === refuse) return { status: 1, stdout: '', stderr: 'Failed to enable unit: Access denied' };
       if (verb === 'is-active') return state.active.has(rest.at(-1)) ? ok() : { status: 3, stdout: '', stderr: '' };
       if (verb === 'restart' || verb === 'start') { state.active.add(rest[0]); if (rest[0] === `${UNIT}.service`) state.restarts++; }
@@ -383,6 +384,24 @@ testCase("once Godspeed has a web address, the Forge's own Caddy goes before the
   assert.equal(read(at(root, FORGE_CADDYFILE)), null);
   assert.equal(r.record.front, 'docker');
   assert.ok(later.indexOf(`systemctl disable --now ${FORGE_UNIT}`) < later.findIndex(l => l.startsWith('docker run')));
+}
+
+testCase("a refused stop of the Forge's own Caddy fails the page and leaves its unit; a failed build never gets as far as stopping it");
+{
+  const root = fresh();
+  const s = server(root, { tailnet: 'a.tail1.ts.net' });
+  assert.equal((await page(root, s).go()).ok, true);
+  dockerGodspeed(root);
+  s.state.forgeDisableFails = true;
+  assert.deepEqual(await page(root, s).go(), { ok: false, why: WHY.front });
+  assert.notEqual(read(at(root, `/etc/systemd/system/${FORGE_UNIT}`)), null, 'the working page stays');
+  const built = fresh();
+  write(at(built, `/etc/systemd/system/${FORGE_UNIT}`), '[Service]\n');
+  dockerGodspeed(built);
+  const broken = server(built, { buildFails: true });
+  assert.deepEqual(await page(built, broken).go(), { ok: false, why: WHY.build });
+  assert.ok(!commandLines(broken).includes(`systemctl disable --now ${FORGE_UNIT}`));
+  assert.notEqual(read(at(built, `/etc/systemd/system/${FORGE_UNIT}`)), null);
 }
 
 testCase('a build that fails, or an address that does not answer, is never reported ready');
