@@ -13,6 +13,7 @@
 //   3. It keeps the driver's timer enabled (the driver does the same for this one's).
 //   node factory-deadman.mjs [--dry-run]      node factory-deadman.mjs --run <dir>   (inside a repair unit)
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -45,6 +46,11 @@ export const defaults = (e = process.env) => ({
   TG_ENV: e.DM_TG_ENV || ((e.TG_MACHINE_ENV && fs.existsSync(e.TG_MACHINE_ENV)) ? e.TG_MACHINE_ENV : (e.TG_ENV || "")),
   WATCH_REPO: e.DM_WATCH_REPO || e.WATCH_ISSUES_REPO || e.WATCH_REPO || "",
   BRAIN: e.DM_BRAIN || "/root/brain",
+  // GitHub goes out as an App, never as root's own login (the owner's); the same defaults the driver's duties use
+  TOKEN_SCRIPT: e.FD_TOKEN_SCRIPT || "/usr/local/bin/gh-app-token.mjs",
+  KEYS_FILE: e.FD_KEYS_FILE || "/etc/godspeed-forge/keys-file",
+  REPO: e.FD_REPO || "",
+  DEV_REPO: e.FD_DEV_REPO || "",
   DRY: process.argv.includes("--dry-run"),
 });
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
@@ -53,6 +59,32 @@ const versionOf = name => { const m = /^(.*?)-?(\d+)\.(\d+)\.(\d+)(?:-[a-z]+\.(\
 const cmp = (a, b) => { for (let i = 0; i < 4; i++) if (a[i] !== b[i]) return a[i] - b[i]; return 0; };
 const parseVersion = s => { const m = /(\d+)\.(\d+)\.(\d+)(?:-[a-z]+\.(\d+))?/i.exec(String(s || "")); return m ? [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? 1e9 : Number(m[4])] : null; };
 const sys = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: "utf8", timeout: 60000, env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: "/root" }, ...opts });
+
+// ---------------------------------------------------------------- GitHub as an App, never as the owner (issue #163)
+// Root's own gh login is the owner's. Everything this program or its repair run sends to GitHub carries an App's token instead, with an
+// empty gh folder and no stored git credential helper; without a token it has no GitHub login at all. Its own copy of what the driver's
+// guard does (owner-guard.mjs): this program shares no code with the driver. Root's stored login stays on disk (the brain checkout needs
+// it), so a call that goes out of its way to read /root/.config/gh is not stopped, only the default of gh and git.
+// -> an App token for the repositories ("" when none could be made); the keys are read for this one child only
+export function mintToken({ tokenScript, keysFile, app, repos }, spawn = spawnSync) {
+  const list = [...new Set((repos || []).filter(r => /^[\w.-]+\/[\w.-]+$/.test(String(r))))];
+  if (!tokenScript || !list.length) return "";
+  let keys; try { keys = Object.fromEntries(fs.readFileSync(keysFile, "utf8").split(/\r?\n/).map(l => /^\s*(?:export\s+)?([A-Z0-9_]+)=(.*)$/.exec(l.trim())).filter(Boolean).map(m => [m[1], m[2].trim().replace(/^["']|["']$/g, "")])); } catch { return ""; }
+  for (const set of list.length > 1 ? [list, [list[0]]] : [list]) {
+    const r = spawn(process.execPath, [tokenScript, app, set.join(",")], { encoding: "utf8", timeout: 60000, env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", ...keys } });
+    const t = String((r && r.stdout) || "").trim();
+    if (r && r.status === 0 && /^[\w.-]+$/.test(t)) return t;
+  }
+  return "";
+}
+// The GitHub part of a child's environment. The empty credential.helper empties the helpers git collected from root's config (gh's, the
+// owner's); the one after it hands out the App token. No ssh: root's key is not an App's.
+export const githubEnv = ({ ghDir, token = "" }) => ({
+  GH_CONFIG_DIR: ghDir, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "/bin/false",
+  ...(token ? { GH_TOKEN: token } : {}),
+  GIT_CONFIG_COUNT: token ? "2" : "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "",
+  ...(token ? { GIT_CONFIG_KEY_1: "credential.https://github.com.helper", GIT_CONFIG_VALUE_1: "!f() { printf 'username=x-access-token\\npassword=%s\\n' \"$GH_TOKEN\"; }; f" } : {}),
+});
 
 // ---------------------------------------------------------------- THE GATE (the same three rules as the driver's gate.mjs, written here on its own)
 // Nothing reaches Michael on one reading: (a) the same condition on 3 consecutive runs at least 10 minutes apart (it starts over when the
@@ -118,11 +150,11 @@ export function repairStep(rep, health, now, rules = RULES) {
   if (r.claudeAt && !r.toldAt && now - r.claudeAt >= rules.repairHours * HOUR) return { step: "tell", rep: { ...r, toldAt: now } };
   return { step: null, rep: r };
 }
-const REPAIR_BRIEF = (why, tried, cfg = defaults()) => `You are the factory dead-man's repair run: root on this server, in Mission Control's brain folder (AGENTS.md and rules/ bind you). The software factory's driver (${cfg.DRIVER_DIR}, one round every 5 minutes, unit factory-driver.service; state ${cfg.STATE_DIR}) is not healthy: ${why}. ${tried ? `Earlier repair attempts: ${tried}\n` : ""}Make it healthy: read its journal (journalctl -u factory-driver.service), its decisions log and status, fix the cause, and leave a good round behind within 30 minutes (the keeper rolls an install back by itself otherwise). You may write the driver's install; you may NEVER touch the dead-man (${cfg.KEEPER_HOME}/deadman.mjs and its units), the journal (${cfg.STATE_DIR}/journal.jsonl) or the outside watcher.${(cfg.CHECKOUTS || []).length ? ` The factory's checkouts (${cfg.CHECKOUTS.join(", ")}) are read-only for you: never write in them by any route (not with git or any other program, not through systemd-run or another unit, not as another user), since that makes their files root's and the factory cannot fetch; work on code in a clone of your own (mktemp -d).` : ""} Never anything outward to people, never spend money, never loosen a check. Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step. Your last line: RESULT: resolved | RESULT: unresolved`;
+const REPAIR_BRIEF = (why, tried, cfg = defaults()) => `You are the factory dead-man's repair run: root on this server, in Mission Control's brain folder (AGENTS.md and rules/ bind you). The software factory's driver (${cfg.DRIVER_DIR}, one round every 5 minutes, unit factory-driver.service; state ${cfg.STATE_DIR}) is not healthy: ${why}. ${tried ? `Earlier repair attempts: ${tried}\n` : ""}Make it healthy: read its journal (journalctl -u factory-driver.service), its decisions log and status, fix the cause, and leave a good round behind within 30 minutes (the keeper rolls an install back by itself otherwise). You may write the driver's install; you may NEVER touch the dead-man (${cfg.KEEPER_HOME}/deadman.mjs and its units), the journal (${cfg.STATE_DIR}/journal.jsonl) or the outside watcher.${(cfg.CHECKOUTS || []).length ? ` The factory's checkouts (${cfg.CHECKOUTS.join(", ")}) are read-only for you: never write in them by any route (not with git or any other program, not through systemd-run or another unit, not as another user), since that makes their files root's and the factory cannot fetch; work on code in a clone of your own (mktemp -d).` : ""} GitHub in this run is the release App (its token is in GH_TOKEN, for ${[cfg.REPO, cfg.DEV_REPO].filter(Boolean).join(", ") || "the factory's repositories"}): never use root's own gh login or ssh key, and never post, push or comment as the owner. Never anything outward to people, never spend money, never loosen a check. Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step. Your last line: RESULT: resolved | RESULT: unresolved`;
 // a driver-repair run: writable driver install, read-only dead-man, journal and units
 export function launchRepair(cfg, unit, provider, why, tried, run = sys) {
   const dir = path.join(cfg.ACTS, unit); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify({ provider, model: provider === "claude" ? "claude-opus-5-5" : "gpt-5.6-sol", brain: cfg.BRAIN, factoryHome: cfg.FACTORY_HOME, claudeBin: cfg.CLAUDE_BIN, prompt: REPAIR_BRIEF(why, tried, cfg), actsDir: cfg.ACTS, minutes: 50 }));
+  fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify({ provider, model: provider === "claude" ? "claude-opus-5-5" : "gpt-5.6-sol", brain: cfg.BRAIN, factoryHome: cfg.FACTORY_HOME, claudeBin: cfg.CLAUDE_BIN, prompt: REPAIR_BRIEF(why, tried, cfg), actsDir: cfg.ACTS, minutes: 50, github: { tokenScript: cfg.TOKEN_SCRIPT, keysFile: cfg.KEYS_FILE, repos: [cfg.REPO, cfg.DEV_REPO].filter(Boolean) } }));
   const r = run("systemd-run", [`--unit=${unit}`, "--collect", "--quiet", "-p", "RuntimeMaxSec=3300", "-p", "NoNewPrivileges=yes", "-p", "CapabilityBoundingSet=~CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_SYS_MODULE CAP_SYS_BOOT CAP_SYS_TIME CAP_SYS_RAWIO", "-p", "ProtectControlGroups=yes", "-p", "ProtectKernelModules=yes",
     "-p", `ReadOnlyPaths=${[`${cfg.KEEPER_HOME}/deadman.mjs`, "/etc/systemd/system", cfg.STATE_DIR, cfg.KEEPER_HOME, ...(cfg.CHECKOUTS || []).map(c => `-${c}`)].join(" ")}`, "-p", `ReadWritePaths=${cfg.ACTS} ${cfg.SPOOL}`,
     "--setenv=HOME=/root", process.execPath, fileURLToPath(import.meta.url), "--run", dir]);
@@ -139,19 +171,22 @@ export function linkLogin(target, link, now = Date.now()) {
   fs.symlinkSync(target, link);
   return st ? "moved aside" : "linked";
 }
-function runJob(dir) { // inside the repair unit (this file's own runner: no driver code)
+export function runJob(dir, deps = {}) { // inside the repair unit (this file's own runner: no driver code)
+  const spawn = deps.spawn || spawnSync;
   const job = readJson(path.join(dir, "job.json"), null); if (!job) throw new Error("no job");
+  const g = job.github || {}, ghDir = path.join(job.actsDir, "gh"); fs.mkdirSync(ghDir, { recursive: true, mode: 0o700 });
+  const github = githubEnv({ ghDir, token: (deps.mint || mintToken)({ tokenScript: g.tokenScript, keysFile: g.keysFile, app: "release", repos: g.repos }) });
   const last = path.join(dir, "last.txt"); let r;
   const root = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
   if (job.provider === "claude") {
     const home = path.join(job.actsDir, "claude-home"); fs.mkdirSync(home, { recursive: true });
     for (const [from, to] of [[`${job.factoryHome}/.claude/.credentials.json`, ".credentials.json"], [`${job.factoryHome}/.claude.json`, ".claude.json"]]) linkLogin(from, path.join(home, to));
-    r = spawnSync(job.claudeBin, ["-p", "--model", job.model, "--dangerously-skip-permissions"], { input: job.prompt, cwd: job.brain, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: `${path.dirname(job.claudeBin)}:${root}`, HOME: "/root", CLAUDE_CONFIG_DIR: home, IS_SANDBOX: "1" } });
+    r = spawn(job.claudeBin, ["-p", "--model", job.model, "--dangerously-skip-permissions"], { input: job.prompt, cwd: job.brain, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: `${path.dirname(job.claudeBin)}:${root}`, HOME: "/root", CLAUDE_CONFIG_DIR: home, IS_SANDBOX: "1", ...github } });
     fs.writeFileSync(last, r.stdout || "");
   } else {
     const home = path.join(job.actsDir, "codex-home"); fs.mkdirSync(home, { recursive: true });
     linkLogin(`${job.factoryHome}/.codex/auth.json`, path.join(home, "auth.json"));
-    r = spawnSync("codex", ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "danger-full-access", "-m", job.model, "-C", job.brain, "-o", last, "-"], { input: job.prompt, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: root, HOME: "/root", CODEX_HOME: home } });
+    r = spawn("codex", ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "danger-full-access", "-m", job.model, "-C", job.brain, "-o", last, "-"], { input: job.prompt, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: root, HOME: "/root", CODEX_HOME: home, ...github } });
   }
   fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify({ at: new Date().toISOString(), said: (fs.existsSync(last) ? fs.readFileSync(last, "utf8") : "").slice(-3000) }));
 }
@@ -164,8 +199,13 @@ export async function tell(cfg, text, deps = {}) {
   if (c.token && c.chat) { try { const r = await (deps.fetch || fetch)(`https://api.telegram.org/bot${c.token}/sendMessage`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chat_id: c.chat, text }), signal: AbortSignal.timeout(20000) }); const j = await r.json(); if (j.ok && j.result && j.result.message_id) receipts.telegram = String(j.result.message_id); } catch {} }
   // transport B: the notify workflow opens an issue authored by github-actions[bot] that names the owner (his own token would notify nobody);
   // only where there is a watch repository (a new owner has none, and nothing is posted on their project's repository)
+  let ghDir = "";
   if (cfg.WATCH_REPO) try {
-    const run = deps.run || sys, ref = deps.ref || crypto.createHash("sha1").update(`deadman|${text}|${Math.floor(Date.now() / 86400000)}`).digest("hex").slice(0, 12);
+    const token = (deps.mint || mintToken)({ tokenScript: cfg.TOKEN_SCRIPT, keysFile: cfg.KEYS_FILE, app: "builder", repos: [cfg.WATCH_REPO] }); // the builder App can dispatch a workflow; the release App only reads actions
+    if (!token) throw new Error("no App token: the dispatch would go out as the owner");
+    ghDir = fs.mkdtempSync(path.join(os.tmpdir(), "deadman-gh-"));
+    const env = { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", ...githubEnv({ ghDir, token }) };
+    const runAny = deps.run || sys, run = (cmd, args) => runAny(cmd, args, { env }), ref = deps.ref || crypto.createHash("sha1").update(`deadman|${text}|${Math.floor(Date.now() / 86400000)}`).digest("hex").slice(0, 12);
     const find = () => { try { const hit = JSON.parse(run("gh", ["api", `repos/${cfg.WATCH_REPO}/issues?state=all&per_page=100`]).stdout).find(i => i.user && i.user.login === "github-actions[bot]" && String(i.body || "").startsWith(`@${cfg.OWNER}`) && String(i.body || "").includes(`<!-- ref:${ref} -->`)); return hit ? hit.html_url : null; } catch { return null; } };
     let url = find();
     if (!url) {
@@ -173,7 +213,7 @@ export async function tell(cfg, text, deps = {}) {
       for (let i = 0; i < (d.status === 0 ? (deps.polls ?? 10) : 0) && !url; i++) { await (deps.sleep || (ms => new Promise(r => setTimeout(r, ms))))(6000); url = find(); }
     }
     if (url) receipts.github = url;
-  } catch {}
+  } catch {} finally { if (ghDir) fs.rmSync(ghDir, { recursive: true, force: true }); }
   // and Godspeed's own notice queue, under the same one-writer lock as every other program
   try {
     const lock = `${cfg.NOTICES}.lock`; let got = false;

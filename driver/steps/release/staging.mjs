@@ -621,6 +621,33 @@ function gitIn(root, args, { input, extraEnv } = {}) {
   return { code: r.error ? -1 : r.status, out: r.stdout || "", err: (r.stderr || (r.error && r.error.message) || "").trim() };
 }
 
+// The one push of a release record to the records repository's main, made as the builder App and never
+// as the login root's own gh keeps (the owner's). The token reaches git for this one call only: the
+// empty credential.helper first empties the helpers git collected from root's config, the one after it
+// answers from the token. A remote that is not https://github.com cannot take the App's token and would
+// push with root's own key, so it is refused; a remote on this machine (a path or file://) involves no
+// login and pushes as it is. env.RECORDS_PUSH_TOKEN is a token the caller made (the release driver's keys
+// never enter its own environment); without it one is made here.
+export function pushAsApp(root, commit, env = process.env) {
+  const args = ["push", "-q", "origin", `${commit}:refs/heads/main`];
+  const url = gitIn(root, ["config", "--get", "remote.origin.url"]).out.trim();
+  if (path.isAbsolute(url) || url.startsWith("file://")) return gitIn(root, args);
+  const slug = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(url);
+  if (!slug) R.refuse(`the records repository's origin (${url || "none"}) is not an https://github.com address, so the builder App cannot push to it and nothing was recorded.`);
+  const token = env.RECORDS_PUSH_TOKEN || R.mintToken(env, slug[1], "contents=write,metadata=read", "builder");
+  return gitIn(root, args, {
+    extraEnv: {
+      RECORDS_PUSH_TOKEN: token,
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "",
+      GIT_CONFIG_KEY_1: "credential.https://github.com.helper",
+      GIT_CONFIG_VALUE_1: "!f() { printf 'username=x-access-token\\npassword=%s\\n' \"$RECORDS_PUSH_TOKEN\"; }; f",
+    },
+  });
+}
+
 function must(r, what) {
   if (r.code !== 0) R.refuse(`${what} failed in the records repository (${lastLine(r.err) || `exit ${r.code}`}); nothing was recorded.`);
   return r.out.trim();
@@ -629,6 +656,7 @@ function must(r, what) {
 export class Records {
   constructor(env = process.env) {
     this.root = env.RELEASE_RECORDS_ROOT || cfg.recordsRoot;
+    this.env = env;
     this.fetched = false;
   }
 
@@ -717,7 +745,7 @@ export class Records {
         }
         const tree = must(gitIn(this.root, ["write-tree"], { extraEnv: e }), "Writing the tree");
         const commit = must(gitIn(this.root, ["commit-tree", tree, "-p", base, "-m", message], { extraEnv: recordIdentity() }), "Writing the commit");
-        const push = gitIn(this.root, ["push", "-q", "origin", `${commit}:refs/heads/main`]);
+        const push = pushAsApp(this.root, commit, this.env);
         if (push.code === 0) {
           gitIn(this.root, ["update-ref", "refs/remotes/origin/main", commit]);
           return commit;

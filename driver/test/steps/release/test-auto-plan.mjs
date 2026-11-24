@@ -1,4 +1,4 @@
-// test cases: 31
+// test cases: 34
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -594,6 +594,66 @@ test("an issue without the label is still read from its last three comments", as
   const prompt = promptFor(read);
   assert.ok(!prompt.includes("Found: line 1"));
   assert.ok(prompt.includes("bookkeeping one") && prompt.includes("bookkeeping two"));
+});
+
+// ---------- the push is the builder App's, never root's own login (issue #163) ----------
+
+import * as G from "../../../steps/release/staging.mjs";
+const realGit = process.env.FORGE_TEST_REAL_GIT || "/usr/bin/git";
+// a records checkout whose origin says https://github.com/o/r.git and really is a bare repository on this machine,
+// and a git on PATH that logs what each call was given before it runs the real one
+function recordsCheckout(origin = "https://github.com/o/r.git") {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "records-push-"));
+  const g = (cwd, ...a) => { const r = spawnSync(realGit, ["-C", cwd, ...a], { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  const bare = path.join(dir, "bare.git"), work = path.join(dir, "work");
+  spawnSync(realGit, ["init", "-q", "--bare", "-b", "main", bare]);
+  spawnSync(realGit, ["clone", "-q", bare, work]);
+  g(work, "config", "user.email", "t@t"); g(work, "config", "user.name", "t");
+  fs.writeFileSync(path.join(work, "a"), "a"); g(work, "add", "."); g(work, "commit", "-q", "-m", "init"); g(work, "push", "-q", "origin", "HEAD:main");
+  g(work, "remote", "set-url", "origin", origin);
+  g(work, "config", `url.${bare}.insteadOf`, "https://github.com/o/r.git");
+  const bin = path.join(dir, "bin"), log = path.join(dir, "git.log"); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$*" "$RECORDS_PUSH_TOKEN" "$GIT_CONFIG_VALUE_0" "$GIT_CONFIG_VALUE_1" >> '${log}'\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+  return { dir, work, bare, bin, log, g, calls: () => fs.readFileSync(log, "utf8").trim().split("\n").map((l) => l.split("|")) };
+}
+const withPath = (bin, fn) => { const was = process.env.PATH; process.env.PATH = `${bin}:${was}`; try { return fn(); } finally { process.env.PATH = was; } };
+
+test("a records push goes out with the builder App's token for that one call and with root's credential helpers emptied", () => {
+  const c = recordsCheckout();
+  const script = path.join(c.dir, "token.mjs"); fs.writeFileSync(script, `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(path.join(c.dir, "mint.args"))}, process.argv.slice(2).join(" ")); console.log("apptoken");\n`);
+  const env = { ...process.env, RELEASE_RECORDS_ROOT: c.work, RELEASE_TOKEN_SCRIPT: script };
+  delete env.RECORDS_PUSH_TOKEN;
+  const commit = withPath(c.bin, () => new G.Records(env).write({ "x.txt": "x\n" }, "record"));
+  assert.match(commit, /^[0-9a-f]{40}$/);
+  assert.equal(c.g(c.bare, "show", "main:x.txt"), "x");
+  assert.match(fs.readFileSync(path.join(c.dir, "mint.args"), "utf8"), /^builder o\/r --permissions contents=write,metadata=read$/);
+  const withToken = c.calls().filter((l) => l[1]);
+  assert.deepEqual(withToken.map((l) => l[0].split(" ").find((w) => w === "push")), ["push"], "the token is in the push call's environment and in no other");
+  assert.equal(withToken[0][2], "", "root's helpers are emptied first");
+  assert.match(withToken[0][3], /RECORDS_PUSH_TOKEN/);
+  const given = withPath(c.bin, () => new G.Records({ ...env, RECORDS_PUSH_TOKEN: "handed-in" }).write({ "y.txt": "y\n" }, "again"));
+  assert.ok(given && c.calls().some((l) => l[1] === "handed-in"), "a token the driver handed in is used as it is");
+  fs.rmSync(c.dir, { recursive: true, force: true });
+});
+
+test("a records push that cannot be made as the App refuses and pushes nothing: no App token, or an origin the token cannot reach", () => {
+  const c = recordsCheckout();
+  const env = { ...process.env, RELEASE_RECORDS_ROOT: c.work, RELEASE_TOKEN_SCRIPT: path.join(c.dir, "missing.mjs") };
+  delete env.RECORDS_PUSH_TOKEN;
+  assert.throws(() => withPath(c.bin, () => new G.Records(env).write({ "x.txt": "x\n" }, "record")), /No release token|is not there/);
+  assert.notEqual(spawnSync(realGit, ["-C", c.bare, "show", "main:x.txt"]).status, 0, "nothing reached main");
+  c.g(c.work, "remote", "set-url", "origin", "git@github.com:o/r.git");
+  assert.throws(() => G.pushAsApp(c.work, "HEAD", { RECORDS_PUSH_TOKEN: "t" }), /not an https:\/\/github\.com address/);
+  fs.rmSync(c.dir, { recursive: true, force: true });
+});
+
+test("auto-plan's own record push is the builder App's too", () => {
+  const c = recordsCheckout();
+  const was = process.env.RECORDS_PUSH_TOKEN; process.env.RECORDS_PUSH_TOKEN = "plantoken";
+  try { withPath(c.bin, () => P.writeRecords(c.work, { "releases/r/plan.md": "plan\n" }, "plan r")); } finally { if (was === undefined) delete process.env.RECORDS_PUSH_TOKEN; else process.env.RECORDS_PUSH_TOKEN = was; }
+  assert.equal(c.g(c.bare, "show", "main:releases/r/plan.md"), "plan");
+  assert.ok(c.calls().some((l) => l[0].includes("push") && l[1] === "plantoken"));
+  fs.rmSync(c.dir, { recursive: true, force: true });
 });
 
 await runCases();

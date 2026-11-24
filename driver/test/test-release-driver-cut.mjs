@@ -1,7 +1,7 @@
 import { TEST_ENV } from "./env.mjs";
 // node test-release-driver-cut.mjs   (no network, no AI, no git)
-import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
-import { planCutRule, planItemNames, findDeadEnds, routedToDeadEnd, factoryDown, proofOnly, machineHold, amendment, cutLook, cutSentence, cutComment, versionWords, CUT_MARKER, PROVIDER_FAILURE } from "../release-driver/release-driver-cut.mjs";
+import { spawnSync } from "node:child_process"; import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
+import { recordsToken, devRecords, planCutRule, planItemNames, findDeadEnds, routedToDeadEnd, factoryDown, proofOnly, machineHold, amendment, cutLook, cutSentence, cutComment, versionWords, CUT_MARKER, PROVIDER_FAILURE } from "../release-driver/release-driver-cut.mjs";
 import { run } from "../release-driver/release-driver.mjs";
 
 const HOUR = 3600 * 1000;
@@ -218,3 +218,22 @@ assert.ok(dec3.some(d => d.kind === "cut" && d.item === 679));
 void r;
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log("release-driver cut: all tests passed");
+
+// ---- issue #163: the records are written as the builder App, its token made when the first record is written
+{
+  const co = fs.mkdtempSync(path.join(os.tmpdir(), "rd-records-")); fs.mkdirSync(path.join(co, "scripts", "release"), { recursive: true });
+  spawnSync("git", ["init", "-q", co]); spawnSync("git", ["-C", co, "remote", "add", "origin", "https://github.com/o/records.git"]);
+  const mints = [];
+  const spawn = (node, args, o) => { mints.push(args.slice(1)); return { status: 0, stdout: "recordstok\n" }; };
+  const keys = path.join(co, "keys"); fs.writeFileSync(keys, "K=v\n");
+  const env = { DEV_CHECKOUT: co, TOKEN_SCRIPT: "/t.mjs", KEYS_FILE: keys };
+  assert.equal(recordsToken(env, spawn), "recordstok"); assert.deepEqual(mints, [["builder", "o/records"]]);
+  spawnSync("git", ["-C", co, "remote", "set-url", "origin", "git@github.com:o/records.git"]);
+  assert.equal(recordsToken(env, spawn), "", "an origin the App cannot push to gets no token");
+  spawnSync("git", ["-C", co, "remote", "set-url", "origin", "https://github.com/o/records.git"]);
+  fs.writeFileSync(path.join(co, "scripts", "release", "staging.mjs"), "export class Records { constructor(env) { this.env = env; } read() { return null; } write(f, m) { this.token = this.env.RECORDS_PUSH_TOKEN; return 'c'; } }\n");
+  const made = []; const rec = await devRecords(env, { token: e => { made.push(e); return "lazytok"; } });
+  assert.equal(made.length, 0, "a look that only reads makes no token");
+  assert.equal(rec.write({ a: "b" }, "m"), "c"); assert.equal(rec.token, "lazytok");
+  fs.rmSync(co, { recursive: true, force: true });
+}

@@ -58,13 +58,14 @@
 //                                        unchanged gates, not the daily cap or a halt)
 //   node release-driver.mjs --clear-halt after a Mission Control session looked at the breach
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ownerLogin, isTrusted, blockerRefs, loopWords, capState, codexTrouble, TROUBLE_WORDS, secondCheck, codexJson, forgeArgv, tell, askMichael, pruneQuestions, trustLook, landingLook, genuineRelay, firstWithMarker, asManagerDecision, asQuestion, ownerHeaded, ownerOnlyReason, MANAGER_HEADING, KEEP_CHECKS_DECISION, technicalWords } from "./release-driver-owner-steps.mjs";
 import { isProtected as guardIsProtected, DECISION_BODY } from "./release-driver-guard.mjs";
-import { cutLook, routedToDeadEnd, factoryFacts } from "./release-driver-cut.mjs";
+import { cutLook, routedToDeadEnd, factoryFacts, recordsToken } from "./release-driver-cut.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOUR = 3600 * 1000;
@@ -1334,12 +1335,16 @@ function ghRelease(env, args, input) {
 
 // After the freeze (D-419): when the AI run judged the candidate's failed scenarios to be the test
 // machines' (owner step staging-retry), only the failed jobs run once more, at most twice per release,
-// through root's own GitHub login (the one auto-stage uses). A rerun that passes goes to staging-check,
-// which records it and tells him "it is on your server" (once, its own rule).
-const ghRoot = (env, args, input) => {
-  const r = spawnSync("gh", ["api", ...args], { input, encoding: "utf8", timeout: 120000, env: { PATH: ROOT_PATH, HOME: "/root" } });
-  if (r.status !== 0) throw new Error((r.stderr || "").trim().split("\n").pop() || `exit ${r.status}`);
-  return JSON.parse(r.stdout || "null");
+// as the builder App (an empty gh folder and its token, never root's own login, the owner's). A rerun
+// that passes goes to staging-check, which records it and tells him "it is on your server" (once, its own rule).
+export const ghRoot = (env, args, input, spawn = spawnSync) => {
+  const ghDir = fs.mkdtempSync(path.join(os.tmpdir(), "rd-gh-"));
+  try {
+    const token = mintToken(env, "actions=write,metadata=read");
+    const r = spawn("gh", ["api", ...args], { input, encoding: "utf8", timeout: 120000, env: { PATH: ROOT_PATH, GH_CONFIG_DIR: ghDir, GH_TOKEN: token, GH_PROMPT_DISABLED: "1" } });
+    if (r.status !== 0) throw new Error((r.stderr || "").trim().split("\n").pop() || `exit ${r.status}`);
+    return JSON.parse(r.stdout || "null");
+  } finally { fs.rmSync(ghDir, { recursive: true, force: true }); }
 };
 export function stagingRetry(env, deps, plan, state, now, record, notify = () => {}) {
   const want = state.staging_retry;
@@ -1365,7 +1370,7 @@ export function stagingRetry(env, deps, plan, state, now, record, notify = () =>
   if (!info || info.status !== "completed" || Date.parse(info.updated_at || 0) < Date.parse(r.at)) return false;
   r.done = true;
   if (info.conclusion === "success") {
-    const c = (deps.stagingCheck || (() => spawnSync(process.execPath, ["scripts/release/staging-check.mjs", env.REPO, plan.version, "--release", plan.id, "--tell"], { cwd: env.DEV_CHECKOUT, encoding: "utf8", timeout: 20 * 60000, env: { PATH: ROOT_PATH, HOME: "/root" } })))();
+    const c = (deps.stagingCheck || (() => spawnSync(process.execPath, ["scripts/release/staging-check.mjs", env.REPO, plan.version, "--release", plan.id, "--tell"], { cwd: env.DEV_CHECKOUT, encoding: "utf8", timeout: 20 * 60000, env: { PATH: ROOT_PATH, HOME: "/root", RECORDS_PUSH_TOKEN: recordsToken(env) } })))();
     record({ kind: "staging check after the rerun", what: `run ${run} passed on its rerun; staging-check exit ${c.status}` });
     delete state.staging_retry;
   } else record({ kind: "staging rerun failed", what: `run ${run}: ${info.conclusion}` });
