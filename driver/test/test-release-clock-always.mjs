@@ -348,3 +348,10 @@ test("a halt's rung that ended on the clock remembers which AI it ran on, so run
   assert.equal(a.actions.launch.rung, 2);
   assert.deepEqual(a.actions.launch.c.tries.map(t => [t.rung, t.provider]), [[1, "claude"]], "the driver picks the other provider from this try");
 });
+
+test("the release is missing from a round's read (the records checkout could not be read): its tickets keep their states and the clock goes on", async () => {
+  const s = server({ worldAt: (now, m) => { const w = world32(now, m); if (m >= 10) { w.releases = []; w.staging = {}; } return w; }, look: () => LOOK32 });
+  s.deps.releaseFiles = () => ({ autoStage: { blocked: {} }, staging: null });
+  for (let m = 0; m <= 40; m += 5) await s.round(m);
+  assert.deepEqual(s.launched.filter(l => l.entry === `standstill:${ID32}`).map(l => l.minute), [15, 35], "a release that vanished from the read is not progress");
+});

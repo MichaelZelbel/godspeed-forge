@@ -32,7 +32,7 @@ import { gateStep, gateClear, GATE } from "./gate.mjs";
 import { movingUntilFor, heldUntil, creditEvents, creditKeyById, ACTIVITY, buildInventory, advance, violationEntry, describeRow, parseStage, stageStalled, factoryWorking, CHAIN, H as HR, ownerName } from "./inventory.mjs";
 import { actDefaults as onDutyDefaults, launchAct, actResult, markHandled, answeredFile, repairRequestChecked } from "./onduty.mjs";
 import { writeClockPage, STATUS_DIR as CLOCK_STATUS_DIR } from "./clockpage.mjs";
-import { STANDSTILL, buildingState, pageNamesRelease, partsOf, mergeParts, fpOf, inReleaseStep, workFor, tick, nextStep as clockNextStep, stillMinutes, namedIn, checkNamed, noticeText, repairWords, ownedBy, OWN_UNITS } from "./standstill.mjs";
+import { STANDSTILL, buildFromTokens, buildingState, pageNamesRelease, partsOf, mergeParts, fpOf, inReleaseStep, workFor, tick, nextStep as clockNextStep, stillMinutes, namedIn, checkNamed, noticeText, repairWords, ownedBy, OWN_UNITS } from "./standstill.mjs";
 import { aiDefaults, providers, factoryProvider, ladderCandidates, launchHelper, helperResult, refreshTokens, checkJson, helperDir, UNIT_RE } from "./ai.mjs";
 import { applyReport, applyDueDefaults, actDefaults, notify, plain } from "./act.mjs";
 import { housekeep, hkDefaults } from "./housekeeping.mjs";
@@ -540,6 +540,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       // before it says so), and the release then waits for him.
       const relObj = (world.releases || []).find(r => r.id === rel.id) || null;
       let bld = null; try { bld = relObj ? buildingState({ release: relObj, world, now, activity, prevTokens: (prev && prev.buildTokens) || ((jv.clocks || {})[rel.id] || {}).buildTokens || null }) : null; } catch (e) { record({ kind: "release clock: tickets unreadable", release: rel.id, why: String(e.message).slice(0, 160) }); }
+      if (!bld && rel.unread) { const tok = (prev && prev.buildTokens) || ((jv.clocks || {})[rel.id] || {}).buildTokens; if (tok) bld = buildFromTokens(tok); } // the release is not in this round's read: its tickets keep their last states
       if (bld && !bld.open) bld = null; // nothing unfinished (the read may only have been partial): no ticket part, as before
       // the owner's go: this round's look says so, or (the look cannot be read now) the last round's did
       state.waitingGo ||= {};

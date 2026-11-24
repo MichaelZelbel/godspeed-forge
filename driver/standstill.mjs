@@ -151,6 +151,13 @@ export function buildingState({ release, world, now, activity = null, prevTokens
   return { fp: h(["build", ...tickets.map(t => `${t.issue}:${merged[t.issue]}`)]), tokens: merged, work, lines, unread, open, total: tickets.length };
 }
 
+// A release this round's read does not list (the records checkout could not be read) while its clock goes on: its tickets keep the states
+// they had, so the clock neither resets nor ends. tokens: the last round's (or the journal's) per-ticket states.
+export function buildFromTokens(tokens) {
+  const entries = Object.entries(tokens || {});
+  return { fp: h(["build", ...entries.map(([n, t]) => `${n}:${t}`)]), tokens: { ...tokens }, work: [], lines: ["its tickets could not be read this round"], unread: true, open: Math.max(1, entries.filter(([, t]) => /^open\|/.test(String(t))).length), total: entries.length };
+}
+
 // A question that reached the owner (a page with a receipt, questions/pager.mjs: only money, publishing or deleting pages him) and
 // names this release, by one of its tickets' issue numbers, its version or its id, is the one reason besides the go for the release
 // to wait on him. pages: world.deliveredPages [{key, heading}]. A page that names nothing of the release pauses nothing of it.
