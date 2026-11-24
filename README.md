@@ -28,10 +28,11 @@ at one pinned revision, the way his README asks a coding agent to, and everythin
 
 The Forge installs Cole Medin's AI software factory with his installer. The Archon code it runs comes from
 [a public copy of his](https://github.com/MichaelZelbel/Archon), under his MIT license with his name: his
-version `1cfb8fc5` plus three changes. Building runs on the medium tier. A comment headed `Manager decision
-(Mission Control, not Michael)` carries the owner's authority for technical matters only. What the loop finds
+version `1cfb8fc5` plus four changes. Building runs on the medium tier. A comment headed `Manager decision
+(Mission Control, not Michael)` carries the owner's authority for technical matters only, and one headed `Manager
+decision (Mission Control, on Michael's standing instruction` settles product, scope, look and feel and behaviour too. What the loop finds
 beyond its own job goes as one `Found:` comment onto a `found-list` issue instead of a new issue each. See the
-[difference](https://github.com/MichaelZelbel/Archon/compare/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb...6ebb22b66803cf0fca1f185e65e49afe792e4075).
+[difference](https://github.com/MichaelZelbel/Archon/compare/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb...31f1dd6cff1d6304e34c50bb0bdb71c4b3df0930).
 
 ## Status
 
@@ -126,7 +127,12 @@ If the page does not open, your hosting company's firewall may be blocking it: l
   uses), through the same web server that gives Godspeed's notebook its address: on a native Godspeed a site file of
   the Forge's own in Godspeed's add-on folder (`/etc/caddy/godspeed-addons/godspeed-forge.caddy`, checked with
   `caddy validate` before Caddy takes it and taken out again if Caddy refuses it); on Godspeed's Docker server a Caddy
-  container of the Forge's own (`godspeed-forge-https`) that shares the certificates of Godspeed's. The install lets the
+  container of the Forge's own (`godspeed-forge-https`) that shares the certificates of Godspeed's. A server with no
+  Godspeed web address gets a Caddy of the Forge's own (`godspeed-forge-https.service`, installed from Caddy's apt
+  source when missing), at the server's tailnet name when it is on a tailnet (turn on HTTPS certificates for the tailnet
+  in Tailscale's admin page; that address opens only from devices on your tailnet, and no firewall line is printed for it),
+  else at its DNS name when that points at the server and port 80 is free. When Godspeed later gets a web address, the
+  Forge's own Caddy goes and the page moves to Godspeed's. The install lets the
   port in through the server's own firewall when ufw or firewalld is on; a firewall your hosting company runs in front
   of the server must let it in too.
 - **The sign-in** is the user name `forge` and a password made on your server. Running the install line or setup again
@@ -151,7 +157,7 @@ If the page does not open, your hosting company's firewall may be blocking it: l
   goes once the new one answers; a new one that does not answer gives way to the old one, which runs again, and only
   the install line, setup or `godspeed-forge watch` try the new one again. The page's copy of Archon lives in
   `/opt/godspeed-forge/watch/` (about 2 GB per version).
-- **When it cannot be set up** (no web address from Godspeed on the server yet, a Godspeed too old to give add-ons one,
+- **When it cannot be set up** (no web address from Godspeed, tailnet or DNS name for the server, a Godspeed too old to give add-ons one,
   a download that failed, or a factory whose Archon keeps its records in a database server through `DATABASE_URL`
   instead of its database file, since only a file can be kept read-only to the page), the install and setup say why in
   one sentence and carry on; `godspeed-forge watch` tries again. On Godspeed's Docker server a new web server container
