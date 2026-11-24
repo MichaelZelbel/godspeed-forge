@@ -1,5 +1,5 @@
 // node --disable-warning=ExperimentalWarning driver/test/steps/test-question-review.mjs
-// test cases: 17
+// test cases: 18
 // What the first independent review of the question work (Codex, 2026-11-24) found, each kept from coming back.
 import { testCase } from "../../../test/cases.mjs";
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
@@ -257,4 +257,13 @@ testCase("a two-hour message Telegram took while the journal could not be writte
   assert.equal(sent.length, 1, "never sent twice");
   const j = fs.readFileSync(jdir, "utf8");
   assert.ok(j.includes('"t":"notice"') && j.includes('"telegram":"77"'), "in the journal with its receipt");
+}
+
+// ---- the fourth round of the review
+testCase("any app store counts, serving someone instead of the current people is a mission change, and NOT RECOMMENDED in capitals is no recommendation");
+{
+  for (const t of ["launching in an app store", "listing it in an app store"]) assert.equal((categoryOf(t) || {}).category, "publish", t);
+  const p = pickOption({ heading: "h", body: "Options: (a) keep it for individual users; (b) serve teams instead of individual users. Recommendation: (b)." });
+  assert.equal(p.how, "keeps the mission"); assert.equal(p.option.label, "a");
+  assert.equal(pickOption({ heading: "h", body: "- **A.** Rewrite.\n- **B.** Keep it.\n\nNOT recommended: A" }).option.label, "b");
 }

@@ -57,7 +57,7 @@ export function parseOptions(body) {
 // -> {text, label} | null. The first recommendation line; it ends where the line's default starts.
 export function parseRecommendation(body) {
   for (const line of String(body || "").replace(/\r/g, "").split("\n")) {
-    const m = /(?:^|[\s.])(?<![Nn]ot\s)(?:My\s+)?[Rr]ecommend(?:ation|ed)\s*:\s*(.+?)(?=\s+Default\b|$)/.exec(line) || /\bWhat Mission Control would do:\s*(.+)$/.exec(line); // "Not recommended:" is no recommendation
+    const m = /(?:^|[\s.])(?<![Nn][Oo][Tt]\s)(?:My\s+)?[Rr]ecommend(?:ation|ed)\s*:\s*(.+?)(?=\s+Default\b|$)/.exec(line) || /\bWhat Mission Control would do:\s*(.+)$/.exec(line); // "Not recommended:" is no recommendation
     if (!m) continue;
     const text = String(m[1]).replace(/\*\*/g, "").trim().replace(/\s+/g, " ");
     if (!text) continue;
@@ -73,7 +73,7 @@ const FINAL = /\b(delete|deleted|remove|removes|drop|close|closes|replace|retire
 const score = t => (String(t).match(UNDOABLE) || []).length - 2 * (String(t).match(FINAL) || []).length;
 // what the project is: its mission, its purpose, who it is for. An option that changes one of these is never taken for
 // him; the option that keeps it is.
-const MISSION = /\b(?:mission|purpose|audience|target (?:group|users|market)|(?:new|different|another|other) (?:kind of users|market)|who (?:it|the (?:\w+ )?(?:product|app|project|site|service)) (?:is for|serves|is meant for)|whom (?:it|the \w+) serves|what the (?:product|app|project) is)\b/i;
+const MISSION = /\b(?:mission|purpose|audience|target (?:group|users|market)|(?:new|different|another|other) (?:kind of users|market)|who (?:it|the (?:\w+ )?(?:product|app|project|site|service)) (?:is for|serves|is meant for)|whom (?:it|the \w+) serves|what the (?:product|app|project) is|(?:serve|serves|serving|target|targets|targeting|built for|made for|meant for) (?:\w+ ){0,3}instead of)\b/i;
 const CHANGES = /\b(?:amend|amends|amendment|change|changes|changing|new|different|another|widen|widens|narrow|narrows|redefine|redefines|replace|replaces|pivot|serve|serves)\b/i;
 
 // The option Mission Control takes for a question the owner is not asked.

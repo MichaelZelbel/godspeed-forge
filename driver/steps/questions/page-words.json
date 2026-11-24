@@ -40,7 +40,7 @@
       "\\bsend (?:\\w+ ){0,3}to (?:all |the |our |every |each |existing )?(?:users|customers|subscribers|members|clients|mailing list|people)\\b",
       "\\binvit(?:e|es|ing|ations?) (?:\\w+ ){0,2}(?:users|customers|people|members|clients|testers|subscribers)\\b",
       "\\bdeploy(?:s|ed|ing)? (?:it |this )?(?:to|on) (?:production|the public|the live)",
-      "\\b(?:submit|publish|release|upload|ship|put|launch|list)(?:s|ted|ed|es|ing)? (?:\\w+ ){0,3}(?:to|on|in|into) the (?:app|play|chrome web|microsoft) store\\b",
+      "\\b(?:submit|publish|release|upload|ship|put|launch|list)(?:s|ted|ed|es|ing)? (?:\\w+ ){0,3}(?:to|on|in|into) (?:the |an |a |its |our |their )?(?:app|play|chrome web|microsoft|apple|google play)(?: app)? stores?\\b",
       "\\bsubmit (?:it |this )?(?:to|for) (?:review|the store|app review)",
       "\\b(?:share|post|promote|advertise|announce)(?:s|d|ed|ing)? (?:\\w+ ){0,3}(?:on|to|via|in) (?:social media|linkedin|x|twitter|facebook|instagram|reddit|youtube|tiktok|mastodon|bluesky|threads|hacker news|product hunt|discord|slack)\\b",
       "\\blaunch(?:es|ed|ing)? (?:it |this |them |the \\w+ )?(?:publicly|to the public|to (?:users|customers|everyone|subscribers))"
