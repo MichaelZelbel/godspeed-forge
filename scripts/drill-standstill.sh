@@ -164,11 +164,10 @@ ExecStart=$DRILL/bin/stage-look
 EOF
   cat >/etc/systemd/system/forge-drill-stage.timer <<'EOF'
 [Unit]
-Description=The standstill drill's stand-in for the stage step, every 15 minutes
+Description=The standstill drill's stand-in for the stage step, every 15 minutes after minute 0
 [Timer]
-OnCalendar=*:0/15
-[Install]
-WantedBy=timers.target
+OnActiveSec=15min
+OnUnitActiveSec=15min
 EOF
 }
 
@@ -235,14 +234,15 @@ do_start() {
   # state from the last round that saw the old one)
   say "Running the driver's first round ..."
   systemctl start factory-driver.service || stop "the driver's first round failed: journalctl -u factory-driver.service"
-  systemctl enable --now forge-drill-stage.timer >/dev/null
   # minute 0 right after a round on the driver's own timer: the worst moment for a change, as the next round is the furthest away
   say "Waiting for the driver's next round on its timer ..."
   local before; before="$(stat -c %Y "$STATE/heartbeat" 2>/dev/null || echo 0)"
   until [ "$(stat -c %Y "$STATE/heartbeat" 2>/dev/null || echo 0)" -gt "$before" ]; do sleep 2; done
-  # minute 0: the release step starts saying beta.31's waiting sentence, and nothing about the release changes after it
+  # minute 0: the release step starts saying beta.31's waiting sentence, and nothing about the release changes after it; the
+  # stand-in stage step repeats it every 15 minutes from now on (never before minute 0, so the drill measures from the change)
   date -u +%s >"$DRILL/started-at"
   "$DRILL/bin/stage-look"
+  systemctl start forge-drill-stage.timer
   say "The release $RELEASE stands still from $(date -u +%FT%TZ) (minute 0). Check with: bash $0 check (after minute 60)."
 }
 
@@ -288,7 +288,8 @@ CHECK
 # Back to before `start` (the Forge stays installed): the driver's timers off, its state, the dead-man's and the drill's gone.
 do_reset() {
   preconditions
-  systemctl disable --now factory-driver.timer factory-deadman.timer forge-drill-stage.timer >/dev/null 2>&1 || true
+  systemctl disable --now factory-driver.timer factory-deadman.timer >/dev/null 2>&1 || true
+  systemctl stop forge-drill-stage.timer >/dev/null 2>&1 || true
   rm -rf "$STATE" /var/lib/godspeed/forge/deadman "$SPOOL" "$DRILL/started-at" "$DRILL/deadman-journal.json"
   rm -f "$SETTINGS/driver.json" "$SETTINGS/driver.env" "$SETTINGS/projects/drill-owner--drill-product.json" /usr/local/sbin/gh /usr/local/bin/gh
 }

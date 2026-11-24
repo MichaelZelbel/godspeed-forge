@@ -2,7 +2,7 @@ import { TEST_ENV } from "./env.mjs";
 // The release clock's own rules (standstill.mjs); the whole round, beta.31 replayed, is in test-driver.mjs.
 import { test } from "./harness.mjs";
 import assert from "node:assert/strict";
-import { STANDSTILL, normaliseLook, releaseState, inReleaseStep, workFor, tick, nextStep, namedIn, checkNamed, noticeText, repairWords, OWN_UNITS } from "../standstill.mjs";
+import { STANDSTILL, normaliseLook, releaseState, inReleaseStep, workFor, tick, nextStep, namedIn, checkNamed, noticeText, repairWords, OWN_UNITS, ownedBy } from "../standstill.mjs";
 void TEST_ENV;
 
 const MIN = 60000, T0 = Date.parse("2026-11-23T21:00:00Z");
@@ -45,9 +45,9 @@ test("checkable work holds the clock only while it runs and inside its own limit
     { headBranch: "candidate/2.0.0-beta.30", createdAt: new Date(now - 5 * MIN).toISOString(), name: "scenarios" },
     { headBranch: "release/version-2.0.0-beta.31", headSha: "abc", createdAt: new Date(now - 5 * MIN).toISOString(), name: "required" },
   ], stop: { at: new Date(now - 30 * MIN).toISOString() }, procs: [{ startedAt: now - 10 * MIN, args: "node /x/release/auto-stage.mjs" }, { startedAt: now - 10 * MIN, args: "node /x/release/freeze.mjs o/r 2.0.0-beta.31 --commit abc" }, { startedAt: now - 10 * MIN, args: "node /x/release/stage-server.mjs o/r 2.0.0-beta.30 --release godspeed-2.0.0-beta.30-y" }] };
-  const w = workFor({ id: ID, activity, autoStage: { bump: { branch: "release/version-2.0.0-beta.31", head: "abc", pr: 1094 } }, about: true, now });
+  const w = workFor({ id: ID, activity, autoStage: { bump: { branch: "release/version-2.0.0-beta.31", head: "abc", pr: 1094 } }, about: true, now, repo: "o/r" });
   assert.deepEqual(w.map(x => x.what), ["a GitHub run (scenarios) on candidate/2.0.0-beta.31", "a GitHub run (required) on release/version-2.0.0-beta.31", "auto-stage's STOP file (the scenarios run)", "the release step's freeze program"]);
-  assert.deepEqual(workFor({ id: ID, activity: { ...activity, runs: [activity.runs[0]] }, about: false, now }).map(x => x.what), ["a GitHub run (scenarios) on candidate/2.0.0-beta.31", "the release step's freeze program"], "a STOP belongs to the release the stage step looks at; a program to the release whose version it names (beta.30's install is not this one's)");
+  assert.deepEqual(workFor({ id: ID, activity: { ...activity, runs: [activity.runs[0]] }, about: false, now, repo: "o/r" }).map(x => x.what), ["a GitHub run (scenarios) on candidate/2.0.0-beta.31", "the release step's freeze program"], "a STOP belongs to the release the stage step looks at; a program to the release whose version it names (beta.30's install is not this one's)");
   assert.deepEqual(workFor({ id: ID, activity: { runs: [{ headBranch: "candidate/2.0.0-beta.31", createdAt: new Date(now - 4 * 60 * MIN).toISOString() }] }, about: true, now }), [], "a run past its own limit holds nothing");
   assert.deepEqual(workFor({ id: ID, activity: null, about: true, named: [{ what: "the GitHub run 9", answeredAt: now - 61 * MIN }], now }), [], "what a helper named holds at most an hour after its answer");
 });
@@ -134,3 +134,21 @@ test("a round that starts a few seconds early still takes its step: never a roun
   assert.deepEqual(due[0], [15, "helper"], "the change came after the round at -5: the round at 15 is 20 minutes after it and takes the step");
 });
 
+
+test("only the release's own programs and units count: another project's freeze of the same version number, another release's install, or any unit called scenarios do not", () => {
+  const now = T0 + 60 * MIN, procs = [
+    { startedAt: now - 5 * MIN, args: "node /x/release/freeze.mjs someone/other 2.0.0-beta.31 --commit c" },
+    { startedAt: now - 5 * MIN, args: `node /x/release/stage-server.mjs o/r 2.0.0-beta.31 --release godspeed-2.0.0-beta.31-other` },
+    { startedAt: now - 5 * MIN, args: `node /x/release/staging-check.mjs o/r 2.0.0-beta.31 --release ${ID} --tell` }];
+  assert.deepEqual(workFor({ id: ID, activity: { runs: [], procs }, about: true, now, repo: "o/r" }).map(w => w.what), ["the release step's staging-check program"]);
+  const own = { repo: "o/r", version: "2.0.0-beta.31" };
+  assert.equal(ownedBy({ kind: "unit", id: "other-project-scenarios.service" }, own), false);
+  assert.equal(ownedBy({ kind: "unit", id: "godspeed-freeze-2.0.0-beta.31.service" }, own), true);
+  assert.equal(ownedBy({ kind: "unit", id: "forge-step-stage.service" }, own), false);
+});
+
+test("a lost state file while a source cannot be read: the journal's state stands, never a new ladder", () => {
+  const r = tick(null, { fp: "what-could-be-read", work: [], now: T0 + 35 * MIN, lastRoundAt: T0 + 30 * MIN, journal: { fp: "the-state", since: T0, steps: ["helper"], launches: [{ rung: 1, provider: "codex" }], tries: [] }, incomplete: true });
+  assert.deepEqual([r.clock.fp, Math.round(r.clock.stillMs / MIN), r.clock.done.helper, r.clock.rung1Provider], ["the-state", 35, true, "codex"]);
+  assert.equal(tick(null, { fp: "what-could-be-read", work: [], now: T0 + 35 * MIN, lastRoundAt: T0 + 30 * MIN, journal: { fp: "the-state", since: T0, steps: [] } }).clock.fp, "what-could-be-read", "a complete read that differs is a change");
+});

@@ -76,8 +76,10 @@ export function inReleaseStep(id, stage, look, journal) {
 const versionIn = s => (/(\d+\.\d+\.\d+(?:-[a-z]+\.\d+(?:\.\d+)*)?)/i.exec(String(s || "")) || [])[1] || null;
 // -> [{what, until}] the work that holds the clock now (until > now). activity: readActivity's {runs, stop, procs}; autoStage: the
 // release's auto-stage state (its version pull request is rs.bump); about: the stage step's look is about this release; named:
-// what an acting run's in-progress named and the driver found running this round, with the time of the answer.
-export function workFor({ id, activity, autoStage, about, named = [], now }) {
+// what an acting run's in-progress named and the driver found running this round, with the time of the answer; repo: the
+// release's repository (a release program names it first: freeze.mjs <repo> <version>, stage-server.mjs <repo> <version>
+// --release <id>).
+export function workFor({ id, activity, autoStage, about, named = [], now, repo = "" }) {
   const out = [];
   const v = versionIn(id), bump = (autoStage && autoStage.bump) || null;
   for (const r of (activity && activity.runs) || []) {
@@ -91,7 +93,9 @@ export function workFor({ id, activity, autoStage, about, named = [], now }) {
   if (about && activity && activity.stop && Number.isFinite(Date.parse(activity.stop.at))) out.push({ what: "auto-stage's STOP file (the scenarios run)", until: Date.parse(activity.stop.at) + STANDSTILL.stopHours * H });
   for (const p of (activity && activity.procs) || []) {
     const m = /release\/(freeze|stage-server|staging-check)\.mjs/.exec(String(p.args || ""));
-    if (m && v && String(p.args).split(/\s+/).some(a => a === v || a.startsWith(`${v}.`)) && Number.isFinite(p.startedAt)) out.push({ what: `the release step's ${m[1]} program`, until: p.startedAt + STANDSTILL.scenariosHours * H });
+    const args = String(p.args || "").split(/\s+/), ri = args.indexOf("--release");
+    const mine = !!m && !!v && !!repo && args.includes(repo) && args.some(a => a === v || a.startsWith(`${v}.`)) && (ri < 0 || args[ri + 1] === id);
+    if (mine && Number.isFinite(p.startedAt)) out.push({ what: `the release step's ${m[1]} program`, until: p.startedAt + STANDSTILL.scenariosHours * H });
   }
   for (const n of named || []) if (Number.isFinite(n.answeredAt)) out.push({ what: `${n.what}, which an acting run named and is running`, until: n.answeredAt + STANDSTILL.namedHoldMinutes * MIN });
   return out.filter(w => w.until > now);
@@ -102,9 +106,12 @@ export function workFor({ id, activity, autoStage, about, named = [], now }) {
 // steps}), which a lost or corrupt state file cannot take away. -> { clock, due: ["helper" | "other-ai" | "repair" | "notice"] }
 // A new state is counted from the last round that saw the old one (the state changed somewhere after it), so a step is never
 // late against the change itself, and at most one round early.
-export function tick(prev, { fp, work, now, lastRoundAt, journal = null }) {
+// incomplete: this round's read lacked a source (a look that could not be read, a file that could not be read): unknown is
+// unchanged, so the clock's own state stands, or with no clock from the state file the journal's.
+export function tick(prev, { fp, work, now, lastRoundAt, journal = null, incomplete = false }) {
   const held = work.filter(w => w.until > now);
   let c;
+  if (incomplete) { if (prev && prev.fp) fp = prev.fp; else if (journal && journal.fp && Number.isFinite(journal.since)) fp = journal.fp; }
   if (!(prev && prev.fp === fp) && journal && journal.fp === fp && Number.isFinite(journal.since)) {
     // the state file lost this clock: the journal has when this state began and which steps were taken (time held by work
     // since then is not known, so it counts as still: the steps come early, never late)
@@ -165,7 +172,7 @@ export const OWN_UNITS = /^(factory-driver|factory-deadman|factory-act-|factory-
 export const RELEASE_UNITS = /(freeze|scenario|stage-server|staging-check)/i;
 export function ownedBy(n, own) {
   if (!n || !own) return false;
-  if (n.kind === "unit") return RELEASE_UNITS.test(n.id) && !OWN_UNITS.test(n.id);
+  if (n.kind === "unit") return RELEASE_UNITS.test(n.id) && !OWN_UNITS.test(n.id) && !!own.version && n.id.includes(own.version); // a release program's unit that names this release
   if (String(n.repo || "").toLowerCase() !== String(own.repo || "").toLowerCase()) return false;
   const bump = own.bump || null, nums = (own.prNumbers || []).map(Number), heads = own.prHeads || [];
   if (n.kind === "pr") return (!!bump && Number(n.id) === Number(bump.pr)) || nums.includes(Number(n.id));

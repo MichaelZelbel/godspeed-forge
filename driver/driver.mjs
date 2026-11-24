@@ -501,12 +501,15 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     const releasesUnread = (world.unreadable || []).some(u => u.part === "releases");
     const clockEvents = [];
     // the releases read this round; when the release list itself could not be read, the ones the clock already has go on
-    const clocked = [...(world.releases || []).map(r => ({ id: r.id, version: r.version })), ...(releasesUnread ? Object.keys(state.standstill).filter(id => !(world.releases || []).some(r => r.id === id)).map(id => ({ id, version: (state.standstill[id] || {}).version, unread: true })) : [])];
+    // (with the state file lost as well: the releases the journal holds open and has a clock for)
+    const openIds = new Set((jv.open || []).map(r => r.id));
+    const carried = releasesUnread ? [...new Set([...Object.keys(state.standstill), ...Object.keys(jv.clocks || {}).filter(id => openIds.has(id))])].filter(id => !(world.releases || []).some(r => r.id === id)) : [];
+    const clocked = [...(world.releases || []).map(r => ({ id: r.id, version: r.version })), ...carried.map(id => ({ id, version: (state.standstill[id] || {}).version || (/(\d+\.\d+\.\d+(?:-[A-Za-z]+\.\d+(?:\.\d+)*)?)/.exec(id) || [])[1] || null, unread: true }))];
     for (const rel of clocked) {
       const prev = state.standstill[rel.id] || null;
       const about = !!(stage && stage.id === rel.id);
       let step = rel.unread ? { yes: true, why: "the release list could not be read this round; the clock goes on" }
-        : !lookKnown && prev ? { yes: true, why: "the release step's look cannot be read now; the clock goes on" }
+        : !lookKnown && (prev || (jv.clocks || {})[rel.id]) ? { yes: true, why: "the release step's look cannot be read now; the clock goes on" }
         : inReleaseStep(rel.id, stage, about ? stageText : "", jv.releases[rel.id] || null);
       if (!step.yes) { clocks[rel.id] = { id: rel.id, inStep: false, why: step.why }; delete state.standstill[rel.id]; continue; }
       // an unreadable source never stops the clock: nothing is known to have changed, so its part is the one the clock has
@@ -515,11 +518,13 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       const { look, files, fp } = now0;
       try {
         const named = prev && prev.fp === fp && (prev.named || []).length ? (deps.checkNamed || checkNamedReal)(prev.named).filter(n => n.running && ownedBy(n, releaseOwn(rel.id, files.autoStage))) : [];
-        const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, about, named, now });
-        const t = tick(prev, { fp, work, now, lastRoundAt: jv0.lastRoundAt, journal: (jv.clocks || {})[rel.id] || null });
-        t.clock.named = named; t.clock.version = rel.version || t.clock.version; t.clock.look = look; t.clock.parts = files;
+        const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, about, named, now, repo: env.REPO });
+        const incomplete = !lookKnown || !!now0.unread;
+        const t = tick(prev, { fp, work, now, lastRoundAt: jv0.lastRoundAt, journal: (jv.clocks || {})[rel.id] || null, incomplete });
+        t.clock.named = named; t.clock.version = rel.version || t.clock.version;
+        if (!incomplete) { t.clock.look = look; t.clock.parts = files; } // what was read whole; an incomplete read keeps the last whole one
         // the journal keeps when this state began, so a lost state file never resets the clock
-        if (!((jv.clocks || {})[rel.id] && jv.clocks[rel.id].fp === fp)) clockEvents.push({ t: "clock", release: rel.id, fp, since: t.clock.since, at: nowIso });
+        if (!((jv.clocks || {})[rel.id] && jv.clocks[rel.id].fp === t.clock.fp)) clockEvents.push({ t: "clock", release: rel.id, fp: t.clock.fp, since: t.clock.since, at: nowIso });
         state.standstill[rel.id] = t.clock;
         clocks[rel.id] = { id: rel.id, version: t.clock.version, inStep: true, why: step.why, due: t.due, look, files, minutes: stillMinutes(t.clock), held: t.clock.held, next: clockNextStep(t.clock) };
       } catch (e) { record({ kind: "release clock failed", release: rel.id, why: String(e.message).slice(0, 200) }); }

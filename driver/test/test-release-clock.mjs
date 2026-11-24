@@ -229,3 +229,15 @@ test("ticket 01: the notice's title says about an hour too", async () => {
   for (let m = 0; m <= 60; m += 5) await s.round(m);
   assert.ok(titles.includes("Beta 31 has not moved for about an hour"), JSON.stringify(titles));
 });
+
+test("ticket 01: the state file lost while the look cannot be read and the release list cannot be read: the journal keeps the hour", async () => {
+  const s = server({ answers: { 1: LIE } });
+  const read = s.deps.readWorld;
+  s.deps.readWorld = async () => { const x = await read(); if (s.at() >= 35) { x.releases = []; x.unreadable = [{ part: "releases", error: "the records checkout cannot be read" }]; } return x; };
+  s.deps.stageLook = async () => (s.at() >= 35 ? null : LOOK);
+  for (let m = 0; m <= 30; m += 5) await s.round(m);
+  fs.rmSync(path.join(s.env.STATE_DIR, "state.json"));
+  for (let m = 35; m <= 60; m += 5) await s.round(m);
+  assert.deepEqual(byClock(s).map(l => [l.minute, l.provider]), [[20, "codex"], [40, "claude"]], "no new ladder: rung 1 not again, rung 2 at 40 on the other AI");
+  assert.deepEqual(s.requests.map(r => r.minute), [60]);
+});
