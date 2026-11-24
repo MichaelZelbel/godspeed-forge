@@ -18,7 +18,9 @@
 //                     it, and the decision goes into the driver's journal (`godspeed-forge driver status --decisions`).
 //   paged             only a question whose answer would spend money, publish or send to other people, or
 //                     irreversibly delete people's data (severity.mjs) reaches him, through pager.mjs: Telegram with
-//                     a receipt, then email and an urgent issue, until he answers on any of them.
+//                     a receipt, then email and an urgent issue, until he answers on any of them, or until it is
+//                     withdrawn: someone who may decide decides it on GitHub, or its heading leaves the issue (#166).
+//                     A withdrawn page that reached him tells him once, and a decided question is never paged.
 //   the driver's      a question that offers nothing to pick from becomes the driver's own obstacle (kind "question"),
 //   decide helper     which its decide helper settles with the second check (world.mjs reads `routed` from here).
 // The queue for Mission Control (mission-control-queue.json) had no reader after 2026-11-18; it is handed over once
