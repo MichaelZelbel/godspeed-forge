@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -eu
 cd "$(dirname "$0")/.."
+. test/cases.sh
+# test cases: 4
 
 root=$(mktemp -d)
-trap 'rm -rf "$root"' EXIT
+trap 'test_cases_end; rm -rf "$root"' EXIT
 gh="$PWD/test/stand-in-github/gh"
 control="$PWD/test/stand-in-github/control"
 remote="$root/remote.git"
@@ -23,6 +25,7 @@ printf 'released\n' >"$work/result.txt"
 git -C "$work" commit -qam release
 git -C "$work" push -q origin feature
 
+test_case "issues and comments are kept in the stand-in state"
 export STANDIN_GITHUB_STATE="$root/state-one"
 ln -s "$remote" "$root/container-remote.git"
 "$control" init --remote "$remote" --runtime-remote "$root/container-remote.git"
@@ -31,12 +34,14 @@ issue=$("$gh" issue create --title "Owner question" --body "Choose one")
 "$gh" issue view "$issue" --json title,comments >"$root/issue.json"
 grep -F 'The owner chose one' "$root/issue.json" >/dev/null
 
+test_case "a pull request merges into the local remote"
 pr=$("$gh" pr create --title "Release" --body "Ready" --head feature --base main)
 "$gh" pr merge "$pr"
 "$gh" pr view "$pr" --json state,merged >"$root/pr.json"
 grep -F '"state": "MERGED"' "$root/pr.json" >/dev/null
 [ "$(git --git-dir="$remote" show main:result.txt)" = "released" ]
 
+test_case "releases keep their prerelease and latest marks"
 "$gh" release create v1 --title "Version one" --notes "Previous"
 "$gh" release create v2 --title "Version two" --notes "Candidate" --prerelease
 [ -n "$(git --git-dir="$remote" rev-parse refs/tags/v1)" ]
@@ -56,6 +61,7 @@ release_v2=$("$gh" release view v2 --json isPrerelease,isLatest)
 grep -F '"tagName": "v1"' "$root/releases.json" >/dev/null
 grep -F '"tagName": "v2"' "$root/releases.json" >/dev/null
 
+test_case "a new state starts empty and a remote that is not local is refused"
 export STANDIN_GITHUB_STATE="$root/state-two"
 "$control" init --remote "file://$remote"
 [ "$("$gh" issue list --json number)" = "[]" ]

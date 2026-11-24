@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -eu
 cd "$(dirname "$0")/.."
+. test/cases.sh
+# test cases: 3
 
 root=$(mktemp -d)
-trap 'rm -rf "$root"' EXIT
+trap 'test_cases_end; rm -rf "$root"' EXIT
 mkdir "$root/bin"
 cat >"$root/bin/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -47,6 +49,7 @@ exit 1
 EOF
 chmod +x "$root/bin/docker"
 
+test_case "two scenario runs at once each fail closed, naming the missing step"
 export PATH="$root/bin:$PATH"
 export FAKE_DOCKER_LOG="$root/docker.log"
 set +e
@@ -61,6 +64,7 @@ two_status=$?
 set -e
 [ "$one_status" -ne 0 ]
 [ "$two_status" -ne 0 ]
+test_case "each run reports the same three named failures and 0 of 3 pass"
 expected='FAIL forge-setup: Forge setup command is missing
 FAIL forge-one-release: Forge plan-release command is missing
 FAIL forge-questions: Forge question relay is missing
@@ -70,6 +74,7 @@ FAIL forge-questions: Forge question relay is missing
 [ "$(wc -l <"$root/docker.log")" -eq 6 ]
 [ "$(sort -u "$root/docker.log" | wc -l)" -eq 6 ]
 
+test_case "a key or token written into a scenario's files is caught"
 printf '{"github_token":"ghp_live_value"}\n' >"$root/config.json"
 set +e
 ( . scenarios/support/common.sh; assert_no_secrets "$root/config.json" ) >"$root/secret.out"
