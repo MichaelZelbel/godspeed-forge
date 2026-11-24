@@ -62,6 +62,8 @@ export const CORE = [
   { key: "ai.models.check", env: ["FD_CHECK_MODEL"], meaning: "model of the second check" },
   { key: "ai.models.act_codex", env: ["FD_ACT_CODEX_MODEL"], meaning: "Codex model of acting runs" },
   { key: "ai.models.act_claude", env: ["FD_ACT_CLAUDE_MODEL"], meaning: "Claude model of acting runs" },
+  { key: "ai.models.login_check_claude", env: ["FD_LOGIN_CHECK_CLAUDE_MODEL"], meaning: "the smallest Claude model, for the sign-in check after an acting run could not sign in (haiku when unset)" },
+  { key: "ai.models.login_check_codex", env: ["FD_LOGIN_CHECK_CODEX_MODEL"], meaning: "the smallest Codex model, for that sign-in check (the helpers' Codex model when unset)" },
   { key: "ai.openrouter_allow", def: () => [], env: ["FD_OPENROUTER_ALLOW"], fmt: csv, meaning: "free OpenRouter models a helper may use" },
   { key: "ai.act_brain_dir", required: true, env: ["FD_ACT_BRAIN", "FD_GODSPEED_DIR", "RD_GODSPEED_DIR", "DM_BRAIN"], meaning: "the folder acting runs work in" },
   { key: "budget.act_runs_per_day", def: () => 8, env: ["FD_ACT_RUNS_PER_DAY"], meaning: "acting runs a day" },

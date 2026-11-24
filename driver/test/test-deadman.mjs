@@ -158,3 +158,16 @@ test("the keeper runs with the configured node, and its rung counts as attempted
   const r3 = await run(w.cfg, NOW + 10 * MIN, () => {}, deps);
   assert.notEqual(r3.step, "rollback", "once attempted it is not asked a third time");
 });
+
+// the Forge 0.3.1, ticket 04 (#141): the dead-man's repair run keeps its AI sign-in the same way (its own copy of the rule)
+test("ticket 04: the repair run's sign-in links: a plain file in a link's place is kept aside with the date and the link made again", async () => {
+  const { linkLogin } = await import("../deadman/deadman.mjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dm-login-"));
+  const target = path.join(dir, "factory", ".claude", ".credentials.json"); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, "{}");
+  const link = path.join(dir, "acts", "claude-home", ".credentials.json"); fs.mkdirSync(path.dirname(link), { recursive: true }); fs.writeFileSync(link, "a plain file");
+  assert.equal(linkLogin(target, link, Date.parse("2026-11-24T10:00:00Z")), "moved aside");
+  assert.ok(fs.lstatSync(link).isSymbolicLink() && path.resolve(fs.readlinkSync(link)) === path.resolve(target));
+  assert.equal(fs.readFileSync(`${link}.replaced-20261124T100000Z`, "utf8"), "a plain file");
+  assert.equal(linkLogin(target, link), "kept");
+});
+

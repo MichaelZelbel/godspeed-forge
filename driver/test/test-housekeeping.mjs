@@ -244,3 +244,17 @@ test("fail closed: an unreadable process table or an unreadable PAUSE link never
   assert.deepEqual(await run(null, { realpath: () => { throw Object.assign(new Error("io"), { code: "EIO" }); } }), [], "a link that cannot be resolved: the STOP stays");
   assert.deepEqual(await run(null, { lstat: () => { throw Object.assign(new Error("io"), { code: "EIO" }); } }), [], "an unreadable lstat: the STOP stays");
 });
+
+// the Forge 0.3.1, ticket 04 (#141): an acting run that could not sign in is repaired by housekeeping, with no AI run of its own
+test("ticket 04: housekeeping links the acting runs' sign-in again and checks it on the smallest model; only an answer clears the login obstacle", async () => {
+  const calls = [];
+  const deps = { run: () => ({ status: 0, stdout: "", stderr: "" }), sleep: async () => {},
+    linkLogins: (home, dir, provider) => { calls.push(["link", home, dir, provider]); return [{ file: "auth.json", did: "kept" }]; },
+    signinCheck: (a, provider) => { calls.push(["check", provider]); return provider === "codex" ? { ok: true, why: "gpt-5.6-terra answered" } : { ok: false, why: "Failed to authenticate: OAuth session expired" }; } };
+  const world = { server: {}, actLogins: { codex: { at: "t", said: "x" }, claude: { at: "t", said: "y" } } };
+  const out = await housekeep({ ACT: { FACTORY_HOME: "/home/factory", ACT_DIR: "/var/acts", LOGIN_CLAUDE_MODEL: "haiku", LOGIN_CODEX_MODEL: "gpt-5.6-terra" } }, world, deps);
+  assert.deepEqual(calls, [["link", "/home/factory", "/var/acts", "codex"], ["check", "codex"], ["link", "/home/factory", "/var/acts", "claude"], ["check", "claude"]]);
+  assert.ok(out.done.some(d => /the acting runs sign in to codex again: its links were in place, and a sign-in check \(gpt-5\.6-terra answered\) worked/.test(d)));
+  assert.ok(out.failed.some(d => /still cannot sign in to claude/.test(d) && /OAuth session expired/.test(d)));
+  assert.deepEqual(world.actLoginsRepaired, ["codex"], "only the provider that answered is repaired");
+});

@@ -21,6 +21,13 @@ const IDLE = /workable nothing|found nothing to start/i;
 const ts = v => (v ? Date.parse(v) : NaN);
 const BAD_LOGIN = /not logged|logged out|no (credentials|login)|expired|unauthori|error|failed|invalid/i;
 
+// The acting runs' own sign-in (their homes link the factory user's files): a run that could not sign in (onduty.mjs loginFailure)
+// is a login obstacle of its provider, which housekeeping repairs. actLogins: {provider: {at, said}}
+export const actLoginObstacles = (actLogins, seen = {}, nowIso = new Date().toISOString()) => Object.entries(actLogins || {}).map(([provider, x]) => {
+  const id = obstacleId("login", `act:${provider}`);
+  return { id, kind: "login", provider, since: seen[id] || (x && x.at) || nowIso, evidence: [`the acting runs could not sign in to ${provider}: ${String((x && x.said) || "").slice(-200)}`] };
+});
+
 export function findObstacles(world, ledger = {}, now = Date.now(), cfg0 = {}) {
   const cfg = { ...CONFIG, ...cfg0, allowedHours: { ...CONFIG.allowedHours, ...(cfg0.allowedHours || {}) } };
   const seen = cfg.firstSeen || {};
@@ -125,6 +132,7 @@ export function findObstacles(world, ledger = {}, now = Date.now(), cfg0 = {}) {
       if (lg[k] && lg[k] !== "unknown" && BAD_LOGIN.test(lg[k]) && (/not logged in/i.test(lg[k]) || !/logged in/i.test(lg[k]))) add("login", k, {}, [`${k}: ${lg[k]}`]);
     }
   }
+  out.push(...actLoginObstacles(world.actLogins, seen, nowIso));
   if (cfg.noAi) add("no-ai", "no-ai", { since: cfg.noAi.since }, [cfg.noAi.evidence || "no AI provider reachable"]);
   return out;
 }

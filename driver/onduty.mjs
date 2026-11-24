@@ -41,6 +41,9 @@ export const actDefaults = (e = process.env) => ({
   NODE: e.FD_NODE || process.execPath,
   STATE_DIR: e.FD_STATE_DIR || "/var/lib/godspeed/forge/driver",
   SPOOL: e.FD_SPOOL || "/var/lib/godspeed/forge/spool", // repair requests: acting runs write here, the dead-man reads
+  // the sign-in check after a run could not sign in (housekeeping): the smallest model of each
+  LOGIN_CLAUDE_MODEL: e.FD_LOGIN_CHECK_CLAUDE_MODEL || "haiku",
+  LOGIN_CODEX_MODEL: e.FD_LOGIN_CHECK_CODEX_MODEL || e.FD_CODEX_MODEL || "gpt-5.6-terra",
 });
 // The driver's settings as the modules read them (settings.mjs puts them into the environment): every FD_, DM_ and RD_
 // variable. The acting run's AI gets them, so `onduty.mjs --notice`, `--mark-handled` and `--repair-request` write into
@@ -166,14 +169,54 @@ export function launchAct(env, a, { unit, entry, provider, tried = [], mode = "r
   if (r.status !== 0) throw new Error(`systemd-run refused ${unit}: ${String(r.stderr || "").trim().split("\n").pop() || `exit ${r.status}`}`);
   return { unit, dir, provider, model };
 }
-// -> { state: "running"|"done"|"failed", result, said }
+// -> { state: "running"|"done"|"failed", result, said, login }; login: the run could not sign in (a fault, never a try)
 export function actResult(env, a, unit, active = u => spawnSync("systemctl", ["is-active", "--quiet", u]).status === 0) {
   const dir = path.join(a.ACT_DIR, unit);
   const res = readJson(path.join(dir, "result.json"), null);
-  if (res) return { state: "done", result: res.result, said: res.said || "", provider: res.provider };
+  if (res) return { state: "done", result: res.result, said: res.said || "", provider: res.provider, login: res.login === true };
   const job = readJson(path.join(dir, "job.json"), null);
   if (job && active(unit) && Date.now() - Date.parse(job.startedAt) < (job.minutes + 10) * 60000) return { state: "running" };
   return { state: "failed", result: "unresolved", said: "the acting run ended without an answer" };
+}
+
+// ---------------------------------------------------------------- the AI's sign-in (the Forge 0.3.1, ticket 04)
+// Root has no sign-in of its own: the acting run's home (claude-home, codex-home in the acting-run folder) links the factory
+// user's files, so a refreshed login is refreshed in one place. From 2026-11-22 a plain file had taken the place of
+// claude-home/.credentials.json, and every Claude run failed to sign in until it was linked again by hand: so before every run each
+// file is checked, and anything that is not the link is moved aside with the date in its name and the link made again.
+export const LOGIN_FILES = { claude: [[".claude/.credentials.json", ".credentials.json"], [".claude.json", ".claude.json"]], codex: [[".codex/auth.json", "auth.json"]] };
+export const loginHome = (actDir, provider) => path.join(actDir, provider === "claude" ? "claude-home" : "codex-home");
+const stamp = now => new Date(now).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+// -> [{file, did: "kept" | "linked" | "moved aside", aside?}]
+export function linkLogins(factoryHome, actDir, provider, now = Date.now()) {
+  const home = loginHome(actDir, provider); fs.mkdirSync(home, { recursive: true });
+  const out = [];
+  for (const [from, to] of LOGIN_FILES[provider] || []) {
+    const target = path.posix.join(factoryHome, from), link = path.join(home, to);
+    let st = null; try { st = fs.lstatSync(link); } catch { /* not there */ }
+    if (st && st.isSymbolicLink() && path.resolve(fs.readlinkSync(link)) === path.resolve(target)) { out.push({ file: to, did: "kept" }); continue; }
+    let aside = null;
+    if (st) { aside = `${link}.replaced-${stamp(now)}`; for (let i = 1; fs.existsSync(aside); i++) aside = `${link}.replaced-${stamp(now)}-${i}`; fs.renameSync(link, aside); }
+    fs.symlinkSync(target, link);
+    out.push({ file: to, did: aside ? "moved aside" : "linked", ...(aside ? { aside } : {}) });
+  }
+  return out;
+}
+// A run that could not sign in says so instead of answering: no RESULT line, and the sign-in words of Claude Code or Codex
+// (2026-11-22: "Failed to authenticate: OAuth session expired and could not be refreshed").
+export const LOGIN_WORDS = /Failed to authenticate|\bOAuth\b|not logged in|\b401\b/i;
+// text: the answer; extra: what else the CLI said (its last error line). Only the answer's own last line can be its RESULT.
+export const loginFailure = (text, extra = "") => !/RESULT:\s*(resolved|notice|unresolved|in-progress)\s*$/i.test(String(text || "").trim()) && LOGIN_WORDS.test(`${text || ""}\n${extra || ""}`);
+// One tiny sign-in check on the smallest model, in the acting runs' own home, after the links were put back. -> { ok, why }
+export function signinCheck(a, provider, spawn = spawnSync) {
+  const ask = "Answer with the single word OK.";
+  const home = loginHome(a.ACT_DIR, provider);
+  const r = provider === "claude"
+    ? spawn(a.CLAUDE_BIN, ["-p", "--model", a.LOGIN_CLAUDE_MODEL], { input: ask, cwd: "/", encoding: "utf8", timeout: 180000, env: { PATH: `${path.dirname(a.CLAUDE_BIN)}:${ROOT_PATH}`, HOME: "/root", CLAUDE_CONFIG_DIR: home, IS_SANDBOX: "1", LANG: "C.UTF-8" } })
+    : spawn("codex", ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "-m", a.LOGIN_CODEX_MODEL, "-"], { input: ask, cwd: "/", encoding: "utf8", timeout: 180000, env: { PATH: ROOT_PATH, HOME: "/root", CODEX_HOME: home, LANG: "C.UTF-8" } });
+  const out = String((r && r.stdout) || ""), said = `${out}\n${String((r && r.stderr) || "")}`;
+  if (r && r.status === 0 && /\bOK\b/i.test(out) && !LOGIN_WORDS.test(said)) return { ok: true, why: `${provider === "claude" ? a.LOGIN_CLAUDE_MODEL : a.LOGIN_CODEX_MODEL} answered` };
+  return { ok: false, why: (said.trim().split("\n").filter(Boolean).pop() || (r && r.error && r.error.message) || `exit ${r && r.status}`).slice(0, 200) };
 }
 
 // ---------------------------------------------------------------- the run (inside the unit)
@@ -185,21 +228,21 @@ export function runJob(dir, spawn = spawnSync, own = process.env) {
   const last = path.join(dir, "last.txt");
   let r;
   if (job.provider === "claude") {
-    const home = path.join(job.actDir, "claude-home"); fs.mkdirSync(home, { recursive: true });
-    for (const [from, to] of [[`${job.factoryHome}/.claude/.credentials.json`, ".credentials.json"], [`${job.factoryHome}/.claude.json`, ".claude.json"]]) if (!fs.existsSync(path.join(home, to))) { try { fs.symlinkSync(from, path.join(home, to)); } catch {} }
+    const home = loginHome(job.actDir, "claude");
+    linkLogins(job.factoryHome, job.actDir, "claude");
     r = spawn(job.claudeBin, ["-p", "--model", job.model, "--dangerously-skip-permissions"], { input: job.prompt, cwd: job.brain, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20,
       env: aiEnv(job, own, { PATH: `${path.dirname(job.claudeBin)}:${ROOT_PATH}`, HOME: "/root", CLAUDE_CONFIG_DIR: home, IS_SANDBOX: "1", LANG: "C.UTF-8" }) });
     fs.writeFileSync(last, r.stdout || "");
   } else {
-    const home = path.join(job.actDir, "codex-home"); fs.mkdirSync(home, { recursive: true });
-    const auth = path.join(home, "auth.json"); // root has no Codex login: the factory user's file, linked (a copy would drift when it refreshes)
-    if (!fs.existsSync(auth)) fs.symlinkSync(`${job.factoryHome}/.codex/auth.json`, auth);
+    const home = loginHome(job.actDir, "codex");
+    linkLogins(job.factoryHome, job.actDir, "codex"); // root has no Codex login: the factory user's file, linked (a copy would drift when it refreshes)
     r = spawn("codex", ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "danger-full-access", "-m", job.model, "-C", job.brain, "-o", last, "-"],
       { input: job.prompt, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: aiEnv(job, own, { PATH: ROOT_PATH, HOME: "/root", CODEX_HOME: home, LANG: "C.UTF-8" }) });
   }
   let said = ""; try { said = fs.readFileSync(last, "utf8"); } catch {}
   if (!said && r.status !== 0) said = `the ${job.provider} run failed: ${String(r.stderr || "").trim().split("\n").pop()}`;
-  writeJson(path.join(dir, "result.json"), { at: new Date().toISOString(), provider: job.provider, model: job.model, result: resultOf(said), said: said.slice(-4000) });
+  const login = loginFailure(said, String(r.stderr || "").trim().split("\n").pop() || ""); // it could not sign in: a fault the driver fixes, never a try
+  writeJson(path.join(dir, "result.json"), { at: new Date().toISOString(), provider: job.provider, model: job.model, result: resultOf(said), said: said.slice(-4000), ...(login ? { login: true } : {}) });
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

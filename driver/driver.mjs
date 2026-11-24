@@ -22,7 +22,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readWorld, defaultsFor as worldDefaults } from "./world.mjs";
 import { updateLedger, findTicket } from "./progress.mjs";
-import { findObstacles, MACHINE_KINDS } from "./obstacles.mjs";
+import { findObstacles, MACHINE_KINDS, actLoginObstacles } from "./obstacles.mjs";
 import { nextStep } from "./ladder.mjs";
 import { appendEvents, readJournal, view as journalView, roundEvents, prEvents, prSeenMap, coverage, headMirrorOk, monotonicNow, GODSPEED_RELEASE, readMono, containment, containmentCommits } from "./journal.mjs";
 import { requiredRunId, seenFromTelegram, readActivity, resendDue, deliveryRetryDue, seenCheck, sendNotice, publishHeartbeat, mirroredHead, watcherHealth, supersessionLook, nextReleaseFacts, rung0 } from "./duties.mjs";
@@ -236,6 +236,8 @@ export async function round(env, deps = {}) {
     for (const f of world.factories || []) for (const [u, s] of Object.entries(f.timers || {})) if (!/^(active|activating|reloading)$/.test(s)) down[u] = (state.timerRounds[u] || 0) + 1;
     state.timerRounds = down;
     const fcfg = { firstSeen: state.firstSeen, noAi: state.noAi, timerRounds: down };
+    // an acting run that could not sign in is a login obstacle of the driver's (housekeeping links the sign-in again and checks it)
+    world.actLogins = { ...(state.actLogin || {}) };
     let obstacles;
     try { obstacles = findObstacles({ ...world, unreadable: [...(world.unreadable || []), ...unreadableParts] }, ledger, now, fcfg); }
     catch {
@@ -319,12 +321,25 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       const r = (deps.actResult || actResult)(env, env.ACT, a.unit);
       if (r.state === "running") continue;
       const c = state.chain[eid];
+      // it could not sign in: a fault the driver fixes (a login obstacle, which housekeeping repairs), never a try; the rung keeps its
+      // count and may launch again once a provider signs in
+      if (r.login) {
+        (state.actLogin ||= {})[a.provider] = { at: nowIso, unit: a.unit, said: String(r.said || "").slice(-300) };
+        if (c) c.launched = false;
+        record({ kind: "acting run could not sign in", unit: a.unit, entry: eid, provider: a.provider, summary: String(r.said || "").slice(-300) });
+        delete state.acts[eid];
+        continue;
+      }
+      if (r.state === "done" && state.actLogin && state.actLogin[a.provider]) { delete state.actLogin[a.provider]; record({ kind: "acting runs sign in again", provider: a.provider, unit: a.unit }); } // an answer proves the sign-in
       if (c && r.result === "in-progress" && (c.holds || 0) < 2 && ACTIVITY.creditHours * HR - (creditUsed(creditKeyById(eid, c.nan ? undefined : c.milestone))) > 0) { c.holds = (c.holds || 0) + 1; const ck = creditKeyById(eid, c.nan ? undefined : c.milestone); const grant = Math.min(2 * HR, ACTIVITY.creditHours * HR - creditUsed(ck)); roundCredit[ck] = (roundCredit[ck] || 0) + grant; c.holdUntil = now + grant; c.holdAt = now; c.launched = true; try { appendEvents(journalFile, [{ t: "credit", key: ck, ms: grant, at: nowIso }]); } catch { (state.creditDebt ||= {})[ck] = ((state.creditDebt || {})[ck] || 0) + grant; } (c.tries ||= []).push({ rung: a.rung, at: nowIso, provider: a.provider, result: "in-progress", summary: String(r.said || "").slice(-300) }); } // moving, never a failure
       else if (c) { (c.tries ||= []).push({ rung: a.rung, at: nowIso, provider: a.provider, result: r.result, summary: String(r.said || "").slice(-500) }); if (r.result === "notice") { c.rung = 3; c.rungSince = now; c.launched = true; c.told = false; } } // the notice goes out through both transports below, with receipts // it told Michael itself: rung 3, restarts after 24 hours
       if (a.queue && r.result === "resolved") { try { markHandled(answeredFile(env.ACT), a.queue.repo, a.queue.heading); } catch (e) { record({ kind: "queue item not marked", why: String(e.message).slice(0, 200) }); } }
       record({ kind: "acting run finished", unit: a.unit, entry: eid, provider: a.provider, result: r.result, summary: String(r.said || "").slice(-400) });
       delete state.acts[eid];
     }
+    // a sign-in failure collected just now is this round's obstacle too, so housekeeping repairs it in this same round
+    world.actLogins = { ...(state.actLogin || {}) };
+    for (const o of actLoginObstacles(world.actLogins, state.firstSeen, nowIso)) if (!ids.has(o.id)) { obstacles.push(o); ids.add(o.id); state.firstSeen[o.id] = o.since; record({ kind: "obstacle", id: o.id, obstacle: o.kind, key: `act:${o.provider}`, evidence: o.evidence }); }
     let stage = null;
     try { const text = await (deps.stageLook || stageLookReal)(env); stage = text ? parseStage(text) : null; } catch { stage = null; }
     // deterministic fallbacks for the shipping steps (setup fixes, not cuts), before any acting rung
@@ -536,11 +551,19 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     if (L && !dry && entries.length) { // work may have started since the round began (auto-stage's STOP, a run): look again right before launching
       try { const again = withSteps(await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, world)); const m = heldUntil(L.entry, again && { ...again, waitingOnMain: !!(stage && /(main'?s?\b[^.]*\b(required check|Windows setup|image))|(image\b[^.]*not in the registry)/i.test(String(stage.reason || ""))), releaseId: (stage && stage.id) || undefined, onlyRelease: jv.open.length === 1 ? jv.open[0].id : null }, world, credits, now); if (Number.isFinite(m) && m > now) { record({ kind: "acting run held", entry: L.entry.id, why: "work started on it meanwhile" }); L = null; } } catch { /* unreadable: launch as decided */ }
     }
+    // a provider whose acting runs could not sign in waits until housekeeping has linked its sign-in again: when the rung would need it,
+    // nothing is launched and nothing is counted as a try (a sign-in is the driver's to fix, ticket 04)
+    const signedOut = n => !!(state.actLogin || {})[n];
+    let provider = null;
     if (L && !dry) {
-      const names = list.map(p => p.name), first = [...(L.c.tries || [])].reverse().find(t => t.rung === 1); // the latest rung 1 try
-      const provider = L.rung === 2
+      const names = list.map(p => p.name).filter(n => !signedOut(n)), first = [...(L.c.tries || [])].reverse().find(t => t.rung === 1); // the latest rung 1 try
+      provider = L.rung === 2
         ? (() => { const w = (first && first.provider) === "claude" ? "codex" : "claude"; return names.includes(w) ? w : null; })() // never the provider rung 1 used
         : names.includes("codex") ? "codex" : names.includes("claude") ? "claude" : null;
+      // a sign-in fault is part of why no provider is left (even one the provider list dropped for its limit): wait, count nothing
+      if (!provider && ["codex", "claude"].some(signedOut)) { record({ kind: "acting run waits", entry: L.entry.id, rung: L.rung, why: `its AI cannot sign in right now (${Object.keys(state.actLogin).join(", ")}); housekeeping links the sign-in again first` }); L = null; }
+    }
+    if (L && !dry) {
       L.c.launched = true; L.c.launchedAt = now; // one launch per rung, whatever happens
 
       const n = (state.seq[`act:${L.entry.id}`] || 0) + 1;
@@ -565,6 +588,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     if (!dry) {
       out.housekeeping = await (deps.housekeep || housekeep)(env, world, deps.hkDeps || {});
       if (out.housekeeping.done.length || out.housekeeping.failed.length) record({ kind: "housekeeping", ...out.housekeeping });
+      for (const p of world.actLoginsRepaired || []) if (state.actLogin) delete state.actLogin[p]; // the sign-in check answered: the login obstacle clears
     }
     const hkSummary = [...out.housekeeping.done, ...out.housekeeping.failed.map(f => `not done: ${f}`)].join("; ").slice(0, 600) || "nothing to do for it";
     for (const s of steps) if (s.do === "housekeeping" && !dry) push(s.ob.id, { at: nowIso, helper: "housekeeping", outcome: out.housekeeping.failed.length ? "failed" : "ok", summary: hkSummary });

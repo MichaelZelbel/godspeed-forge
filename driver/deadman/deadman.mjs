@@ -125,18 +125,29 @@ export function launchRepair(cfg, unit, provider, why, tried, run = sys) {
     "--setenv=HOME=/root", process.execPath, fileURLToPath(import.meta.url), "--run", dir]);
   return r.status === 0;
 }
+// The repair run's AI signs in with the factory user's files, linked into its own home. Anything else in a link's place is moved
+// aside with the date in its name and the link is made again (the Forge 0.3.1: a plain file had taken the place of the acting runs'
+// Claude link, and every run failed to sign in for two days). Its own copy: the dead-man shares no code with the driver.
+export function linkLogin(target, link, now = Date.now()) {
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  let st = null; try { st = fs.lstatSync(link); } catch { /* not there */ }
+  if (st && st.isSymbolicLink() && path.resolve(fs.readlinkSync(link)) === path.resolve(target)) return "kept";
+  if (st) { const day = new Date(now).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"); let aside = `${link}.replaced-${day}`; for (let i = 1; fs.existsSync(aside); i++) aside = `${link}.replaced-${day}-${i}`; fs.renameSync(link, aside); }
+  fs.symlinkSync(target, link);
+  return st ? "moved aside" : "linked";
+}
 function runJob(dir) { // inside the repair unit (this file's own runner: no driver code)
   const job = readJson(path.join(dir, "job.json"), null); if (!job) throw new Error("no job");
   const last = path.join(dir, "last.txt"); let r;
   const root = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
   if (job.provider === "claude") {
     const home = path.join(job.actsDir, "claude-home"); fs.mkdirSync(home, { recursive: true });
-    for (const [from, to] of [[`${job.factoryHome}/.claude/.credentials.json`, ".credentials.json"], [`${job.factoryHome}/.claude.json`, ".claude.json"]]) if (!fs.existsSync(path.join(home, to))) { try { fs.symlinkSync(from, path.join(home, to)); } catch {} }
+    for (const [from, to] of [[`${job.factoryHome}/.claude/.credentials.json`, ".credentials.json"], [`${job.factoryHome}/.claude.json`, ".claude.json"]]) linkLogin(from, path.join(home, to));
     r = spawnSync(job.claudeBin, ["-p", "--model", job.model, "--dangerously-skip-permissions"], { input: job.prompt, cwd: job.brain, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: `${path.dirname(job.claudeBin)}:${root}`, HOME: "/root", CLAUDE_CONFIG_DIR: home, IS_SANDBOX: "1" } });
     fs.writeFileSync(last, r.stdout || "");
   } else {
     const home = path.join(job.actsDir, "codex-home"); fs.mkdirSync(home, { recursive: true });
-    if (!fs.existsSync(path.join(home, "auth.json"))) fs.symlinkSync(`${job.factoryHome}/.codex/auth.json`, path.join(home, "auth.json"));
+    linkLogin(`${job.factoryHome}/.codex/auth.json`, path.join(home, "auth.json"));
     r = spawnSync("codex", ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "danger-full-access", "-m", job.model, "-C", job.brain, "-o", last, "-"], { input: job.prompt, encoding: "utf8", timeout: job.minutes * 60000, maxBuffer: 64 << 20, env: { PATH: root, HOME: "/root", CODEX_HOME: home } });
   }
   fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify({ at: new Date().toISOString(), said: (fs.existsSync(last) ? fs.readFileSync(last, "utf8") : "").slice(-3000) }));
