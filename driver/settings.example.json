@@ -1,7 +1,7 @@
 {
   "_about": "Placeholders only. Copy the two parts into the settings folder (root on Linux: /etc/godspeed-forge): the value of \"driver.json\" as driver.json, the value of \"projects/owner--repository.json\" as projects/<owner>--<repository>.json (one such file per repository). godspeed-forge driver install checks them and names anything missing.",
   "driver.json": {
-    "owner": { "github_login": "your-github-login", "name": "Your Name", "telegram_user_ids": ["123456789"] },
+    "owner": { "github_login": "your-github-login", "name": "Your Name", "telegram_user_ids": ["123456789"], "email": "you@example.com" },
     "server": {
       "factory_user": "factory", "factory_uid": 1000, "factory_gid": 1000, "factory_home": "/home/factory", "netns": "",
       "must_run_units": [], "state_dir": "/var/lib/godspeed/forge/driver", "spool_dir": "/var/lib/godspeed/forge/spool",
@@ -9,13 +9,13 @@
       "driver_dir": "/usr/local/lib/godspeed/forge/driver", "questions_dir": "/var/lib/godspeed/forge/questions", "node": "/usr/bin/node", "name_in_messages": "Your Name"
     },
     "keys": { "env_file": "/etc/godspeed-forge/keys-file", "token_script": "/usr/local/bin/gh-app-token.mjs" },
-    "notices": { "godspeed_notices_file": "/root/brain/.godspeed/notices.json", "telegram_env_file": "/root/brain/telegram.env", "watch_repo": "owner/records" },
+    "notices": { "godspeed_notices_file": "/root/brain/.godspeed/notices.json", "telegram_env_file": "/root/brain/telegram.env", "watch_repo": "owner/records", "email": { "inbox": "your-factory@agentmail.to" } },
     "ai": { "bins": { "claude": "/home/factory/.local/bin/claude", "codex": "/usr/local/bin/codex" }, "models": { "strong": "the-stronger-model" }, "openrouter_allow": [], "act_brain_dir": "/root/brain" },
     "budget": { "act_runs_per_day": 8, "reserved": 4 },
     "forge": { "state_dir": "/var/lib/godspeed/forge", "config": "/etc/godspeed-forge/config.json" },
     "legacy_units": [],
     "steps": {
-      "questions": { "godspeed_dir": "/root/brain", "hermes_home": "/root/chat-program", "to_owner_file": "to-owner.json" },
+      "questions": { "godspeed_dir": "/root/brain", "hermes_home": "/root/chat-program", "to_owner_file": "to-owner.json", "urgent_repo": "owner/records", "urgent_label": "yourname-urgent" },
       "test-machine": { "holdout": "H-1" },
       "owner-questions": { "enabled": true, "agent": "claude", "model": "haiku", "agent_tries": 3 },
       "owner-releases": { "enabled": true, "check_minutes": 25, "work_dir": "/home/factory/factory-driver/candidates" }

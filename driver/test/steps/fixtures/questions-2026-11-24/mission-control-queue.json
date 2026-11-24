@@ -1,0 +1,159 @@
+{
+ "_about": "The retired queue on the factory's server on 2026-11-24: 14 questions nobody read, the oldest from 2026-11-16. The private project's three entries are stand-ins of the same shape; the rest is as it was.",
+ "items": [
+  {
+   "project": "Godspeed",
+   "repo": "MichaelZelbel/godspeed-mission-control",
+   "heading": "A finished change also changes how the automatic tests judge (#677, PR #678)",
+   "number": 901,
+   "why": "It is about workflow files, permissions, credentials or keys, which Michael is never asked; Mission Control handles it.",
+   "bounced": true,
+   "asked": "2026-11-16T08:18:34.370Z",
+   "link": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/531",
+   "question": "This would change when the software’s safety checks run and how earlier checks are stopped, so a problem could be missed or a result could be treated differently. The choice is whether to allow those behavior changes along with the new testing; I recommend not landing it as an additive-only change until the workflow changes are reviewed separately."
+  },
+  {
+   "project": "Godspeed",
+   "repo": "MichaelZelbel/godspeed-mission-control",
+   "heading": "Manager native-install gate is blocked by an administrator-owned notebook servic (#698)",
+   "number": 902,
+   "why": "It is about workflow files, permissions, credentials or keys, which Michael is never asked; Mission Control handles it.",
+   "bounced": true,
+   "asked": "2026-11-17T18:23:54.981Z",
+   "link": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/531",
+   "question": "The update’s separate safety check cannot finish because its test space lacks permission to create its own web setup, while your running service remains untouched. Please either arrange a separate safe test space for it or grant the test process narrowly bounded setup permission; I recommend the separate test space."
+  },
+  {
+   "project": "the private app",
+   "repo": "example/private-app",
+   "heading": "When two people compare results in the quiz, any role the other person picked shows up (#44)",
+   "number": 902,
+   "why": "It could not be put into plain words for Michael in 3 runs (not plain: The message uses the unexplained feature name “Kind of Together,” so a person unfamiliar with the software may not understand what is being compared.), so he is not asked. Mission Control decides it, or asks him in the chat in its own plain words only if it is truly a question of what Godspeed does for its users.",
+   "bounced": true,
+   "asked": "2026-11-19T11:10:18.150Z",
+   "link": "https://github.com/example/private-app/issues/31",
+   "question": "When two people compare results, the page shows any role the other person picked, also one they chose to keep private.\nOptions: (a) show only what both chose to share; (b) keep showing everything. Recommendation: (a), so nothing private shows."
+  },
+  {
+   "project": "the private app",
+   "repo": "example/private-app",
+   "heading": "#60 (an automatic check on profile texts): wording while it is built (new 2026-11-23)",
+   "number": 10,
+   "why": "It could not be put into plain words for Michael in 3 runs (not plain: The planned wording is not shown, and terms such as medium-confidence do not clearly explain what people will experience.), so he is not asked. Mission Control decides it, or asks him in the chat in its own plain words only if it is truly a question of what Godspeed does for its users.",
+   "bounced": true,
+   "asked": "2026-11-23T15:06:09.917Z",
+   "link": "https://github.com/example/private-app/issues/31",
+   "question": "- The sentences a person sees when their profile is held.\n- Whether privacy notice §6 and §8 are reworded to cover the check.\n\nRecommendation: the builder's wording, privacy §6 and §8 reworded minimally to be accurate. This is about what a person sees, so there is no default."
+  },
+  {
+   "project": "the private app",
+   "repo": "example/private-app",
+   "heading": "Today, someone who has signed up but not made a profile yet sees a confusing account page (#83)",
+   "number": 904,
+   "why": "It could not be put into plain words for Michael in 3 runs (not plain: The message uses the unfamiliar name “Cherishly,” so it is not fully in everyday language.), so he is not asked. Mission Control decides it, or asks him in the chat in its own plain words only if it is truly a question of what Godspeed does for its users.",
+   "bounced": true,
+   "asked": "2026-11-24T10:56:05.556Z",
+   "link": "https://github.com/example/private-app/issues/31",
+   "question": "Someone who signed up but has no profile sees an empty account page with no way forward.\nOptions: (a) show a short line and a button to make the profile; (b) leave the page as it is. Recommendation: (a)."
+  },
+  {
+   "project": "the Forge add-on",
+   "repo": "MichaelZelbel/godspeed-forge",
+   "heading": "Merge PR #12 (proving scenarios), which several items are waiting on (#7, #2, #3, PR #16, PR #18)",
+   "number": 2,
+   "why": "Mission Control can apply the approved work and use the repository’s main line as the normal installation source until the first tagged release.",
+   "bounced": false,
+   "asked": "2026-11-18T17:45:02.110Z",
+   "link": "https://github.com/MichaelZelbel/godspeed-forge/issues/51",
+   "question": "PR #12 is ready and its checks pass, but it changes files only a person may merge (`FACTORY.md`, `harness/RUNTIME.md`). You approved its content on 2026-11-14. Until it merges:\n- #7 (proving scenarios): code-ready in PR #12; nothing more a lap can do.\n- #2 (plan release) / PR #16: two send-backs; the last found missing evidence about failing checks and a plan retry that is not safe to repeat. Both need the scenarios from #12 to prove.\n- #3 (questions reach your chat) / PR #18: two send-backs; the installer points at this pull request's own branch instead of a stable source, and the journey cannot be proved without #12. It also needs your choice of where normal installs get the Forge from.\n\nOptions: (a) merge PR #12, and let each of PR #16 and PR #18 have one final correction lap; for PR #18 normal installs follow this repository's `main` branch. (b) close PR #12 and say how the proving scenarios should be added instead.\nRecommendation: (a), with `main` as the install source until the first tagged release.\nNo default: only you can merge PR #12, and the install source is a release decision."
+  },
+  {
+   "project": "the Forge add-on",
+   "repo": "MichaelZelbel/godspeed-forge",
+   "heading": "GitHub Apps left on your account when setup stops at its final check (#40)",
+   "number": 1,
+   "why": "It could not be put into plain words for Michael in 3 runs (not plain: The message uses the feature name \"Forge\" and unclear \"connections,\" so the decision is not fully understandable without project context.), so he is not asked. Mission Control decides it, or asks him in the chat in its own plain words only if it is truly a question of what Godspeed does for its users.",
+   "bounced": true,
+   "asked": "2026-11-18T17:45:02.110Z",
+   "link": "https://github.com/MichaelZelbel/godspeed-forge/issues/51",
+   "question": "When setup's final check fails, the two GitHub Apps it created earlier stay on your account. You are told they are kept and that trying again reuses them, but if you never retry they stay unused.\n- (a) Run the final check before creating the Apps, so a stop there creates nothing.\n- (b) Delete the two Apps when setup stops at the final check.\n- (c) Keep today's behaviour (Apps kept, named, reused on retry).\n\nRecommendation: (a), if the final check does not itself need the Apps; otherwise (c). (b) cannot be done without you, because GitHub only lets you delete an App from its settings page.\nNo default: this is how setup treats your GitHub account, so the loop keeps today's behaviour (c) and does not build anything for #40 until you answer."
+  },
+  {
+   "project": "the Forge add-on",
+   "repo": "MichaelZelbel/godspeed-forge",
+   "heading": "The loop's work outside setup waits on question 2 (status, no decision needed beyond 1 and 2)",
+   "number": 3,
+   "why": "This is about the factory’s work schedule and technical decisions, which Mission Control handles.",
+   "bounced": false,
+   "asked": "2026-11-18T23:40:10.104Z",
+   "link": "https://github.com/MichaelZelbel/godspeed-forge/issues/51",
+   "question": "Updated 2026-11-19 11:55 UTC. For five days every merged change (about 60) has been about setup's stop messages and saved state; none of plan items 2 to 6 (plan a release, questions to your chat, staging, go and take back, joining an existing factory project) has started, because they wait on question 2 (merge PR #12). Since 09:40 UTC nothing merged: PR #94 (#81, never a second App for a role) was held for a test decision, which the manager made this pass, so the next lap can merge it. Setup work left after that: #96, #98, #89, and three smaller items filed this pass from what reviewers noticed (#99 piped answers, #100 leftover temporary file, #101 tests that use the network). When those are done, the loop has nothing it can build until you answer question 2, and you may want to pause launches then."
+  },
+  {
+   "project": "the Forge add-on",
+   "repo": "MichaelZelbel/godspeed-forge",
+   "heading": "Edit history of PR #68's description (for your information, no decision needed)",
+   "number": 4,
+   "why": "Removing an accidentally exposed old description revision is routine cleanup that does not need Michael to choose how the Forge behaves.",
+   "bounced": false,
+   "asked": "2026-11-19T02:55:12.965Z",
+   "link": "https://github.com/MichaelZelbel/godspeed-forge/issues/51",
+   "question": "The builder of PR #68 reported that its first update of the pull request description briefly included an unrelated file from the server's temporary folder, which belonged to another user account. It then replaced it. The old text may still be in the description's edit history on GitHub (\"edited\" menu on the PR description). You may want to look and delete that revision. Nothing in the loop depends on it.\n\n@MichaelZelbel\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+  },
+  {
+   "project": "the Forge add-on",
+   "repo": "MichaelZelbel/godspeed-forge",
+   "heading": "Today, someone running Forge on a server without Godspeed needs a custom workaro (#139)",
+   "number": 901,
+   "why": "It could not be put into plain words for Michael in 3 runs (not plain: The message relies on unexplained product and technical names such as Forge, Godspeed, server, and build.), so he is not asked. Mission Control decides it, or asks him in the chat in its own plain words only if it is truly a question of what Godspeed does for its users.",
+   "bounced": true,
+   "asked": "2026-11-23T19:36:08.109Z",
+   "link": "https://github.com/MichaelZelbel/godspeed-forge/issues/51",
+   "question": "Today, someone running Forge on a server without Godspeed needs a custom workaround to open the watching page. Should the next Forge release give that page its own signed-in address, or should this improvement remain parked? I recommend building it next so every supported setup gets the same working experience.\n\n1. Give the watching page its own signed-in address in the next Forge release.\n2. Keep this improvement parked and choose another feature for the next release.\n\nRecommended: Give the watching page its own signed-in address in the next Forge release.\n\nNothing is decided until you answer: no default applies and the item waits for you."
+  },
+  {
+   "project": "querino",
+   "repo": "MichaelZelbel/querino",
+   "heading": "Merge PR #38 by hand (only you can: it touches protected files)",
+   "number": 6,
+   "why": "It is about workflow files, permissions, credentials or keys, which Michael is never asked; Mission Control handles it.",
+   "bounced": false,
+   "asked": "2026-11-19T03:25:13.411Z",
+   "link": "https://github.com/MichaelZelbel/querino/issues/1",
+   "question": "PR #38 changes a protected workflow file, so the loop may not merge it.\nOptions: (a) merge it by hand; (b) close it and rebuild without the workflow change. Recommendation: (a)."
+  },
+  {
+   "project": "Querino",
+   "repo": "MichaelZelbel/querino",
+   "heading": "MCP sign-in throttle: two outcomes of #42 cannot both hold (PR #56)",
+   "number": 7,
+   "why": "It is about workflow files, permissions, credentials or keys, which Michael is never asked; Mission Control handles it.",
+   "bounced": true,
+   "asked": "2026-11-19T03:25:13.411Z",
+   "link": "https://github.com/MichaelZelbel/querino/issues/9",
+   "question": "For a well-formed token from an address that is over the limit, \"429 … without a token lookup\" and \"a valid token is never slowed down\" conflict: only a lookup tells a valid token from a wrong one. PR #56 lets the second win. The full measurements are in the loop review on PR #56.\n- **A.** Accept as built: a valid token always gets in; over the limit, wrong tokens get 429 instead of 401 (no further counting or logging), and missing or malformed tokens skip the lookup entirely. **Recommended:** it keeps your stronger promise (real users never locked out) and still caps the noise.\n- **B.** Strict 429 before any lookup, valid tokens included. Real users behind a shared address can be locked out for 10 minutes, and anyone who can forge the address header can lock out an address.\n- **C.** A token format checkable without the database (signed or checksummed tokens), its own new item; meets both outcomes but changes existing tokens.\n\nA second point for the same answer: the PR keys the counter on the leftmost `X-Forwarded-For` entry, which a client can prepend to. Under A, recommended: merge with that as a stated limit and check after the deploy which address Supabase's edge and the `mcp.querino.ai` Worker actually pass; switch to a platform-set header if the check shows the leftmost entry is the client's.\n\nNo default: this changes the wording of an outcome you wrote. #42 and PR #56 wait."
+  },
+  {
+   "project": "Querino",
+   "repo": "MichaelZelbel/querino",
+   "heading": "Creator link check (#47, PR #63): place the test copy's AI key, or merge as a part delivery",
+   "number": 9,
+   "why": "Providing the existing AI key and deciding how to complete the remaining verification are setup decisions Mission Control handles.",
+   "bounced": false,
+   "asked": "2026-11-19T08:55:16.873Z",
+   "link": "https://github.com/MichaelZelbel/querino/issues/9",
+   "question": "PR #63 builds the check of every creator link. The loop review found the code sound, CI is green and no finding is open, but acceptance 3 of #47 (a real link check on the test copy: a harmless link becomes visible, a scam link is rejected) cannot run: the test copy has no AI key (`~/.config/querino-test-copy/openrouter.key` is still absent on 2026-11-19 08:40 UTC). The loop parked it with `needs-owner` at 06:36 UTC.\n- **A.** Place the key (Mission Control's open step). The next lap runs acceptance 3 and merges #63 with all of #47 delivered. **Recommended**, because the classifier is exactly the part no unit test covers.\n- **B.** Post an `Owner decision` on #47 to merge #63 now as a part delivery; #47 stays open only for acceptance 3, run once the key is in place.\n\nNo default: placing the key is yours or Mission Control's, and B ships a check whose real classifier nobody has seen run."
+  },
+  {
+   "project": "Querino",
+   "repo": "MichaelZelbel/querino",
+   "heading": "querino.ai is still on an old build: publish what `main` holds (only you can)",
+   "number": 10,
+   "why": "It is about workflow files, permissions, credentials or keys, which Michael is never asked; Mission Control handles it.",
+   "bounced": true,
+   "asked": "2026-11-19T11:40:18.360Z",
+   "link": "https://github.com/MichaelZelbel/querino/issues/9",
+   "question": "None of the last day's merges is live. Checked 2026-11-19 11:40 UTC as a visitor: `https://querino.ai/prompt-kits` answers \"Page Not Found\" (fixed on `main` by #26 on 2026-11-18), `/rss.xml` lists no prompt, skill, workflow or kit (#62), and an unknown `/go/` address shows the generic not-found page instead of Querino's own (#79). A push only rebuilds Lovable's preview (CLAUDE.md, \"Going live\"). Three merged migrations are not pushed either as far as the loop can tell: creator links (#55), creator usage numbers (#65) and the avatars-bucket listing (#59), and #55/#65 also need their edge functions deployed.\n- **A.** Now: `npm run db:push`, `npx supabase functions deploy` for the functions those PRs name, then Publish in Lovable, then `node scripts/check-public-pages.mjs` (it reads 167 of 167 today). **Recommended:** visitors get the fixes the loop has already made, and a smaller first publish is easier to check than the whole release at once.\n- **B.** Wait and publish once, when the `beta.1` items are all merged (#42, #47 are still open).\n\nNo default: publishing and pushing migrations are yours alone.\n\n\n_Answered and removed: question 6 (PR #38 merged and its 23 functions deployed on 2026-11-24); on 2026-11-19, questions 1 (the loop's work: you approved the 1.0.0-beta.1 release, issues labelled `beta.1`), 3 (the RSS feed: option A, built by #44) and 4 (live data: the factory's test copy is used instead, #17 closed). Earlier: questions 2 and 5._"
+  }
+ ]
+}

@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import { isWorking, ticketKeyOf } from "./progress.mjs";
 import { onMain } from "./delivery.mjs";
 
-export const KINDS = ["parked", "check-failed", "no-progress", "dead-end", "factory-idle", "factory-stopped", "factory-restarts", "main-red", "unreadable", "unit-failed", "disk", "memory", "stale-process", "login", "no-ai", "tools-missing"];
+export const KINDS = ["question", "parked", "check-failed", "no-progress", "dead-end", "factory-idle", "factory-stopped", "factory-restarts", "main-red", "unreadable", "unit-failed", "disk", "memory", "stale-process", "login", "no-ai", "tools-missing"];
 export const TICKET_KINDS = ["parked", "check-failed", "no-progress", "dead-end"];
 // machine problems: housekeeping first, then the ops helper (ladder.mjs)
 export const MACHINE_KINDS = ["unit-failed", "disk", "memory", "stale-process", "login", "factory-stopped", "factory-restarts"];
@@ -134,5 +134,16 @@ export function findObstacles(world, ledger = {}, now = Date.now(), cfg0 = {}) {
   }
   out.push(...actLoginObstacles(world.actLogins, seen, nowIso));
   if (cfg.noAi) add("no-ai", "no-ai", { since: cfg.noAi.since }, [cfg.noAi.evidence || "no AI provider reachable"]);
+  // a factory question the questions step handed to the driver (it offers nothing to pick from): the decide helper's
+  // (ladder.mjs). Its time counts from when the driver first saw it, never from when it was asked.
+  for (const q of world.routedQuestions || []) {
+    const issue = Number(q.issue);
+    add("question", `${q.repo}
+${q.key}`, { repo: q.repo, ...(Number.isInteger(issue) && issue > 0 ? { issue } : {}), ownerIssue: Number(q.ownerIssue) || null,
+      question: { key: q.key, heading: q.heading, link: q.link || "", items: Array.isArray(q.items) ? q.items : [], driver: !!q.driver } },
+      [`a question from the factory of ${q.repo}${q.driver ? "" : ` (its "Owner decisions needed" issue ${q.link || ""})`}, handed to the driver because it offers no options or no recommendation to take: "${q.heading}"`,
+        `the question as the manager wrote it: ${String(q.body || "").slice(0, 3000)}`, `why it came to the driver: ${q.why || "nothing to pick from"}`,
+        `the decision goes on #${Number.isInteger(issue) && issue > 0 ? issue : "?"}${q.items && q.items.length > 1 ? ` (the question also names ${q.items.slice(1).map(n => `#${n}`).join(", ")})` : ""}`]);
+  }
   return out;
 }

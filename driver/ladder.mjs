@@ -37,6 +37,8 @@ export const TELL_AFTER_HOURS = 24;
 export const NO_AI_TELL_HOURS = 6;
 export const FEASIBILITY_AFTER = 3;
 export const ESCALATE_AFTER_HOURS = 2; // a stalled release that still has not moved this long after the acting run: Michael is told once
+export const QUESTION_TRIES = 3;
+export const QUESTION_NOTE = "This obstacle is one question from the factory's \"Owner decisions needed\" issue that offers no options or no recommendation, handed to you by the questions step. Under the owner's standing instruction of 2026-11-24, Mission Control decides every factory question itself, product questions (scope, look and feel, wording, behaviour) included: decide it, choosing what is easiest to undo and never a change to the project's mission. Only three things are never yours: spending money or raising a spending limit, publishing or sending anything to people other than the owner, and irreversibly deleting people's data; when every way forward needs one of those, decide to wait and say exactly what only the owner can do. Put the full decision into `decision`; the driver posts it naming the question. Leave `product_choice` empty.";
 const AI_HELPERS = ["diagnose", "product", "tests", "decide", "michael", "feasibility", "ops"];
 const CAUSE_STEP = { product: "product", "our-tests": "tests", how: "decide", what: "michael", external: "act", feature: "product" };
 const ts = v => (typeof v === "number" ? v : Date.parse(v));
@@ -105,6 +107,15 @@ export function nextStep(obstacle, history = [], ctx = {}) {
   if (obstacle.kind === "no-ai") {
     if (age >= NO_AI_TELL_HOURS * H && (told === null || now - told >= NO_AI_TELL_HOURS * H)) return { do: "tell-michael", approachNote: "No AI provider has been reachable for hours; say so in one plain sentence." };
     return { do: "housekeeping", approachNote: "Probe every provider again; resume by itself when one answers." };
+  }
+  // a factory question handed to the driver (2026-11-24): the decide helper settles it, never the owner (the question
+  // accountant, not this ladder, tells him when a question reaches nobody); three attempts without a decision go to
+  // the acting run, which decides it itself
+  if (obstacle.kind === "question") {
+    const mine = history.filter(h => !(ts(h.at) < ts(obstacle.since)));
+    if (mine.some(h => h.helper === "decided")) return { do: "wait-external", approachNote: "The decision is posted; the questions step takes the question off its list on its next run." };
+    if (mine.filter(h => h.helper === "decide").length >= QUESTION_TRIES) return { do: "act", approachNote: `${QUESTION_TRIES} decide attempts gave no decision. ${QUESTION_NOTE}` };
+    return step("decide", history, ctx, QUESTION_NOTE);
   }
   if (age >= TELL_AFTER_HOURS * H && told === null) return { do: "tell-michael", approachNote: `Not moving for ${Math.floor(age / H)} hours with no milestone: say in one plain sentence what is stuck and what is being tried.` };
 

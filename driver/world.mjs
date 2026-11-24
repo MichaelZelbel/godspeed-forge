@@ -345,6 +345,21 @@ function readFactory(env, deps, project, primary, world, unreadable) {
 }
 
 // ------------------------------------------------------------ the world
+// The factory questions the questions step handed to the driver (2026-11-24): `routed` entries marked `mc` in its state
+// files (state.json and state-<owner>__<repo>.json), each a question with nothing to pick from that the decide helper
+// settles. The step takes an entry off once the decision is on GitHub. -> [{repo, key, heading, ...}]
+export function readRoutedQuestions(env, deps, unreadable = []) {
+  let names = [];
+  try { names = (deps.readDir || (d => fs.readdirSync(d)))(env.QUESTIONS_DIR).filter(n => /^state(-[a-z0-9_.-]+)?\.json$/i.test(n)); } catch { return []; }
+  const out = [];
+  for (const n of names.sort()) {
+    let s;
+    try { s = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, n))); } catch (e) { if (e instanceof SyntaxError) unreadable.push({ part: `questions ${n}`, error: e.message }); continue; }
+    for (const [key, v] of Object.entries((s && s.routed) || {})) if (v && v.mc && v.repo && v.heading) out.push({ ...v, key });
+  }
+  return out;
+}
+
 export async function readWorld(env0 = {}, deps0 = {}) {
   const env = { ...defaultsFor(process.env), ...env0 };
   const deps = { ...realDeps(env), ...deps0 };
@@ -400,6 +415,7 @@ export async function readWorld(env0 = {}, deps0 = {}) {
   try { world.queue = (JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, "mission-control-queue.json"))).items) || []; } catch (e) { if (e instanceof SyntaxError) unreadable.push({ part: "mission-control-queue", error: e.message }); }
   try { world.answeredElsewhere = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, "answered-elsewhere.json"))) || {}; } catch (e) { if (e instanceof SyntaxError) unreadable.push({ part: "answered-elsewhere", error: e.message }); }
   try { world.toMichael = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, env.TO_OWNER_FILE || process.env.FD_TO_OWNER_FILE || "to-owner.json"))) || {}; } catch (e) { world.toMichael = {}; if (e instanceof SyntaxError) unreadable.push({ part: "to-michael", error: e.message }); }
+  world.routedQuestions = readRoutedQuestions(env, deps, unreadable);
   // every open pull request labelled needs-owner in the repositories whose factory runs (parked ones have no factory)
   world.openPrs = [];
   for (const repo of [...new Set([env.REPO, ...world.factories.map(f => f.repo).filter(Boolean)])]) {
