@@ -238,6 +238,14 @@ test("the minute-60 fresh read must confirm: a ticket that cannot be read in it 
   assert.ok(s.log().some(e => e.kind === "message held" && /could not be read in the fresh read/.test(e.why)));
 });
 
+test("the state file is lost while the last open ticket cannot be read: the journal's tokens carry the clock on", async () => {
+  const s = server({ worldAt: (now, m) => { const w = world32(now, m); if (m >= 10) delete w.items[616]; return w; }, look: () => LOOK32 });
+  for (let m = 0; m <= 10; m += 5) await s.round(m);
+  fs.unlinkSync(path.join(s.env.STATE_DIR, "state.json")); // the state file is gone; the journal is not
+  for (let m = 15; m <= 40; m += 5) await s.round(m);
+  assert.deepEqual(s.launched.filter(l => l.entry === `standstill:${ID32}`).map(l => l.minute), [15, 35], "the clock went on from the journal, as if nothing was lost");
+});
+
 test("the test machine's repair halt of 2026-11-22, built from the live record: a halt is a standstill, an acting run at once, the other AI by minute 40, the owner told by minute 60", async () => {
   const { advance } = await import("../inventory.mjs");
   // the halt as the AX41 held it (steps/test-machine/last.json, 2026-11-24): key and words as the step wrote them

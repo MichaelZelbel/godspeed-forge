@@ -539,7 +539,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       // The one exception is the owner's go: the stage step says it has staged and announced the release (the question is delivered
       // before it says so), and the release then waits for him.
       const relObj = (world.releases || []).find(r => r.id === rel.id) || null;
-      let bld = null; try { bld = relObj ? buildingState({ release: relObj, world, now, activity, prevTokens: prev && prev.buildTokens }) : null; } catch (e) { record({ kind: "release clock: tickets unreadable", release: rel.id, why: String(e.message).slice(0, 160) }); }
+      let bld = null; try { bld = relObj ? buildingState({ release: relObj, world, now, activity, prevTokens: (prev && prev.buildTokens) || ((jv.clocks || {})[rel.id] || {}).buildTokens || null }) : null; } catch (e) { record({ kind: "release clock: tickets unreadable", release: rel.id, why: String(e.message).slice(0, 160) }); }
       // the owner's go: this round's look says so, or (the look cannot be read now) the last round's did
       state.waitingGo ||= {};
       const waitingGo = (about && lookKnown && /^Already staged and announced at /m.test(stageText)) || (!lookKnown && !!state.waitingGo[rel.id]);
@@ -567,7 +567,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
         t.clock.buildTokens = bld ? bld.tokens : undefined; // each ticket's last readable state
         t.clock.parts = now0.parts; t.clock.lookText = look; t.clock.files = files; // the parts as now known (unreadable ones the last known)
         // the journal keeps when this state began, so a lost state file never resets the clock
-        if (!((jv.clocks || {})[rel.id] && jv.clocks[rel.id].fp === t.clock.fp)) clockEvents.push({ t: "clock", release: rel.id, fp: t.clock.fp, parts: t.clock.parts, since: t.clock.since, at: nowIso });
+        if (!((jv.clocks || {})[rel.id] && jv.clocks[rel.id].fp === t.clock.fp)) clockEvents.push({ t: "clock", release: rel.id, fp: t.clock.fp, parts: t.clock.parts, ...(t.clock.buildTokens ? { tokens: t.clock.buildTokens } : {}), since: t.clock.since, at: nowIso });
         state.standstill[rel.id] = t.clock;
         clocks[rel.id] = { id: rel.id, version: t.clock.version, inStep: true, why: step.why, due: t.due, look, files, minutes: stillMinutes(t.clock), held: t.clock.held, next: clockNextStep(t.clock), where: bld ? `${bld.open} of ${bld.total} tickets unfinished (${bld.lines.join("; ")})` : (about && parseStage(stageText).reason) || (about ? `the release step says ${parseStage(stageText).result || "nothing"}` : "the release step has nothing to say about it"), progressed: t.clock.since };
       } catch (e) { if (process.env.FD_DEBUG) console.error(e.stack); record({ kind: "release clock failed", release: rel.id, why: String(e.message).slice(0, 200) }); }
@@ -601,7 +601,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
           try { freshWorld = await (deps.readWorld || readWorld)(env, { gh, sh: deps.sh || shFor(env), ...(deps.worldDeps || {}) }); freshActivity = await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, freshWorld); } catch { freshWorld = null; }
           if (!freshWorld) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "the tickets could not be read again" }); continue; }
           const freshRel = (freshWorld.releases || []).find(r => r.id === k.id) || null;
-          const freshBld = (() => { try { return freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity, prevTokens: sc.buildTokens }) : null; } catch { return null; } })();
+          const freshBld = (() => { try { return freshRel ? buildingState({ release: freshRel, world: freshWorld, now, activity: freshActivity, prevTokens: sc.buildTokens || ((jv.clocks || {})[k.id] || {}).buildTokens || null }) : null; } catch { return null; } })();
           if (freshBld && freshBld.unread) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "a ticket could not be read in the fresh read, so it did not confirm the standstill" }); continue; }
           const fresh = stateNow(k.id, sc, text2 || "", known2, !!(text2 && parseStage(text2).id === k.id), null, freshBld);
           if (freshRel && (() => { try { return pageNamesRelease(freshWorld.deliveredPages, freshRel); } catch { return false; } })()) { record({ kind: "message held", entry: `standstill:${k.id}`, why: "a question of money, publishing or deleting that names this release reached the owner since the round began" }); continue; }
