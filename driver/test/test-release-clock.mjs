@@ -276,3 +276,12 @@ test("ticket 01: a notice that reached nobody is not counted as told: it is sent
   down = false; await s.round(65);
   assert.equal(s.told.filter(t => /about an hour/.test(t.text)).length, 1, "the next round it reached him");
 });
+
+test("ticket 01: a records checkout that vanishes (an empty release list, nothing called unreadable) never takes the clock away while the journal holds the release open", async () => {
+  const s = server({ answers: { 1: LIE } });
+  const read = s.deps.readWorld;
+  s.deps.readWorld = async () => { const x = await read(); if (s.at() >= 30) x.releases = []; return x; };
+  for (let m = 0; m <= 60; m += 5) await s.round(m);
+  assert.deepEqual(byClock(s).map(l => l.minute), [20, 40]); assert.deepEqual(s.requests.map(r => r.minute), [60]);
+  assert.ok(s.told.some(t => t.minute === 60));
+});

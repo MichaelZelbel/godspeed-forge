@@ -513,17 +513,19 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     // ---- THE RELEASE CLOCK (standstill.mjs): every approved release the release step works on, judged by its own state alone
     state.standstill ||= {};
     const clocks = {};
-    const releasesUnread = (world.unreadable || []).some(u => u.part === "releases");
     const clockEvents = [];
     // the releases read this round; when the release list itself could not be read, the ones the clock already has go on
-    // (with the state file lost as well: the releases the journal holds open and has a clock for)
+    // A release with a clock that this round's read does not list, while the journal still holds it open (not installed, not
+    // superseded), goes on as well: a records checkout that vanished or could not be read is not the release moving. With the
+    // state file lost as well, the journal's clocks of open releases count.
     const openIds = new Set((jv.open || []).map(r => r.id));
-    const carried = releasesUnread ? [...new Set([...Object.keys(state.standstill), ...Object.keys(jv.clocks || {}).filter(id => openIds.has(id))])].filter(id => !(world.releases || []).some(r => r.id === id)) : [];
+    const listed = id => (world.releases || []).some(r => r.id === id);
+    const carried = [...new Set([...Object.keys(state.standstill), ...Object.keys(jv.clocks || {})])].filter(id => openIds.has(id) && !listed(id) && !(world.superseded || []).some(r => r.id === id) && !(world.installed && world.installed.id === id));
     const clocked = [...(world.releases || []).map(r => ({ id: r.id, version: r.version })), ...carried.map(id => ({ id, version: (state.standstill[id] || {}).version || (/(\d+\.\d+\.\d+(?:-[A-Za-z]+\.\d+(?:\.\d+)*)?)/.exec(id) || [])[1] || null, unread: true }))];
     for (const rel of clocked) {
       const prev = state.standstill[rel.id] || null;
       const about = !!(stage && stage.id === rel.id);
-      let step = rel.unread ? { yes: true, why: "the release list could not be read this round; the clock goes on" }
+      let step = rel.unread ? { yes: true, why: "this round's read does not list it, and the journal holds it open; the clock goes on" }
         : !lookKnown && (prev || (jv.clocks || {})[rel.id]) ? { yes: true, why: "the release step's look cannot be read now; the clock goes on" }
         : inReleaseStep(rel.id, stage, about ? stageText : "", jv.releases[rel.id] || null);
       if (!step.yes) { clocks[rel.id] = { id: rel.id, inStep: false, why: step.why }; delete state.standstill[rel.id]; continue; }
@@ -543,7 +545,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
         clocks[rel.id] = { id: rel.id, version: t.clock.version, inStep: true, why: step.why, due: t.due, look, files, minutes: stillMinutes(t.clock), held: t.clock.held, next: clockNextStep(t.clock) };
       } catch (e) { record({ kind: "release clock failed", release: rel.id, why: String(e.message).slice(0, 200) }); }
     }
-    if (!releasesUnread) for (const id of Object.keys(state.standstill)) if (!(world.releases || []).some(r => r.id === id)) delete state.standstill[id]; // installed or gone (never on a read that failed)
+    for (const id of Object.keys(state.standstill)) if (!listed(id) && !carried.includes(id)) delete state.standstill[id]; // installed, superseded or no longer open in the journal
     if (!dry && clockEvents.length) { try { appendEvents(journalFile, clockEvents); } catch (e) { record({ kind: "release clock not journaled", why: String(e.message).slice(0, 160) }); } }
     out.standstill = Object.values(clocks);
     // the generic chain neither launches for nor tells about a release the clock drives: one owner per release
