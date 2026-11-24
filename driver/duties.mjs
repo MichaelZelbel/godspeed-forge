@@ -4,6 +4,7 @@
 // through a `run` parameter, so each duty is tested offline.
 import fs from "node:fs";
 import { onMain } from "./delivery.mjs";
+import { gitInDir, factoryAccount } from "./checkout-guard.mjs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { containment, containmentCommits, GODSPEED_RELEASE } from "./journal.mjs";
@@ -116,7 +117,8 @@ export function watcherHealth(env, now, run = sysRun, state = {}) {
 // An older approved release that a newer install passed may leave the journal only when every unfinished ticket of it
 // is a ticket of the installed release (or was cut) AND every merge commit of its resolved tickets is an ancestor of the
 // installed commit. -> { leave: [{release, by, check}], bad: [{release, why}] }
-export function supersessionLook(jv, world, run = sysRun, checkout = "", installedOk = true) {
+// The checkout is the factory's: its git runs as the factory user, never as root there (gitFor, issue #157).
+export function supersessionLook(jv, world, run = sysRun, checkout = "", installedOk = true, gitFor = (dir, args) => gitInDir(factoryAccount(), dir, args)) {
   const out = { leave: [], bad: [] };
   const inst = world.installed;
   if (!inst) return out;
@@ -129,7 +131,7 @@ export function supersessionLook(jv, world, run = sysRun, checkout = "", install
     const unfinished = (jr.tickets || []).filter(t => !(`t:${t.item}:resolved` in jr.slots)).map(t => t.issue);
     const c1 = containment({ unfinished, cut: [] }, { issues: inst.issues || [] });
     const shas = Object.entries(jr.commits || {}).filter(([k]) => /:merged$/.test(k)).map(([, sha]) => sha);
-    const isAnc = (sha, to) => !commit || !checkout ? false : run("git", ["-C", checkout, "merge-base", "--is-ancestor", sha, to]).status === 0; // no commit or checkout to compare: not contained
+    const isAnc = (sha, to) => !commit || !checkout ? false : run(...gitFor(checkout, ["merge-base", "--is-ancestor", sha, to]), { env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: "/root" } }).status === 0; // no commit or checkout to compare: not contained
     const c2 = !commit || !checkout ? { contained: false, missing: ["(no commit or checkout to compare)"] } : containmentCommits(shas, commit, isAnc); // fails closed even when there are no merge commits to compare
     if (c1.contained && c2.contained) out.leave.push({ release: s.id, by: inst.id, check: `issues ${unfinished.join(",") || "none"} are in ${inst.id}; ${shas.length} merge commit(s) are ancestors of ${commit.slice(0, 7)}` });
     else out.bad.push({ release: s.id, why: `${s.id} would be discarded by ${inst.id} but ${c1.missing.length ? `its unfinished issues ${c1.missing.join(", ")} are not in the newer release` : `${c2.missing.length} of its merge commits are not in the installed commit`}` });

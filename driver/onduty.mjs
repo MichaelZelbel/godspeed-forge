@@ -28,6 +28,10 @@ export const actDefaults = (e = process.env) => ({
   OWNER_NAME: e.FD_OWNER_NAME || "the owner",
   TOKEN_SCRIPT: e.FD_TOKEN_SCRIPT || "/usr/local/bin/gh-app-token.mjs",
   FACTORY_HOME: e.FD_FORGE_HOME || "/home/factory",
+  // the factory's checkouts and the user they belong to: read-only for an acting run (controlPlane, issue #157)
+  FACTORY_USER: e.FORGE_USER || "",
+  CHECKOUTS: (() => { let m = {}; try { const v = JSON.parse(e.FD_PROJECT_CHECKOUTS || "{}"); if (v && typeof v === "object" && !Array.isArray(v)) m = v; } catch { /* none */ }
+    return [...new Set([...Object.values(m), e.FD_SOURCE_CHECKOUT].filter(c => typeof c === "string" && /^\/[^\s]+$/.test(c)).map(c => path.posix.normalize(c).replace(/\/+$/, "")))]; })(),
   CLAUDE_BIN: (() => { const v = e.FD_CLAUDE_BIN || ""; try { const j = JSON.parse(v); return Array.isArray(j) ? j[0] : v; } catch { return v || `${e.FD_FORGE_HOME || "/home/factory"}/.local/bin/claude`; } })(),
   KEEPER_HOME: e.FD_KEEPER_HOME || "/usr/local/lib/godspeed/forge/keeper",
   DRIVER_DIR: e.FD_LIB || "/usr/local/lib/godspeed/forge/driver",
@@ -65,11 +69,18 @@ export function readSettingsEnvFile(file) {
   }
   return out;
 }
+// Where an acting run works on code, and where it never writes (issue #157). "" when the settings name no checkout.
+export const checkoutsBrief = a => (a.CHECKOUTS || []).length && a.FACTORY_USER && a.FACTORY_USER !== "root"
+  ? `THE FACTORY'S CHECKOUTS (${a.CHECKOUTS.join(", ")}) belong to ${a.FACTORY_USER} and are read-only for you: never run git or anything else that writes in them as root, and never add a checkout to git's safe.directory (on 2026-11-22 an acting run checked out a branch in one as root, and the factory could not fetch for two days). To work on a pull request's code, clone it into a folder of your own (mktemp -d) and push from there. A git command a checkout itself needs runs as ${a.FACTORY_USER}, outside your sandbox: systemd-run --uid=${a.FACTORY_USER} --pipe --wait --quiet git -C <checkout> <command>.\n\n`
+  : "";
 // The control plane (9.7, 8.9): what an acting run on a RELEASE may read and never write. A DRIVER-REPAIR run (started by
 // the dead-man) may write the driver's install, and never the dead-man, the journal or the units.
 export const controlPlane = (a, mode = "release") => [
   `${a.KEEPER_HOME}/deadman.mjs`, "/etc/systemd/system", a.STATE_DIR, a.KEEPER_HOME,
   ...(mode === "release" ? [a.DRIVER_DIR] : []),
+  // the factory's checkouts are the factory user's alone (issue #157: on 2026-11-22 an acting run checked out a branch in one as root,
+  // and the factory could not fetch for two days); "-": a checkout not made yet never stops the run
+  ...(a.CHECKOUTS || []).map(c => `-${c}`),
 ];
 export const sandboxProps = (a, mode = "release") => [
   "NoNewPrivileges=yes", "CapabilityBoundingSet=~CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_SYS_MODULE CAP_SYS_BOOT CAP_SYS_TIME CAP_SYS_RAWIO", "ProtectControlGroups=yes", "ProtectKernelModules=yes", `ReadOnlyPaths=${controlPlane(a, mode).join(" ")}`,
@@ -92,7 +103,7 @@ TOOLS (all as root): root's gh is logged in as the owner. Keys: set -a; . ${a.KE
 
 NEVER: remove or undo a pause, a parked project, a HOLD, PAUSE or STOP file (the owner may have set it on purpose), anything outward to people (mail, posts, messages), spending money, publishing or promoting a release, recording the owner's go, posting as the owner ("Owner decision" is only his own words), loosening or skipping a check or giving a bot more permissions, editing the product's .github/ files, moving an item out of a release (only the factory driver's own cut does that, and only when the item itself cannot be built; an item whose trouble is our own setup stays in and you fix the setup), deciding what the software does for its users or how it looks or is worded (that is his). Never pass --owner-said or --owner-ref, never write the owner's words or his go anywhere, and never clear a halt that says it needs the owner's yes: say it is the owner's step.
 
-WHEN DONE: post a short note on the issue or pull request, signed "${SIGN}". If the item was a question in the factory's queue and you answered it, run: node ${selfPath} --mark-handled "<owner/repo>" "<queue heading>". If the trouble is the factory DRIVER itself (its code, its units, its journal), you cannot edit it from here (read-only): run node ${selfPath} --repair-request "<what is wrong>" and the dead-man starts a repair; if that command fails, the request did not reach the dead-man, so say so and answer RESULT: unresolved. If you truly cannot unstick it, run: node ${selfPath} --notice "<short id>" "<ONE plain sentence for the owner in everyday words: what is stuck, what you tried, and the one step only he can take; no issue numbers or file names>".
+${checkoutsBrief(a)}WHEN DONE: post a short note on the issue or pull request, signed "${SIGN}". If the item was a question in the factory's queue and you answered it, run: node ${selfPath} --mark-handled "<owner/repo>" "<queue heading>". If the trouble is the factory DRIVER itself (its code, its units, its journal), you cannot edit it from here (read-only): run node ${selfPath} --repair-request "<what is wrong>" and the dead-man starts a repair; if that command fails, the request did not reach the dead-man, so say so and answer RESULT: unresolved. If you truly cannot unstick it, run: node ${selfPath} --notice "<short id>" "<ONE plain sentence for the owner in everyday words: what is stuck, what you tried, and the one step only he can take; no issue numbers or file names>".
 If another program is visibly working on this item right now (a GitHub Actions run in progress, auto-stage's STOP file, a freeze or scenarios running), do not interfere: report RESULT: in-progress and name what is running, as the systemd unit, the GitHub run (its URL or id) or the pull request; the driver checks it on its next round, and an in-progress that names none of these, or one that is not running, counts as unresolved.
 Your last line must be exactly one of: RESULT: resolved | RESULT: notice | RESULT: unresolved | RESULT: in-progress`;
 }

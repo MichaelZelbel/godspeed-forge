@@ -1,7 +1,7 @@
 // The factory driver's own tests (driver/test): every file runs here, one case after the other, so the markers
 // never mix. A file written for node:test has its cases collected by driver/test/harness.mjs; the three
 // release-driver files are scripts of assertions, each one case.
-// test cases: 377
+// test cases: 387
 import { testCase } from "./cases.mjs";
 
 const plain = new Set(["test-release-driver", "test-release-driver-cut", "test-release-driver-owner-steps"]);
@@ -10,6 +10,7 @@ const files = [
   "test-ai",
   "test-briefs",
   "test-causes",
+  "test-checkouts",
   "test-deadman",
   "test-driver",
   "test-duties",
