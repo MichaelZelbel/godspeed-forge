@@ -373,3 +373,25 @@ test("the browser proof runs as the factory user every round: a pass reads ok, a
   assert.ok(!bad.unreadable.some(u => /browser/.test(u.part)));
   assert.deepEqual(proofs, [true, true]);
 });
+
+test("the driver's real browser proof script matches setup's and gives the right answer against a stand-in agent-browser", async () => {
+  const { BROWSER_PROOF: driverProof } = await import("../world.mjs");
+  const { BROWSER_PROOF: setupProof } = await import("../../lib/setup.mjs");
+  assert.equal(driverProof, setupProof);
+  const { execFileSync } = await import("node:child_process");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "browser-proof-"));
+  const stand = body => fs.writeFileSync(path.join(bin, "agent-browser"), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
+  const proof = () => { try { execFileSync("bash", ["-c", driverProof], { env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` }, stdio: "pipe" }); return true; } catch { return false; } };
+  try {
+    stand('for a in "$@"; do case "$a" in text) echo forge-browser-proof;; esac; done; exit 0');
+    assert.equal(proof(), true, "a working browser passes");
+    stand('for a in "$@"; do case "$a" in open) exit 1;; esac; done; echo forge-browser-proof');
+    assert.equal(proof(), false, "open failing fails the proof");
+    stand('for a in "$@"; do case "$a" in text) echo wrong;; esac; done; exit 0');
+    assert.equal(proof(), false, "wrong page text fails the proof");
+    fs.rmSync(path.join(bin, "agent-browser"));
+    assert.equal(proof(), false, "an absent browser fails the proof");
+  } finally { fs.rmSync(bin, { recursive: true, force: true }); }
+});

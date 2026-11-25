@@ -255,7 +255,7 @@ export const ANONYMOUS_UNIT = /^run-[A-Za-z0-9]+\.(service|scope)$/;
 // The factory's browser tool, proved the way setup proves it (lib/setup.mjs BROWSER_PROOF; this folder cannot import
 // from lib/): a local page opened and its text read back, as the factory user. A failing proof is the reading itself, not
 // an unreadable part. The 60 seconds are the proof's own, inside the shell's 120.
-const BROWSER_PROOF = [
+export const BROWSER_PROOF = [
   'dir=$(mktemp -d) || exit 1',
   'trap \'agent-browser --session forge-proof close >/dev/null 2>&1; rm -rf "$dir"\' EXIT',
   'echo "<html><body>forge-browser-proof</body></html>" > "$dir/page.html"',
