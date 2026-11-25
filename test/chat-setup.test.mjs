@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { testCase } from './cases.mjs';
 import { tmpDir } from './forge-owner-fakes.mjs';
 import { setup } from '../lib/owner/setup.mjs';
@@ -252,7 +252,7 @@ testCase('an App install check that keeps failing throws what GitHub said, one t
   assert.equal(await install(async () => 'missing'), false);
 }
 
-testCase('a worker that cannot start, never opens a session, or dies after opening one is answered with the terminal command');
+testCase('a worker that cannot start, never opens a session, or dies while the owner waits on it is answered with the terminal command');
 {
   const terminal = /godspeed-forge setup owner\/repository/;
   const fast = { pollMs: 5, maxMs: 100, quietMs: 20 };
@@ -266,14 +266,16 @@ testCase('a worker that cannot start, never opens a session, or dies after openi
   assert.equal(b.ok, false);
   assert.match(b.say, terminal);
 
-  const dying = world({ startWorker: async () => {} });
-  const dead = spawnSync(process.execPath, ['-e', '']).pid;
+  const dying = world({ startWorker: async () => { throw new Error('a running worker is not restarted'); } });
+  const worker = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)']);
   fs.mkdirSync(dying.files.dir, { recursive: true });
-  fs.writeFileSync(dying.files.session, JSON.stringify({ repository: REPO, workerPid: dead, status: 'running', log: [], ask: null }));
-  fs.writeFileSync(dying.files.reply, JSON.stringify({ delivered: 0, answer: null }));
-  const c = await setup({ kind: 'setup', project: REPO, words: 'how is it going' }, { ...dying.ctx, startWorker: async () => {}, timing: fast });
+  fs.writeFileSync(dying.files.session, JSON.stringify({ repository: REPO, workerPid: worker.pid, status: 'running', log: ['one'], ask: null }));
+  fs.writeFileSync(dying.files.reply, JSON.stringify({ delivered: 1, answer: null }));
+  setTimeout(() => worker.kill('SIGKILL'), 30);
+  const c = await setup({ kind: 'setup', project: REPO, words: 'how is it going' }, { ...dying.ctx, timing: { pollMs: 5, maxMs: 2000, quietMs: 20 } });
   assert.equal(c.ok, false);
   assert.match(c.say, terminal);
+  assert.equal(dying.marker(), null);
 }
 
 process.exit(0);
