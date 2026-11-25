@@ -32,7 +32,9 @@ What was tried before, newest last (do something different from it):
 
 A `.factory/STOP` or `.factory/PAUSE` file: no program of the Forge makes one (the factory always runs), so someone did, by hand or
 with an old version. Read its first line and the driver's `pauses.json`. When `pauses.json` holds the owner's own record for it, leave
-it and say so. Otherwise remove that one file and prove a lap can start again (the timer, the next launch).
+it and say so. A pause the owner asked for in the chat carries the line "Asked by the owner in the chat" in the file: leave it too.
+Otherwise remove that one file (`runuser -u <the factory user> -- rm <the file>`, nothing else in that folder) and prove a lap can start
+again (the timer, the next launch).
 
 ## Never
 

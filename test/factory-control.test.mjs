@@ -1,7 +1,7 @@
 // The chat's "run one lap", "turn on automatic work" and "pause the factory" (lib/factory-control.mjs), with a
 // stand-in factory/consumer.py in the project's checkout that records how it was called: each handler runs Cole
 // Medin's own command for the project the request names and answers in plain words.
-// test cases: 14
+// test cases: 15
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -139,6 +139,21 @@ testCase('pause the factory pauses scheduled laps and lets running ones finish')
   const s = await server();
   assert.deepEqual(await workOff(request('work-off'), s.ctx, plainServer), { ok: true, say: 'The factory is paused for owner/app: it starts no new work, and a change it is already making is finished. Say "turn on automatic work" to start it again.' });
   assert.deepEqual((await calls(s.checkouts['owner/app'])).map(c => c.args), [['pause']]);
+}
+
+testCase('the owner\'s own pause carries his mark in the PAUSE file, so the driver leaves it alone; a pause without it is not his');
+{
+  const s = await server();
+  const checkout = s.checkouts['owner/app'];
+  await mkdir(join(checkout, '.factory'), { recursive: true });
+  await writeFile(join(checkout, '.factory', 'PAUSE'), 'Operator paused scheduled launches; wakes continue.\n');
+  await workOff(request('work-off'), s.ctx, plainServer);
+  assert.equal(await readFile(join(checkout, '.factory', 'PAUSE'), 'utf8'), 'Operator paused scheduled launches; wakes continue.\nAsked by the owner in the chat: r1.\n');
+  await workOff(request('work-off'), s.ctx, plainServer);
+  assert.equal((await readFile(join(checkout, '.factory', 'PAUSE'), 'utf8')).match(/Asked by the owner/g).length, 1, 'once');
+  const s2 = await server();
+  await workOff(request('work-off'), s2.ctx, plainServer);
+  await assert.rejects(readFile(join(s2.checkouts['owner/app'], '.factory', 'PAUSE'), 'utf8'), /ENOENT/, 'no file made by the mark itself');
 }
 
 testCase('a refusing factory is said plainly, its own words go only to the log');

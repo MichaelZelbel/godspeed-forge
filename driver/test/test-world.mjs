@@ -319,6 +319,14 @@ test("item 7: a STOP's writer runs when its name is in the process's command lin
   assert.equal(writerRuns("", STAGE_ARGS), false);
 });
 
+test("item 7: a PAUSE carries the owner's mark only when his own request in the chat wrote it", async () => {
+  const asked = "Operator paused scheduled launches; wakes continue.\nAsked by the owner in the chat: r1.\n";
+  const a = await readWorld(TEST_ENV, projectDeps({ stop: asked, writerArgs: "" }));
+  assert.equal(a.factories[0].stop.ownerAsked, true);
+  const b = await readWorld(TEST_ENV, projectDeps({ stop: "Operator paused scheduled launches; wakes continue.\n", writerArgs: "" }));
+  assert.equal(b.factories[0].stop.ownerAsked, false, "the same first line without the mark is somebody else's");
+});
+
 test("item 7: a leftover STOP of an older release step is read like any other STOP, and reading it asks GitHub nothing about scenarios", async () => {
   for (const label of ["auto-stage", "stage"]) {
     const d = projectDeps({ stop: OLD_STOP(label), writerArgs: "", scenarios: [BETA31_RUN("in_progress")] });

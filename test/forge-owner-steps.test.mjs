@@ -519,7 +519,7 @@ testCase('item 7 (the Forge 0.3.3): an owner release check never creates the fac
   const lap = await plannedProject('lapgoeson', { unit: probe });
   gh.merge('acme/lapgoeson', lap.issue, lap.co.commit({ unit: probe }, 'fine'));
   const n = bridge.sent.length;
-  await releasesStep.run({ ...ctxFor([lap.project]), settings: settings({ steps: { 'owner-releases': { python: 'python3-that-does-not-exist', check_minutes: 5 } } }) });
+  await releasesStep.run({ ...ctxFor([lap.project]), settings: settings({ steps: { 'owner-releases': { python: 'python3', check_minutes: 5 } } }) });
   assert.equal(releaseRecord(state, 'acme/lapgoeson', '0.1.0').state, 'staged', 'the checks, which fail if PAUSE or STOP exists while they run, passed');
   assert.match(sentSince(n)[0].text, /is ready to try/);
   assert.deepEqual(lap.co.consumerLog(), [], 'consumer.py was never asked for anything');

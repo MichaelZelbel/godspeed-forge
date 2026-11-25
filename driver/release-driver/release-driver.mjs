@@ -417,6 +417,9 @@ const AUDIT_RULES = () => [
   [/oauth_token|\$GH_CONFIG_DIR|\b(cat|less|more|head|tail|grep|sed|awk|cp|base64|strings|xxd|od)\b[^\n]*\/gh\/[^\s'"]*hosts/, "read the run's GitHub login"],
   [/\b(curl|wget|httpie|nc|ncat|openssl)\b[^\n]*github\.com|\bhttps?\s+[^\n]*api\.github\.com|(fetch|requests\.(get|post|put|patch|delete)|urlopen|https?\.request|Net::HTTP)[^\n]*api\.github\.com/, "talked to GitHub around gh and git"],
 ];
+// Reading or lifting the factory's STOP or PAUSE is the ops helper's job (a STOP or PAUSE is somebody's, never a program's, the Forge
+// 0.3.3, item 7): a command that does only that is no breach of "the factory's own files".
+const LIFT_STOP = /^\s*(\/bin\/bash -lc ')?\s*(runuser -u \S+ -- )?(cat|ls|head|stat|rm|unlink)( -f| -l)? \S*\/\.factory\/(STOP|PAUSE)'?\s*$/;
 // codex --json events -> [{why, what}]. runDir: the run's own folder; a file changed outside it is a breach.
 export function auditEvents(text, { runDir = "" } = {}) {
   const auditRules = AUDIT_RULES();
@@ -427,7 +430,7 @@ export function auditEvents(text, { runDir = "" } = {}) {
     let e; try { e = JSON.parse(line); } catch { continue; }
     const it = e && e.item;
     if (!it || (e.type !== "item.started" && e.type !== "item.completed")) continue;
-    if (it.type === "command_execution") for (const [re, why] of auditRules) if (re.test(String(it.command || ""))) add(why, it.command);
+    if (it.type === "command_execution") for (const [re, why] of auditRules) if (re.test(String(it.command || "")) && !(LIFT_STOP.test(String(it.command || "")) && why === "touched the factory's own files or a login")) add(why, it.command);
     if (it.type === "file_change") for (const ch of it.changes || []) {
       const raw = String(ch.path || "");
       if (!raw || !runDir) continue;

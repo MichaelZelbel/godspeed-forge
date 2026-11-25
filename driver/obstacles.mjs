@@ -102,14 +102,15 @@ export function findObstacles(world, ledger = {}, now = Date.now(), cfg0 = {}) {
     }
     // No program of the Forge makes the factory's STOP or PAUSE (the Forge 0.3.3, item 7), so every one is somebody's and goes to the ops
     // helper in the round that finds it, also while the other file exists beside it. The exception is the owner's own recorded pause
-    // (pauses.json with his Telegram message): that one is his, the inventory reminds him of it, and nothing lifts it.
+    // (a line in the file when he asked in the chat, or pauses.json with his Telegram message): that one is his, the inventory reminds him
+    // of it, and nothing lifts it.
     const owned = (cfg.ownerPauses || []).map(String);
     const seen = new Set();
     for (const st of [f.stop, f.pause]) {
       if (!st || seen.has(st.file)) continue;
       seen.add(st.file);
       const kind = st.kind === "PAUSE" || /\/\.factory\/PAUSE$/.test(String(st.file || "")) ? "PAUSE" : "STOP";
-      if (owned.includes(`${kind}:${f.project}`)) continue;
+      if (st.ownerAsked || owned.includes(`${kind}:${f.project}`)) continue; // his own pause: asked for in the chat (a line in the file) or recorded
       add("factory-stopped", `${kind.toLowerCase()}:${f.project}`, { since: st.at, ...where, stop: { file: st.file, kind, line: st.line, writer: st.writer, pid: st.pid } },
         [`${st.file} is there since ${st.at}: "${st.line}"`, `its writer ${st.writerAlive ? "is still running" : "is not running"}`]);
     }

@@ -891,6 +891,7 @@ export function readPauses(env, now, world = {}) {
   for (const p of out) {
     const rec = mine.find(x => x.target === p.id);
     if (rec) { p.ownerRef = `Telegram message ${rec.messageId}`; if (rec.until) p.expiresAt = Date.parse(rec.until); }
+    else if (p.ownerAsked) p.ownerRef = "his request in the chat";
     else p.maxHours = 2; // a pause nobody dated expires at its maximum
   }
   // a PAUSE or STOP file without the owner's record is an obstacle (factory-stopped, obstacles.mjs), not a reminder
@@ -904,8 +905,8 @@ function readPauseFiles(env, now, world = {}) {
     out.push({ id: "hold", all: true, what: "the factory driver is on hold", since: fs.statSync(f).mtimeMs, expiresAt: expiry(line), line });
   } catch {}
   for (const f of world.factories || []) {
-    for (const st of [f && f.pause, f && f.stop && f.stop.kind === "STOP" && !f.stop.writer ? f.stop : null]) { // a PAUSE and an operator STOP are both pauses, each with its own reminder
-      if (st && (st.kind === "PAUSE" || (st.kind === "STOP" && !st.writer))) out.push({ id: `${st.kind}:${f.project}`, repo: f.repo || null, what: `${f.project} has a ${st.kind} file`, since: when(st.at), expiresAt: expiry(st.line), line: st.line });
+    for (const st of [f && f.pause, f && f.stop && f.stop.kind === "STOP" ? f.stop : null]) { // a PAUSE and an operator STOP are both pauses, each with its own reminder
+      if (st && (st.kind === "PAUSE" || st.kind === "STOP")) out.push({ id: `${st.kind}:${f.project}`, ownerAsked: !!st.ownerAsked, repo: f.repo || null, what: `${f.project} has a ${st.kind} file`, since: when(st.at), expiresAt: expiry(st.line), line: st.line });
     }
   }
   try {
