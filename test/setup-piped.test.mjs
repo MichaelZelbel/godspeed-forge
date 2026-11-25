@@ -47,6 +47,7 @@ async function pipedSetup({ piped = '', end = true, onOutput = () => {} } = {}) 
     ].join('\n'),
     gh: 'case "$1 $2" in "api -i") printf "HTTP/2.0 200 OK\\nX-Oauth-Scopes: repo, workflow\\n\\n{}\\n";; "repo clone") mkdir -p "${@: -1}/.git";; api*) echo "{}";; esac',
     git: `case "$1" in remote) echo https://github.com/owner/repo.git;; clone) mkdir -p "\${@: -1}/.git";; rev-parse) echo ${FACTORY_REVISION};; symbolic-ref) echo origin/main;; diff) echo MISSION.md;; config) exit 1;; esac`,
+    bun: 'true',
     python3: 'if [ "$2" = init ]; then mkdir -p factory harness; echo "# Mission" > MISSION.md; echo "{}" > harness/harness.config.json; fi'
   };
   for (const [name, body] of Object.entries(tools)) {

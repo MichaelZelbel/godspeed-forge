@@ -18,6 +18,7 @@ import { signIn, AGENT_QUESTION, CODE_QUESTION } from '../lib/signin.mjs';
 import { createFactorySetup, CONFIRM_QUESTION, STRIKE_QUESTION } from '../lib/factory-setup.mjs';
 import { defaults } from '../lib/config.mjs';
 import { ARCHON_REVISION, FACTORY_REVISION } from '../lib/constants.mjs';
+import './home.mjs';
 import { testCase } from './cases.mjs';
 
 Error.stackTraceLimit = 100;
@@ -369,6 +370,8 @@ const SCENARIOS = [
 async function prepare(scenario) {
   await rm(root, { recursive: true, force: true });
   await mkdir(root, { recursive: true });
+  // Setup keeps the Archon source under the home folder: a fresh one, so every run installs it the same way.
+  process.env.HOME = join(root, 'home');
   const world = standInGithub();
   await scenario.arrange?.(world);
   return world;
