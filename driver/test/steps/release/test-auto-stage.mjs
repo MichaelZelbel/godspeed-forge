@@ -318,7 +318,7 @@ function world({ issues, scenarioSeq, planText = planFor(), staging = null, stat
     // main's head, its required check, the builds of a commit: by default all there (the fast path's own tests change them)
     mainTip: async () => w.extra.mainTip || "9".repeat(40),
     checkState: async (sha) => (typeof w.extra.checkState === "function" ? w.extra.checkState(sha) : w.extra.checkState || "passed"),
-    rerunChecks: async (sha) => { (w.checkReruns ||= []).push(sha); return 1; },
+    rerunChecks: async (sha) => { (w.checkReruns ||= []).push(sha); return { started: [1], refused: null }; },
     buildReady: async (kind, sha) => (w.extra.buildReady ? w.extra.buildReady(kind, sha) : true),
     buildRun: async (kind, sha) => (w.extra.buildRun ? w.extra.buildRun(kind, sha) : null),
     dispatchBuild: async (kind, ref) => { (w.buildDispatches ||= []).push([kind, ref]); },
@@ -1478,6 +1478,25 @@ test("review fix: a check run once more that GitHub refused is asked again, neve
   assert.deepEqual(w.checkReruns, [V]);
   assert.ok(A.loadState(ctx.stateFile).releases[w.id].reruns[V]);
   assert.equal(w.notices.length, 0, "nothing said: it was run once more only now");
+});
+
+test("review fix (round 3): of a check's failed runs, the ones GitHub took are written down at once and never asked again; only the refused one is", async () => {
+  const { w, ctx } = versioned({ pr: { number: 701, state: "open", merged: false, head: V, title: "t" }, required: "failed" });
+  const calls = [];
+  ctx.rerunChecks = async (sha, already) => {
+    calls.push([...already]);
+    return calls.length === 1 ? { started: [11], refused: "GitHub said 403 to running the failed jobs of run 13 again" } : { started: [13], refused: null };
+  };
+  await A.autoStage(ctx);
+  let st = A.loadState(ctx.stateFile).releases[w.id];
+  assert.deepEqual(st.rerunRuns[V], [11], "the run GitHub took is written down at once");
+  assert.equal((st.reruns || {})[V], undefined, "not counted as run once more while one was refused");
+  await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  st = A.loadState(ctx.stateFile).releases[w.id];
+  assert.deepEqual(calls, [[], [11]], "the second read asks only for what was not taken");
+  assert.deepEqual(st.rerunRuns[V], [11, 13]);
+  assert.ok(st.reruns[V], "now it is run once more");
+  assert.equal(w.notices.length, 0);
 });
 
 test("review fix: a failed build whose run once more GitHub refused is asked again; only its real second failure halts, with its cause", async () => {

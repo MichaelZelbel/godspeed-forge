@@ -1060,15 +1060,27 @@ async function fixedCommitFrom({ ctx, version, plan, deferred, rs, save, sayOnce
   const now = () => ctx.now();
   const iso = () => new Date(now()).toISOString();
   const watching = (why) => ({ outcome: "waiting", why, poll: true });
-  // A check's failed jobs run once more: written down only once GitHub took every request. A refusal is said in the look and
-  // asked again by the next read (a refusal that lasts is a wait that becomes a halt), so the look goes on. -> whether it ran
+  // A check's failed jobs run once more, each failed run of the commit once: the runs GitHub took are written down at once
+  // (rs.rerunRuns), so a read after a refusal asks only for the ones not taken yet, and the check counts as run once more
+  // (rs.reruns) only when every one was taken. A refusal is said in the look and asked again by the next read (a refusal that
+  // lasts is a wait that becomes a halt), so the look goes on. -> whether every run was run once more
   const runOnceMore = async (sha, what) => {
     if (dry) return true;
+    const taken = ((rs.rerunRuns ||= {})[sha] ||= []);
+    let out;
     try {
-      await ctx.rerunChecks(sha);
+      out = await ctx.rerunChecks(sha, [...taken]);
     } catch (e) {
       if (!(e instanceof R.Refused)) throw e;
-      log(`${what} failed, and GitHub refused to run its failed jobs once more (${e.message}); it is asked again.`);
+      out = { started: [], refused: e.message };
+    }
+    const { started = [], refused = null } = out && typeof out === "object" ? out : {};
+    if (started.length) {
+      taken.push(...started);
+      save();
+    }
+    if (refused) {
+      log(`${what} failed, and GitHub refused to run its failed jobs once more (${refused}); it is asked again.`);
       return false;
     }
     (rs.reruns ||= {})[sha] = iso();
@@ -1864,17 +1876,19 @@ export function rerunnable(runs) {
   return (runs || []).filter((x) => x && x.status === "completed" && !["success", "skipped", "neutral"].includes(x.conclusion) && x.event !== "schedule" && !String(x.path || "").endsWith(`/${G.SCENARIOS_WORKFLOW}`) && x.name !== "scenarios");
 }
 
-// Runs the failed jobs of each run a check run once more may start (rerunnable) once more. A request GitHub refuses is a refusal
-// of the whole: the caller writes the run once more down only when every request was taken, so a refused one is asked again by
-// the next read instead of being counted (the second round of the review, 2026-11-25). -> how many were started
-export async function rerunFailedRuns(api, repo, runs) {
-  let n = 0;
+// Runs the failed jobs of each run a check run once more may start (rerunnable) once more, except the runs already taken (each
+// run once). It stops at the first request GitHub refuses. -> {started: [run ids GitHub took], refused: the refusal or null};
+// the caller writes the taken ones down at once and counts the check as run once more only when nothing was refused, so a refused
+// run is asked again by the next read and a taken one is never asked twice (rounds 2 and 3 of the review, 2026-11-25).
+export async function rerunFailedRuns(api, repo, runs, already = []) {
+  const started = [];
   for (const r of rerunnable(runs)) {
+    if (already.includes(r.id)) continue;
     const q = await api("POST", `/repos/${repo}/actions/runs/${r.id}/rerun-failed-jobs`, {});
-    if (!(q.ok || q.status === 201)) R.refuse(`GitHub said ${q.status} to running the failed jobs of run ${r.id} again, so the check is asked again by the next read.`);
-    n++;
+    if (!(q.ok || q.status === 201)) return { started, refused: `GitHub said ${q.status} to running the failed jobs of run ${r.id} again` };
+    started.push(r.id);
   }
-  return n;
+  return { started, refused: null };
 }
 
 // How far a run is from its jobs: {done, total} of the jobs that are not skipped.
@@ -1925,7 +1939,7 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand, page })
     // The required check of one commit: passed, running, failed or none.
     checkState: async (sha) => requiredState((await J(`/repos/${cfg.repo}/commits/${sha}/check-runs?check_name=required&filter=latest`)).check_runs),
     // The failed workflow runs of one commit are run once more (their failed jobs only). -> how many
-    rerunChecks: async (sha) => rerunFailedRuns(api, cfg.repo, (await J(`/repos/${cfg.repo}/actions/runs?head_sha=${sha}&per_page=50`)).workflow_runs || []),
+    rerunChecks: async (sha, already = []) => rerunFailedRuns(api, cfg.repo, (await J(`/repos/${cfg.repo}/actions/runs?head_sha=${sha}&per_page=50`)).workflow_runs || [], already),
     // Whether the server image of every edition (in the registry) or the Windows setup (GitHub's artifact) of a commit is there.
     buildReady: async (kind, sha) => {
       if (kind === "windows") {
