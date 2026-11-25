@@ -54,6 +54,7 @@ export const goWords = {
   checking: (repository, version) => `${N(repository)} ${version} is still being checked, so there is nothing to make public yet.`,
   moved: (repository, version) => `I did not make ${N(repository)} ${version} public: it changed after it was put up to try, so it has to be tried again first.`,
   tagElsewhere: (repository, version) => `I did not make ${N(repository)} ${version} public: GitHub already has a version ${version} that is something else.`,
+  publicStepFailed: (repository, version, cause = "") => `I did not make ${N(repository)} ${version} public: the project's own public step failed, so nothing changed on GitHub.${cause ? ` It said: ${cause}` : ""} Say go again once it is fixed.`,
   failed: (repository, version) => `I could not finish making ${N(repository)} ${version} public: GitHub refused a step. Say go again in a few minutes and I will finish it.`,
 };
 export const takeBackWords = {
@@ -62,6 +63,7 @@ export const takeBackWords = {
   first: (repository, version) => `${N(repository)} ${version} is the first public version, so there is nothing earlier to go back to, and I changed nothing. To replace it, ask me to plan a fix.`,
   already: (repository, version) => `${N(repository)} ${version} was already taken back, so nothing changed.`,
   nothing: repository => `I have not made any version of ${N(repository)} public, so there is nothing to take back.`,
+  undoFailed: (repository, version, cause = "") => `I did not take back ${N(repository)} ${version}: the project's own undo step failed, so nothing changed on GitHub.${cause ? ` It said: ${cause}` : ""} Ask me again once it is fixed.`,
   failed: (repository, version) => `I could not finish taking back ${N(repository)} ${version}: GitHub refused a step. Ask me again in a few minutes and I will finish it.`,
 };
 export const statusWords = {
@@ -112,7 +114,7 @@ export const questionsGone = repository => `The ${N(repository)} factory is wait
 export const stageWords = {
   ready: (repository, version, link) => `${N(repository)} ${version} is ready to try: ${link}. Shall I make it public? Reply go.`,
   failedChecks: (repository, version, sentences) => `${N(repository)} ${version} did not pass its own checks, so it is not ready to try. ${sentences.join(" ")} To fix it, ask me to plan the next ${N(repository)} release.`,
-  stagingFailed: (repository, version) => `${N(repository)} ${version} passed its own checks, but it could not be put on your staging copy, so it is not ready to try.`,
+  stagingFailed: (repository, version, cause = "") => `${N(repository)} ${version} passed its own checks, but it could not be put on your staging copy, so it is not ready to try.${cause ? ` It said: ${cause}` : ""}`,
   closedUndone: (repository, version, title) => `${N(repository)} ${version} cannot be finished, because "${title}" was closed without the change being made.`,
   check: {
     static: "The code checks failed.",
@@ -121,6 +123,10 @@ export const stageWords = {
     start: name => `The ${name === "static" ? "code checks" : "tests"} could not start.`,
     unfinished: "The checks did not finish.",
     setup: "The copy to check could not be made on this server.",
+    profile: problem => `The project's own steps could not be used: ${problem}.`,
+    build: cause => `The build failed.${cause ? ` It said: ${cause}` : ""}`,
+    product: path => `The build did not make ${path}.`,
+    own: (name, cause) => `The check "${name}" failed.${cause ? ` It said: ${cause}` : ""}`,
   },
 };
 
