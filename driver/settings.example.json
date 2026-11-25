@@ -24,7 +24,12 @@
   "projects/owner--repository.json": {
     "repository": "owner/repository", "project": "repository", "checkout": "/home/factory/repository",
     "apps": { "builder": "your-builder-app", "release": "your-release-app" }, "trust": true, "agent": "claude",
-    "profile": { "staging_url": "https://staging.example.com", "deploy": "a command that puts the candidate on the staging copy", "health": "a command that prints the running commit" },
+    "profile": {
+      "build": { "commands": ["a command that builds the candidate"], "produces": ["a path the build makes"] },
+      "checks": ["a command that checks the candidate before staging"],
+      "staging": "a command that puts the candidate on the staging copy", "staging_url": "https://staging.example.com", "health": "a command that prints the running commit",
+      "public": "a command that makes the release public", "undo": "a command that undoes public", "timeout_minutes": 25
+    },
     "questions": { "label": "the product", "name": "the product", "product": "what the software is, in a few words", "seat": "as a person who uses it", "example": "When you use it to do an everyday thing, it sometimes does something else." },
     "releases": {
       "records_repo": "owner/records", "records_checkout": "/var/lib/godspeed/forge/records", "plan_pattern": "^release-\\d", "scenarios_workflow": "scenarios.yml",

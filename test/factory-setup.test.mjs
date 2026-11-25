@@ -53,6 +53,7 @@ async function project({ workflows = false } = {}) {
     await mkdir(join(checkout, path, '..'), { recursive: true });
     await writeFile(join(checkout, path), text);
   }
+  await writeFile(join(checkout, '.git/godspeed-forge-install.json'), '{}\n'); // the Forge began installing here: not an owner's factory
   const state = join(root, 'state', 'projects', REPO);
   await mkdir(state, { recursive: true });
   return { root, remote, checkout, state, home: join(root, 'home') };
