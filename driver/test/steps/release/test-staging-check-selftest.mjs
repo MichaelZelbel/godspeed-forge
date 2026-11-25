@@ -230,6 +230,19 @@ async function selfTest() {
     );
     const askMorning = await run({ open: true, args: ["--tell"] });
     t.ok(askMorning.r.code === 0 && told(askMorning).length === 1, "the morning run asks too, when nothing asked before");
+    // the stage step's short run left two slow tests for after the go (the Forge 0.3.3, item 8): the ask says so, and the record
+    // keeps it, so the morning run's ask says it too when the first one could not be sent
+    const later = await run({ args: ["--tell", "--later", "2"] });
+    t.ok(
+      later.r.code === 0 && told(later).length === 1 &&
+        told(later)[0].summary === "2.0.0-beta.7 is on your server, healthy, and every scenario passed. Two slow tests run once right after it is public; a failure there is filed as a bug and holds nothing back. Shall I make it public?" &&
+        later.staging.later === 2,
+      `the ask says that slow tests run after it is public, and the record keeps how many (${JSON.stringify(told(later)[0] && told(later)[0].summary)})`,
+    );
+    const laterMorning = await run({ open: true, args: ["--tell"], staging: { later: 2 } });
+    t.ok(told(laterMorning).length === 1 && /Two slow tests run once right after it is public/.test(told(laterMorning)[0].summary), `the morning run's ask says it from the record (${JSON.stringify(told(laterMorning)[0] && told(laterMorning)[0].summary)})`);
+    const badLater = await run({ args: ["--tell", "--later", "two"] });
+    t.ok(badLater.r.code === 2 && /--later needs the number/.test(badLater.r.stderr), "--later takes a number");
     const toldBefore = await run({ args: ["--tell"], staging: { told: { ready: "2026-10-27T10:10:00Z" } } });
     t.ok(toldBefore.r.code === 0 && told(toldBefore).length === 0, "a version he was already asked about is never asked about again");
     const askedByOldCode = await run({ args: ["--tell"], staging: { status: "running", told: { passed: "2026-10-27T10:10:00Z" } } });

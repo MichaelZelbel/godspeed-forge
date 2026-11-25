@@ -7,7 +7,7 @@
 // as on the server, and GitHub takes what it took that night or the times the task names: a server image 18 minutes, the
 // Windows setup 4, a required check 18 on a pull request and 8 on main, the freeze 1, the short tests 6 with two AI-judged
 // jobs failing and 4 more for their one rerun (10 in all), the install on the server 8 beside them. No network, no AI money.
-// test cases: 15
+// test cases: 17
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -332,7 +332,12 @@ function sim(o = {}) {
         if (r.status !== "completed") return { result: "running", ...base };
         return r.conclusion === "success" ? { result: "passed", ...base } : { result: "failed", failedJobs: r.failed, ...base };
       },
-      dispatch: async (tag, opts = {}) => { s.dispatches.push([tag, opts, new Date(s.clock).toISOString()]); scenarioRun(tag, opts.only || null); },
+      dispatch: async (tag, opts = {}) => {
+        if (s.refuseDispatches > 0) { s.refuseDispatches--; throw new Error("GitHub said 422 to starting the scenarios"); }
+        s.dispatches.push([tag, opts, new Date(s.clock).toISOString()]);
+        if (s.loseDispatches > 0) { s.loseDispatches--; return; } // taken, and never shown
+        scenarioRun(tag, opts.only || null);
+      },
       runInfo: async (runId) => { const r = s.scenarioRuns.find((x) => x.id === runId); return r ? { attempt: r.attempt, status: r.status } : null; },
       runProgress: async (runId) => {
         const r = s.scenarioRuns.find((x) => x.id === runId);
@@ -453,6 +458,7 @@ test("the look line names each wait with its expected end, and a fresh page ever
   assert.ok(waits.some((l) => /building the server image for \w{7}, about 18 minutes \(done about 23:2\d UTC\)/.test(l)), waits.slice(0, 5).join("\n"));
   assert.ok(waits.some((l) => /short tests on candidate\/2\.0\.0-beta\.32, \d+ of 15 done \(done about \d\d:\d\d UTC\)/.test(l)), waits.filter((l) => /short/.test(l)).join("\n"));
   assert.ok(s.pages > 10, "each read is a page of its own");
+  assert.ok(waits.some((l) => /Waiting: the release's last tickets are still open \(#616 with its pull request #1117 open\)\./.test(l)), "the watch on the last ticket is the look's line too");
   // the same wait reads the same on every page (its end is a clock time), so the release clock sees no change while it lasts
   const imageLines = new Set(waits.flatMap((l) => l.slice(9).split("; ")).filter((part) => /building the server image/.test(part)));
   assert.equal(imageLines.size, 1, [...imageLines].join("\n"));
@@ -476,6 +482,23 @@ test("after the go: the slow jobs run once on the tag, a failure is filed and sa
   await driveUntil(s, "2026-11-25T05:00:00Z", { stopAtGo: false });
   assert.equal(s.dispatches.length, 2, "never a second slow run");
   assert.equal(s.notices.length, 1, "never a second note");
+});
+
+test("review fix: after the go, a start GitHub refused is asked again; one GitHub took and never showed is said once, never started twice", async () => {
+  const s = await driveUntil(sim(), "2026-11-25T02:00:00Z");
+  s.publicVersion = VERSION;
+  s.refuseDispatches = 1;
+  await driveUntil(s, "2026-11-25T02:20:00Z", { stopAtGo: false });
+  assert.equal(s.dispatches.length, 2, "refused, then started by the next look");
+  const t = sim();
+  await driveUntil(t, "2026-11-25T02:00:00Z");
+  t.publicVersion = VERSION;
+  t.loseDispatches = 1;
+  await driveUntil(t, "2026-11-25T04:00:00Z", { stopAtGo: false });
+  assert.equal(t.dispatches.length, 2, "never started a second time (it costs money from the test key)");
+  assert.equal(t.notices.length, 1);
+  assert.equal(t.notices[0].text, "After 2.0.0-beta.32 went public, its slow tests were started but never showed on GitHub, so they did not run. They were not started a second time, because each run costs money from the test key: say if you want them run.");
+  assert.equal(A.loadState(path.join(t.dir, "state.json")).releases[ID].longRun.lost, true);
 });
 
 test("after the go, slow jobs that pass are only written down", async () => {
@@ -521,6 +544,18 @@ test("GitHub's answers: the required check, the build run that may publish (neve
   assert.deepEqual(A.newestBuildRun(runs, sha), { id: 2, status: "in_progress", conclusion: null, startedAt: "2026-11-24T23:55:19Z", attempt: 1, url: "u" });
   assert.equal(A.newestBuildRun([runs[0]], sha), null, "a pull request's run publishes nothing");
   assert.deepEqual(A.progressOf([{ status: "completed", conclusion: "success" }, { status: "in_progress" }, { status: "completed", conclusion: "skipped" }]), { done: 1, total: 2 });
+});
+
+test("review fix: a check run once more never starts a paid scenario run or a scheduled one", () => {
+  const runs = [
+    { id: 1, status: "completed", conclusion: "failure", event: "push", path: ".github/workflows/required.yml", name: "required" },
+    { id: 2, status: "completed", conclusion: "failure", event: "push", path: ".github/workflows/scenarios.yml", name: "scenarios" },
+    { id: 3, status: "completed", conclusion: "failure", event: "schedule", path: ".github/workflows/v2-integrated.yml", name: "Integrated Godspeed v2" },
+    { id: 4, status: "completed", conclusion: "cancelled", event: "pull_request", path: ".github/workflows/v2-integrated.yml", name: "Integrated Godspeed v2" },
+    { id: 5, status: "completed", conclusion: "success", event: "push", path: ".github/workflows/guide.yml", name: "guide" },
+    { id: 6, status: "in_progress", conclusion: null, event: "push", path: ".github/workflows/windows-setup.yml", name: "windows setup" },
+  ];
+  assert.deepEqual(A.rerunnable(runs).map((r) => r.id), [1, 4]);
 });
 
 test("near the end: every open ticket has a pull request of this repository open, named or closing", () => {

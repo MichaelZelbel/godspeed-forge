@@ -92,7 +92,7 @@ export function scenarioWords(sc) {
   return `the scenarios could not be read (${sc.problem})`;
 }
 
-export async function stagingCheck({ ownerRepo, version, release, dryRun, env, log }) {
+export async function stagingCheck({ ownerRepo, version, release, dryRun, env, log, later = 0 }) {
   log(`Checking ${version} of ${ownerRepo} on your server (${G.SERVER}) and its scenarios${dryRun ? ". This is a dry run: it makes every read and records nothing." : "."}`);
   const records = new G.Records(env);
   const id = records.findRelease(ownerRepo, version, release);
@@ -157,6 +157,9 @@ export async function stagingCheck({ ownerRepo, version, release, dryRun, env, l
   const check = { at: G.isoOf(Date.now()), serverClock: server.now, result, checked: v.checked, failures: v.failures, scenarios: sc.result, ...(standing ? { nonBlocking: split.nonBlocking } : {}) };
   if (ai) check.addonAi = ai;
   const next = { ...staging, lastCheck: check };
+  // How many slow tests the candidate's run before the go left for after it (the stage step's --later): kept, so a later check
+  // that asks him (the morning one) says it too.
+  if (Number(later) > 0) next.later = Number(later);
   // What could not be read leaves the last known scenarios as they were.
   if (sc.result !== "unreadable") next.scenarios = { ...sc, seenAt: check.at };
   let said;
@@ -192,7 +195,7 @@ export async function checkAndTell({ ownerRepo, version, release, tell, dryRun, 
   let code;
   let id = release;
   try {
-    const r = await stagingCheck({ ownerRepo, version, release, dryRun, env, log });
+    const r = await stagingCheck({ ownerRepo, version, release, dryRun, env, log, later });
     code = EXIT[r.result];
     id = r.release;
   } catch (e) {
@@ -271,7 +274,7 @@ export async function tellOnce({ records, id, version, env, log, later = 0 }) {
     const defaults = ((records.json(`releases/${id}/defaults-applied.json`) || {}).applied || [])
       .filter((a) => a && a.default).map((a) => `${String(a.heading || `#${a.issue}`).replace(/\s*\(#\d+\)\s*$/, "")}: ${a.default}`);
     message = {
-      summary: `${version} is on your server, healthy, and every scenario passed.${title ? ` What changed: ${title}.` : ""}${moved.length ? ` Moved to the next release: ${moved.join("; ")}.` : ""}${defaults.length ? ` Decided by default because no answer came in time: ${defaults.join("; ")}.` : ""}${laterWords(later)} Shall I make it public?`,
+      summary: `${version} is on your server, healthy, and every scenario passed.${title ? ` What changed: ${title}.` : ""}${moved.length ? ` Moved to the next release: ${moved.join("; ")}.` : ""}${defaults.length ? ` Decided by default because no answer came in time: ${defaults.join("; ")}.` : ""}${laterWords(Number(later) || Number(staging.later) || 0)} Shall I make it public?`,
       status: "ready for your go",
       act: 'Answer "go", "go, and these later" or "stop, these first".',
     };

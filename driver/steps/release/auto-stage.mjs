@@ -952,6 +952,8 @@ async function lookStage(ctx) {
       // minute the last one is merged instead of up to 15 minutes later.
       const near = nearTheEnd(verdict, read.issues);
       log(`Not complete yet: waiting on ${verdict.waitingOn.join(", ")}${near ? "; each has its pull request open, so this look keeps watching" : ""}.`);
+      // the look's line while it watches: the driver reads tickets still open as the factory working, never as a stall
+      if (near) log(`Waiting: the release's last tickets are still open (${verdict.waitingIssues.map((n) => `#${n} with its pull request ${read.issues[n].openPulls.map((p) => `#${p}`).join(", ")} open`).join("; ")}).`);
       if (rs.pin && verdict.waitingIssues.length && !dry) {
         // a ticket that is open again (reopened, or added by an amendment) after the commit was pinned: the pin no longer
         // holds the whole release, so the commit is taken again once every ticket is done (an issue GitHub could not read
@@ -1061,7 +1063,7 @@ async function lookStage(ctx) {
     log(`candidate/${version} exists; the next look would continue with its scenarios and the server.`);
     return { outcome: "would-continue" };
   }
-  return stageFrozen({ ctx, id, version, base: baseVersion, plan, rs, save, sayOnce, haltWith, tag });
+  return stageFrozen({ ctx, id, version, base: baseVersion, plan, rs, save, sayOnce, haltWith, tag, blocked, clearBlock });
 }
 
 // ---------- the commit to freeze: main's head pinned once, the version on top, its builds and checks ----------
@@ -1133,10 +1135,11 @@ async function fixedCommitFrom({ ctx, version, plan, deferred, rs, save, sayOnce
   if (pinCheck === "failed") {
     const reruns = dry ? { ...(rs.reruns || {}) } : (rs.reruns ||= {});
     if (!reruns[pin]) {
+      // written down once GitHub took the request (a request that failed is made again by the next read, never counted)
       if (!dry) {
+        await ctx.rerunChecks(pin);
         reruns[pin] = iso();
         save();
-        await ctx.rerunChecks(pin);
       }
       log(`main's required check failed at ${short7(pin)}, so its failed jobs were run once more.`);
       pinCheck = "running";
@@ -1171,9 +1174,9 @@ async function fixedCommitFrom({ ctx, version, plan, deferred, rs, save, sayOnce
       const reruns = dry ? { ...(rs.reruns || {}) } : (rs.reruns ||= {});
       if (!reruns[commit]) {
         if (!dry) {
+          await ctx.rerunChecks(commit);
           reruns[commit] = iso();
           save();
-          await ctx.rerunChecks(commit);
         }
         log(`The version pull request #${pr.number} did not pass its checks, so its failed jobs were run once more.`);
         waits.push({ words: `the required check of the version pull request #${pr.number}, run once more`, until: now() + cfg.checkMinutes * MINUTE });
@@ -1252,9 +1255,10 @@ async function versionOnPin({ ctx, version, plan, deferred, rs, pin, save, block
       log(`Would move the version pull request #${pr.number} onto ${short7(pin)}.`);
       return { result: { outcome: "would-raise-version" } };
     }
+    keep({ moving: pin }); // the intent first: a crash after the push finds the step's own commit on the pin, not somebody else's
     const r = await vp.update({ branch, version, section: versionNotes({ plan, version, deferred }), message, onto: pin });
     if (r.cannot || r.unchanged) return judgment("version", `the version pull request #${pr.number} could not be moved onto ${short7(pin)} (${r.cannot || "there is nothing to change there"})`, "version move");
-    keep({ head: r.head, parent: pin, openedAt: iso() });
+    keep({ head: r.head, parent: pin, openedAt: iso(), moving: null });
     log(`The version pull request #${pr.number} now stands on ${short7(pin)} (${short7(r.head)}).`);
     return { commit: r.head, branch, pr: { number: pr.number, merged: false, head: r.head } };
   };
@@ -1300,7 +1304,11 @@ async function versionOnPin({ ctx, version, plan, deferred, rs, pin, save, block
     else if (pr.merged) return judgment("version", `the version pull request #${pr.number} was merged from a commit that does not stand on ${short7(pin)}, the commit the release is frozen from`, "version pull request elsewhere");
     else return moveOnto();
   } else if (pr.head !== bump.head) {
-    return judgment("version", `somebody else pushed to the version pull request #${pr.number}, so it is not the release step's to merge`, "version pull request changed");
+    // the step's own move onto the pin that a look did not see end: its commit stands on the pin it was moving to
+    const parent = bump.moving === pin && !pr.merged && vp.parentOf ? await vp.parentOf(pr.head) : null;
+    if (parent !== pin) return judgment("version", `somebody else pushed to the version pull request #${pr.number}, so it is not the release step's to merge`, "version pull request changed");
+    keep({ head: pr.head, parent: pin, openedAt: iso(), moving: null });
+    log(`The version pull request #${pr.number} was moved onto ${short7(pin)} by an earlier read (${short7(pr.head)}).`);
   }
   if (!pr.merged && rs.bump.parent !== pin) return moveOnto(); // the pin moved: the version goes on top of the new one
   return { commit: rs.bump.head, branch, pr: { number: pr.number, merged: !!pr.merged, head: pr.head } };
@@ -1342,11 +1350,19 @@ async function ensureBuilds({ ctx, rs, commit, branch, version, save, blocked })
     if (run) {
       // failed or cancelled: run once more, then it is a cause somebody looks at
       if (!k.rerunAt) {
+        // written down once GitHub took the request: one it refused is asked again by the next read (and a refusal that lasts
+        // is a wait that becomes a halt), never counted as the one run once more
         if (!dry) {
+          try {
+            await ctx.rerunFailed(run.id);
+          } catch (e) {
+            log(`GitHub's build of ${label} failed, and running it once more was refused (${e.message}); it is asked again.`);
+            waits.push({ words: `${label} failed and GitHub refused to run it once more`, until: now() + MINUTE });
+            continue;
+          }
           k.rerunAt = iso();
           k.rerunOf = run.attempt || 1;
           save();
-          await ctx.rerunFailed(run.id);
         }
         log(`GitHub's build of ${label} failed, so its failed jobs were run once more.`);
         building(now(), " once more");
@@ -1514,9 +1530,17 @@ async function afterGo(ctx, pub) {
           log(`${version} is public: a real look would start its slow tests once on ${tagName} (${later.join(", ")}).`);
           continue;
         }
-        rs.longRun = { dispatchedAt: new Date(ctx.now()).toISOString(), jobs: later };
+        rs.longRun = { dispatchedAt: new Date(ctx.now()).toISOString(), jobs: later }; // before the request: never started twice
         save();
-        await ctx.dispatch(tagName, { only: later });
+        try {
+          await ctx.dispatch(tagName, { only: later });
+        } catch (e) {
+          // GitHub said no, so nothing was started: the next look asks again
+          delete rs.longRun;
+          save();
+          log(`${version} is public, but GitHub refused to start its slow tests on ${tagName} (${e.message}); the next look asks again.`);
+          continue;
+        }
         log(`${version} is public, so its slow tests run once on ${tagName} now (${later.join(", ")}); they hold nothing back.`);
         continue;
       }
@@ -1524,10 +1548,19 @@ async function afterGo(ctx, pub) {
       const ours = sc.run && sc.run !== rs.scenarioRun && Date.parse(sc.at || 0) >= Date.parse(rs.longRun.dispatchedAt) - 2 * MINUTE;
       if (!ours || !["passed", "failed"].includes(sc.result)) {
         if (!ours && ctx.now() - Date.parse(rs.longRun.dispatchedAt) > 3 * cfg.dispatchGraceMinutes * MINUTE) {
+          // started (or about to be when a look ended) and never shown: they did not run, and he is told so once, because a
+          // second run costs money from the test key and only he says yes to that
+          const text = `After ${version} went public, its slow tests were started but never showed on GitHub, so they did not run. They were not started a second time, because each run costs money from the test key: say if you want them run.`;
+          try {
+            ctx.notify({ id: `auto-stage-${version}-after-go-lost`, text, about: `Godspeed ${version}: the slow tests after the go did not run` });
+          } catch (e) {
+            log(`The note that the slow tests did not run could not be queued (${e.message}); the next look tries again.`);
+            continue;
+          }
           rs.longRun.done = new Date(ctx.now()).toISOString();
           rs.longRun.lost = true;
           save();
-          log(`The slow tests started on ${tagName} after the go do not show on GitHub; they are not started a second time.`);
+          log(`Told him once: ${text}`);
         }
         continue;
       }
@@ -1570,7 +1603,7 @@ async function afterGo(ctx, pub) {
 
 // ---------- the frozen candidate: scenarios, server, the one message ----------
 
-async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, haltWith, tag }) {
+async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, haltWith, tag, blocked, clearBlock }) {
   const { cfg, log, records } = ctx;
   const now = () => ctx.now();
   const tagName = `candidate/${version}`;
@@ -1662,9 +1695,11 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
       // after the go (afterGo). A stage without the gate file runs the release gate as before.
       const gate = await ctx.gateJobs(tagName);
       if (gate === null) {
-        log(`The list of the release's tests on ${tagName} cannot be read now; nothing is started and the next read tries again.`);
+        // a wait in the look's line, which becomes a halt once it has lasted
+        blocked("gate", `the list of the release's tests on ${tagName} cannot be read from GitHub now, so the short tests are not started yet`);
         return { outcome: "waiting", why: "gate unreadable", poll: true };
       }
+      clearBlock("gate");
       const later = gate.jobs ? gate.jobs.filter((j) => cfg.afterGoJobs.includes(j)) : [];
       const only = gate.jobs ? gate.jobs.filter((j) => !later.includes(j)) : null;
       if (only && !only.length) {
@@ -1910,6 +1945,12 @@ export function gateReleaseJobs(text) {
   return out;
 }
 
+// The failed runs of a commit that a check run once more may start again: never the proving scenarios (each costs money from
+// the test key, and their one rerun is the candidate's own), never a scheduled run.
+export function rerunnable(runs) {
+  return (runs || []).filter((x) => x && x.status === "completed" && !["success", "skipped", "neutral"].includes(x.conclusion) && x.event !== "schedule" && !String(x.path || "").endsWith(`/${G.SCENARIOS_WORKFLOW}`) && x.name !== "scenarios");
+}
+
 // How far a run is from its jobs: {done, total} of the jobs that are not skipped.
 export function progressOf(jobs) {
   const real = (jobs || []).filter((j) => j && j.conclusion !== "skipped");
@@ -1964,7 +2005,7 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand, page })
     rerunChecks: async (sha) => {
       const runs = (await J(`/repos/${cfg.repo}/actions/runs?head_sha=${sha}&per_page=50`)).workflow_runs || [];
       let n = 0;
-      for (const r of runs.filter((x) => x.status === "completed" && !["success", "skipped", "neutral"].includes(x.conclusion))) {
+      for (const r of rerunnable(runs)) {
         const q = await api("POST", `/repos/${cfg.repo}/actions/runs/${r.id}/rerun-failed-jobs`, {});
         if (q.ok || q.status === 201) n++;
       }

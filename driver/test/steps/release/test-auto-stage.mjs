@@ -1463,6 +1463,74 @@ test("a dry look says what the version step would do and does it not", async () 
   assert.equal(fs.existsSync(ctx.stateFile), false, "nothing written");
 });
 
+test("review fix: a move of the version pull request onto a new pin that a look did not see end is the step's own; somebody else's push is not", async () => {
+  const moved = "5".repeat(40);
+  const setup = (moving) => {
+    const made = versioned({ pr: { number: 701, state: "open", merged: false, head: moved, title: "t" } });
+    Object.assign(A.releaseState(made.ctx.state, made.w.id), { pin: { commit: PIN, at: "2026-11-14T09:00:00Z" }, bump: { branch: "release/version-2.0.0-beta.25", pr: 701, head: V, parent: "1".repeat(40), ...(moving ? { moving: PIN } : {}) } });
+    return made;
+  };
+  const ours = setup(true);
+  const r1 = await A.autoStage(ours.ctx);
+  assert.equal(r1.outcome, "waiting");
+  assert.equal(A.loadState(ours.ctx.stateFile).releases[ours.w.id].bump.head, moved, "taken as the step's own commit");
+  assert.equal(ours.w.vcalls.filter((c) => c[0] === "update").length, 0, "not moved a second time");
+  const theirs = setup(false);
+  const r2 = await A.autoStage(theirs.ctx);
+  assert.equal(r2.outcome, "needs-judgment");
+  assert.match(r2.halt.words, /somebody else pushed to the version pull request #701/);
+});
+
+test("review fix: a check run once more that GitHub refused is asked again, never counted as the one", async () => {
+  const { w, ctx } = versioned({ pr: { number: 701, state: "open", merged: false, head: V, title: "t" }, required: "failed" });
+  let refuse = true;
+  ctx.rerunChecks = async (sha) => {
+    if (refuse) throw new R.Refused("GitHub said 502 to the rerun.");
+    (w.checkReruns ||= []).push(sha);
+    return 1;
+  };
+  await assert.rejects(A.autoStage(ctx), /502/);
+  assert.equal((A.loadState(ctx.stateFile).releases[w.id].reruns || {})[V], undefined, "a refused request is not the run once more");
+  refuse = false;
+  await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  assert.deepEqual(w.checkReruns, [V]);
+  assert.ok(A.loadState(ctx.stateFile).releases[w.id].reruns[V]);
+  assert.equal(w.notices.length, 0, "nothing said: it was run once more only now");
+});
+
+test("review fix: a failed build whose run once more GitHub refused is asked again; only its real second failure halts, with its cause", async () => {
+  const box = { attempt: 1, refuse: true };
+  const pin = "9".repeat(40);
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { buildReady: (kind) => kind !== "image", buildRun: (kind) => (kind === "image" ? { id: 9, status: "completed", conclusion: "failure", startedAt: "2026-11-14T09:40:00Z", attempt: box.attempt, url: "https://x/runs/9" } : null) } });
+  ctx.rerunFailed = async () => {
+    if (box.refuse) throw new R.Refused("GitHub said 403 to running the failed jobs of run 9 again.");
+    box.attempt = 2;
+  };
+  const r1 = await A.autoStage(ctx);
+  assert.equal(r1.outcome, "waiting");
+  assert.equal(r1.halt, undefined);
+  assert.equal((((A.loadState(ctx.stateFile).releases[w.id].builds || {})[pin] || {}).image || {}).rerunAt, undefined, "not counted");
+  box.refuse = false;
+  await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  assert.ok(A.loadState(ctx.stateFile).releases[w.id].builds[pin].image.rerunAt, "written down once GitHub took it");
+  const r3 = await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  assert.equal(r3.halt.key, "blocked-build-failed");
+  assert.match(r3.halt.words, /could not build the server image for 9999999: its run failed, also when it was run once more \(https:\/\/x\/runs\/9\)/);
+  assert.deepEqual(w.calls, [], "nothing frozen");
+});
+
+test("review fix: a gate file GitHub cannot give now is a wait in the look's line, never a run of every test, and a halt once it lasted", async () => {
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { gate: null } });
+  w.tag = "1".repeat(40);
+  const r = await A.autoStage(ctx);
+  assert.equal(r.outcome, "waiting");
+  assert.equal(w.dispatches, 0, "nothing started without the list");
+  assert.ok(w.log.some((l) => /^Waiting: the list of the release's tests on candidate\/2\.0\.0-beta\.25 cannot be read from GitHub now/.test(l)), w.log.join("\n"));
+  let t = ctx.now() + 2 * 3600 * 1000;
+  const later = await A.autoStage({ ...ctx, now: () => t, state: A.loadState(ctx.stateFile) });
+  assert.equal(later.halt.key, "blocked-gate");
+});
+
 test("a freeze that says the tag exists is carried on from the tag, not said to him", async () => {
   const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { freezeCheckRefuses: `${REPO} already has the tag candidate/2.0.0-beta.25, so 2.0.0-beta.25 was frozen before; nothing was written.` } });
   const r = await A.autoStage(ctx);
