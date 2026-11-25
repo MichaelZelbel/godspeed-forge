@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { chmod, lstat, mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { generateKeyPairSync, verify } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { PassThrough } from 'node:stream';
@@ -19,8 +19,9 @@ import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { run as runProcess } from '../lib/process.mjs';
 import { ARCHON_REVISION, ARCHON_SOURCE, FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
+import './home.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 196
+// test cases: 199
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -92,7 +93,7 @@ assert.match(mission, /Keep releases dependable\./);
 assert.match(mission, /Small software teams\./);
 const initCall = calls.find(call => call.args[1] === 'init');
 assert.equal(initCall.cwd, checkout);
-assert.deepEqual(initCall.args.slice(1), ['init', '--source', ARCHON_SOURCE, '--revision', ARCHON_REVISION]);
+assert.deepEqual(initCall.args.slice(1), ['init', '--source', ARCHON_SOURCE, '--revision', ARCHON_REVISION, '--cache', join(homedir(), '.cache/factory/archon')]);
 assert(calls.some(call => call.args.includes(FACTORY_REVISION)));
 assert.deepEqual(JSON.parse(await readFile(join(checkout, '.factory/consumer.json'), 'utf8')), { source: join(root, 'cache/factory/archon', ARCHON_REVISION) });
 
@@ -3290,4 +3291,73 @@ for (const repository of ['MichaelZelbel/forge-trial-recipes', 'a-very-long-orga
     assert(n.startsWith(`${name} ${repository.split('/')[0].slice(0, 5)}`), n);
     assert.notEqual(n, githubAppName(name, `${repository}-two`));
   }
+}
+
+// The Archon source's dependencies are installed by a call of setup's own, before init, and only when it runs.
+async function archonInstallRun(repository, { failInstall = false, folderExists = false } = {}) {
+  const home = await mkdtemp(join(tmpdir(), 'forge-archon-home-'));
+  const destination = join(home, '.cache/factory/archon', ARCHON_REVISION);
+  if (folderExists) await mkdir(destination, { recursive: true });
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  const project = await retryProject(repository);
+  const options = project.options();
+  const inner = options.commands.run;
+  const calls = [];
+  options.commands.run = async (command, args, runOptions = {}) => {
+    calls.push({ command, args, cwd: runOptions.cwd });
+    if (command === 'bun' && failInstall) {
+      await mkdir(join(runOptions.cwd, 'node_modules'), { recursive: true });
+      throw new Error('install failed');
+    }
+    if (command === 'git' && args[0] === 'clone' && args.at(-1) === destination) {
+      await mkdir(destination, { recursive: true });
+      return { stdout: '' };
+    }
+    return inner(command, args, runOptions);
+  };
+  try {
+    const outcome = await setupRepository(repository, options).then(() => null, error => error);
+    return { outcome, calls, destination, messages: project.record.messages };
+  } finally {
+    process.env.HOME = previousHome;
+  }
+}
+
+testCase('setup installs the Archon source with bun and its lockfile before init, in the folder init uses');
+{
+  const { outcome, calls, destination } = await archonInstallRun('owner/archon-install');
+  assert.equal(outcome, null);
+  const at = predicate => calls.findIndex(predicate);
+  const clone = at(call => call.command === 'git' && call.args[0] === 'clone' && call.args.at(-1) === destination);
+  assert(clone >= 0);
+  assert.deepEqual(calls[clone].args.slice(0, -1), ['clone', '--no-hardlinks', '--no-checkout', ARCHON_SOURCE]);
+  assert.deepEqual(calls[clone + 1].args, ['checkout', '--detach', ARCHON_REVISION]);
+  assert.equal(calls[clone + 1].cwd, destination);
+  const install = calls.find(call => call.command === 'bun');
+  assert.deepEqual(install.args, ['install', '--frozen-lockfile']);
+  assert.equal(install.cwd, destination);
+  assert(clone + 1 < at(call => call.command === 'bun'));
+  assert(calls.findIndex(call => call.command === 'bun') < calls.findIndex(call => call.args[1] === 'init'));
+  const init = calls.find(call => call.args[1] === 'init');
+  assert.equal(join(init.args[init.args.indexOf('--cache') + 1], ARCHON_REVISION), destination);
+  assert.equal(calls.filter(call => call.args[1] === 'init').length, 1);
+}
+
+testCase('a failed Archon install stops setup with the initialization message, removes the folder and never reaches init');
+{
+  const { outcome, calls, destination, messages } = await archonInstallRun('owner/archon-install-fails', { failInstall: true });
+  assert(outcome instanceof ReportedSetupError && outcome.message === 'initialization');
+  assert(!calls.some(call => call.args[1] === 'init'));
+  assert(!(await isPresent(destination)));
+  assert.match(messages.at(-1), /could not prepare the project/);
+}
+
+testCase('setup leaves an existing Archon folder to init and installs nothing itself');
+{
+  const { outcome, calls } = await archonInstallRun('owner/archon-folder-there', { folderExists: true });
+  assert.equal(outcome, null);
+  assert(!calls.some(call => call.command === 'bun'));
+  assert(!calls.some(call => call.command === 'git' && call.args[0] === 'clone' && call.args.includes(ARCHON_SOURCE)));
+  assert.equal(calls.filter(call => call.args[1] === 'init').length, 1);
 }

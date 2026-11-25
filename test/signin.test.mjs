@@ -16,6 +16,7 @@ import { start } from '../lib/process.mjs';
 import { answersFrom, setupRepository } from '../lib/setup.mjs';
 import { defaults } from '../lib/config.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
+import './home.mjs';
 import { testCase } from './cases.mjs';
 
 const REPO = 'owner/repo';

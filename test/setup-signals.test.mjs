@@ -12,6 +12,7 @@ import { runSetupCommand } from '../lib/cli.mjs';
 import { answersFrom, setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults } from '../lib/config.mjs';
+import './home.mjs';
 import { testCase } from './cases.mjs';
 // test cases: 32
 
@@ -451,6 +452,7 @@ if (process.argv[2] === 'command') {
       claude: 'echo signed in',
       gh: 'mkdir -p "${@: -1}/.git"',
       git: `case "$1" in remote) echo https://github.com/owner/repo.git;; clone) mkdir -p "\${@: -1}/.git";; rev-parse) echo ${FACTORY_REVISION};; esac`,
+      bun: 'true',
       python3: 'if [ "$2" = init ]; then mkdir -p factory; echo "# Mission" > MISSION.md; fi'
     };
     for (const [name, body] of Object.entries(tools)) {
