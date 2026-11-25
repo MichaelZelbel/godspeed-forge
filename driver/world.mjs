@@ -332,7 +332,7 @@ function readFactory(env, deps, project, primary, world, unreadable) {
     const file = path.posix.join(checkout, ".factory", name);
     let text; try { text = deps.readFile(file); } catch { continue; }
     let mt = Date.now(); try { mt = deps.mtime(file); } catch {}
-    const s = { file, kind: name, ...parseStop(text, mt), writerAlive: null, ownerAsked: /^Asked by the owner in the chat\b/m.test(String(text)) };
+    const s = { file, kind: name, ...parseStop(text, mt), writerAlive: null };
     if (s.pid && s.writer) {
       const args = tryRun(deps, `if command -v ps >/dev/null 2>&1; then ps -p ${s.pid} -o args= 2>/dev/null || true; else echo __unknown__; fi`, false, unreadable, `${part}/stop-writer`);
       if (args !== null) s.writerAlive = String(args).includes("__unknown__") ? null : writerRuns(s.writer, args); // unknown stays unknown: nothing is removed on a guess
@@ -340,6 +340,9 @@ function readFactory(env, deps, project, primary, world, unreadable) {
     if (name === "PAUSE") f.pause = s; // both files may exist: each is read, a PAUSE is never hidden by a STOP
     if (name === "STOP" || !f.stop) f.stop = s;
   }
+  // the file the owner's own "pause the factory" makes before the pause (lib/factory-control.mjs)
+  f.ownerPause = false;
+  try { deps.readFile(path.posix.join(checkout, ".factory", "owner-pause")); f.ownerPause = true; } catch { /* not his */ }
   return f;
 }
 

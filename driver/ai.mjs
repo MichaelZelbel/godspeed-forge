@@ -390,7 +390,9 @@ export async function launchHelper(env, { unit, kind, provider, model, briefFile
   const toolsDir = kind === "tests" && context && typeof context === "object" && /^\/home\/[\w.-]+\/\.archon\/holdout-tools\/[\w.-]+$/.test(String(context.TOOLS_DIR || "")) ? String(context.TOOLS_DIR) : undefined;
   // and it may read (never change) its project's hidden scenarios, which the product side never sees
   const holdoutsDir = kind === "tests" && context && typeof context === "object" && /^\/home\/[\w.-]+\/holdouts\/[\w.-]+$/.test(String(context.HOLDOUTS_DIR || "")) ? String(context.HOLDOUTS_DIR) : undefined;
-  const run = { unit, kind, provider, model, cwd: runCwd, work, guarded, marker, startedAt: iso(now), runtimeMaxSec: seconds, forceExhausted: force || undefined, toolsDir, holdoutsDir,
+  // an ops helper working on a STOP or PAUSE may read and lift that one file, and none other (the audit holds it to this path)
+  const liftFile = kind === "ops" && context && typeof context === "object" && /^\/home\/[\w.-]+\/[\w.-]+\/\.factory\/(STOP|PAUSE)$/.test(String(context.STOP_FILE || "")) ? String(context.STOP_FILE) : undefined;
+  const run = { unit, kind, provider, model, cwd: runCwd, work, guarded, marker, startedAt: iso(now), runtimeMaxSec: seconds, forceExhausted: force || undefined, toolsDir, holdoutsDir, liftFile,
     command: commandFor(env, { provider, model, cwd: runCwd }, dir) };
   fs.writeFileSync(path.join(dir, "run.json"), JSON.stringify(run, null, 2) + "\n", { mode: 0o644 });
   const args = [`--unit=${unit}`, `--uid=${env.FORGE_USER}`, `--gid=${env.FORGE_USER}`, "--collect", "--quiet",
@@ -442,7 +444,7 @@ export function helperResult(env, unit, deps = {}) {
   if (run.kind === "tests" && run.toolsDir) events = events.split(run.toolsDir).join("../tools"); // the audit reads it from the clone: <run folder>/tools
   // reading the hidden scenarios is allowed to a tests helper: in its commands only (a changed file there still fails)
   if (run.kind === "tests" && run.holdoutsDir) events = events.split("\n").map(l => (l.includes('"command_execution"') ? l.split(run.holdoutsDir).join("../hidden-read") : l)).join("\n");
-  const breaches = auditEvents(events, { runDir: run.work, allowStopLift: run.kind === "ops" });
+  const breaches = auditEvents(events, { runDir: run.work, liftFile: run.liftFile });
   const refusals = read("guard.log").split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   const limit = !report && (run.forceExhausted || exhausted(errorText));
   const result = { state: report && !breaches.length ? "done" : "failed", provider: run.provider, model: run.model, kind: run.kind, startedAt: run.startedAt, endedAt: (exit && exit.at) || iso(now),

@@ -213,7 +213,9 @@ test("item 7: a hand-made PAUSE raises factory-stopped in its first round, like 
   assert.equal(pa[0].stop.kind, "PAUSE");
   assert.deepEqual(findObstacles(mk("STOP"), {}, at).filter(o => o.kind === "factory-stopped").map(o => o.stop.kind), ["STOP"]);
   assert.deepEqual(findObstacles(mk("PAUSE"), {}, at, { ownerPauses: ["PAUSE:godspeed-mission-control"] }).filter(o => o.kind === "factory-stopped"), [], "his own recorded pause is his");
-  const asked = mk("PAUSE"); asked.factories[0].pause.ownerAsked = true; asked.factories[0].stop.ownerAsked = true;
-  assert.deepEqual(findObstacles(asked, {}, at).filter(o => o.kind === "factory-stopped"), [], "a pause he asked for in the chat (the mark in the file) is his too");
+  const asked = mk("PAUSE"); asked.factories[0].ownerPause = true;
+  assert.deepEqual(findObstacles(asked, {}, at).filter(o => o.kind === "factory-stopped"), [], "a pause he asked for in the chat (the owner-pause file) is his too");
+  const stopAsked = mk("STOP"); stopAsked.factories[0].ownerPause = true;
+  assert.equal(findObstacles(stopAsked, {}, at).filter(o => o.kind === "factory-stopped").length, 1, "the file covers a PAUSE, never a STOP");
   assert.equal(findObstacles(mk("STOP"), {}, at, { ownerPauses: ["PAUSE:godspeed-mission-control"] }).filter(o => o.kind === "factory-stopped").length, 1, "a record for the PAUSE does not cover a STOP");
 });

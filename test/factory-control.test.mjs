@@ -141,19 +141,18 @@ testCase('pause the factory pauses scheduled laps and lets running ones finish')
   assert.deepEqual((await calls(s.checkouts['owner/app'])).map(c => c.args), [['pause']]);
 }
 
-testCase('the owner\'s own pause carries his mark in the PAUSE file, so the driver leaves it alone; a pause without it is not his');
+testCase('the owner\'s own pause is announced by a file made before the pause and removed with it, so the driver leaves it alone; a refused pause leaves none');
 {
   const s = await server();
   const checkout = s.checkouts['owner/app'];
-  await mkdir(join(checkout, '.factory'), { recursive: true });
-  await writeFile(join(checkout, '.factory', 'PAUSE'), 'Operator paused scheduled launches; wakes continue.\n');
+  const mark = join(checkout, '.factory', 'owner-pause');
   await workOff(request('work-off'), s.ctx, plainServer);
-  assert.equal(await readFile(join(checkout, '.factory', 'PAUSE'), 'utf8'), 'Operator paused scheduled launches; wakes continue.\nAsked by the owner in the chat: r1.\n');
+  assert.equal(await readFile(mark, 'utf8'), 'Asked by the owner in the chat: r1.\n', 'made, naming his request');
+  await workOn(request('work-on'), s.ctx, plainServer);
+  await assert.rejects(readFile(mark, 'utf8'), /ENOENT/, 'turning on automatic work removes it with the pause');
+  await writeFile(join(checkout, 'refuse'), '');
   await workOff(request('work-off'), s.ctx, plainServer);
-  assert.equal((await readFile(join(checkout, '.factory', 'PAUSE'), 'utf8')).match(/Asked by the owner/g).length, 1, 'once');
-  const s2 = await server();
-  await workOff(request('work-off'), s2.ctx, plainServer);
-  await assert.rejects(readFile(join(s2.checkouts['owner/app'], '.factory', 'PAUSE'), 'utf8'), /ENOENT/, 'no file made by the mark itself');
+  await assert.rejects(readFile(mark, 'utf8'), /ENOENT/, 'a pause the factory refused leaves no mark behind');
 }
 
 testCase('a refusing factory is said plainly, its own words go only to the log');

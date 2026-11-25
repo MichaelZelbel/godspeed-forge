@@ -127,7 +127,7 @@ export function contextFor(env, ob, step, world, history, readFile = f => fs.rea
     : release ? (release.tickets || []).map(t => `- item ${t.item}: #${t.issue || "?"} ${t.title}${t.deferred ? " (moved to the next release)" : ""}`).join("\n") : "";
   const d = latest(history, "diagnose");
   return {
-    OBSTACLE_ID: ob.id, OBSTACLE_KIND: ob.kind, TICKET_KEY: ob.ticketKey || ob.project || ob.timer || "-", SINCE: ob.since,
+    OBSTACLE_ID: ob.id, OBSTACLE_KIND: ob.kind, TICKET_KEY: ob.ticketKey || ob.project || ob.timer || "-", SINCE: ob.since, STOP_FILE: (ob.stop && ob.stop.file) || "",
     EVIDENCE: bullets(ob.evidence), HISTORY: historyText(history), APPROACH_NOTE: step.approachNote || "",
     DIAGNOSIS: d ? `${d.cause || "unknown"}: ${d.summary || ""}` : "No diagnosis yet.",
     TICKET: String(ticket).slice(0, 12000), ITEMS: items, PLAN: release ? String(release.plan || "").slice(0, 12000) : "",
@@ -906,7 +906,7 @@ function readPauseFiles(env, now, world = {}) {
   } catch {}
   for (const f of world.factories || []) {
     for (const st of [f && f.pause, f && f.stop && f.stop.kind === "STOP" ? f.stop : null]) { // a PAUSE and an operator STOP are both pauses, each with its own reminder
-      if (st && (st.kind === "PAUSE" || st.kind === "STOP")) out.push({ id: `${st.kind}:${f.project}`, ownerAsked: !!st.ownerAsked, repo: f.repo || null, what: `${f.project} has a ${st.kind} file`, since: when(st.at), expiresAt: expiry(st.line), line: st.line });
+      if (st && (st.kind === "PAUSE" || st.kind === "STOP")) out.push({ id: `${st.kind}:${f.project}`, ownerAsked: st.kind === "PAUSE" && !!f.ownerPause, repo: f.repo || null, what: `${f.project} has a ${st.kind} file`, since: when(st.at), expiresAt: expiry(st.line), line: st.line });
     }
   }
   try {

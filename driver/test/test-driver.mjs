@@ -127,13 +127,13 @@ test("today's real state: a diagnose helper for each parked release ticket and o
   assert.deepEqual(again.steps.map(s => s.do), ["running", "running", "running", "running"]);
 });
 
-test("item 7: a hand-made PAUSE in the factory's folder is the factory-stopped obstacle and an ops helper starts in the first round; the owner's own pause, marked in the file or recorded, starts none", async () => {
+test("item 7: a hand-made PAUSE in the factory's folder is the factory-stopped obstacle and an ops helper starts in the first round; the owner's own pause, announced by his file or recorded, starts none", async () => {
   const PAUSE_TEXT = "Operator paused scheduled launches; wakes continue.\n";
   const play = async (text, setup = () => {}) => {
     const f = fixture();
     f.env.MAX_HELPERS = 8;
     const rf = f.deps.worldDeps.readFile;
-    f.deps.worldDeps.readFile = p => (/\/\.factory\/PAUSE$/.test(p) ? text : rf(p));
+    f.deps.worldDeps.readFile = p => (/\/\.factory\/PAUSE$/.test(p) ? text : /\/\.factory\/owner-pause$/.test(p) && f.ownerPause ? "Asked by the owner in the chat: r1.\n" : rf(p));
     f.deps.worldDeps.mtime = () => NOW - 3600 * 1000;
     setup(f);
     const out = await round(f.env, f.deps);
@@ -144,8 +144,8 @@ test("item 7: a hand-made PAUSE in the factory's folder is the factory-stopped o
   assert.equal(hand.stopped[0].stop.kind, "PAUSE");
   assert.equal(hand.ops.length, 1, "and an ops helper starts at once, with no housekeeping round first");
   assert.equal(hand.ops[0].kind, "ops");
-  const marked = await play(PAUSE_TEXT + "Asked by the owner in the chat: r1.\n");
-  assert.deepEqual([marked.stopped.length, marked.ops.length], [0, 0], "his own pause, asked for in the chat");
+  const marked = await play(PAUSE_TEXT, f => { f.ownerPause = true; });
+  assert.deepEqual([marked.stopped.length, marked.ops.length], [0, 0], "his own pause, asked for in the chat (the owner-pause file)");
   const recorded = await play(PAUSE_TEXT, f => {
     fs.mkdirSync(f.env.STATE_DIR, { recursive: true });
     fs.writeFileSync(path.join(f.env.STATE_DIR, "pauses.json"), JSON.stringify([{ target: "PAUSE:godspeed-mission-control", why: "he said so", telegramUser: "7", messageId: "55" }]));
@@ -153,8 +153,8 @@ test("item 7: a hand-made PAUSE in the factory's folder is the factory-stopped o
   });
   delete process.env.FD_ALLOWED_USERS;
   assert.deepEqual([recorded.stopped.length, recorded.ops.length], [0, 0], "his own pause, recorded with his Telegram message");
-  const fresh = await play(PAUSE_TEXT, f => { f.deps.worldDeps.mtime = () => NOW - 30 * 1000; });
-  assert.equal(fresh.stopped.length, 0, "a file younger than two minutes waits one round: his own request may still be marking it");
+  const young = await play(PAUSE_TEXT, f => { f.deps.worldDeps.mtime = () => NOW - 10 * 1000; });
+  assert.equal(young.stopped.length, 1, "a file seconds old is raised in that round too");
 });
 
 test("at most four helpers at once, the oldest obstacle first", async () => {

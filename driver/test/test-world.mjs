@@ -126,7 +126,7 @@ test("a STOP file names its writer, its process and when it was made", () => {
   assert.equal(p.writer, "stopped"); assert.equal(p.pid, null); assert.equal(p.at, "2026-11-18T10:00:00.000Z");
 });
 
-function projectDeps({ stop = null, writerArgs = "", scenarios = [], restarts = "1" } = {}) {
+function projectDeps({ stop = null, writerArgs = "", scenarios = [], restarts = "1", ownerPause = false } = {}) {
   const calls = [];
   const base = deps();
   return {
@@ -155,6 +155,7 @@ function projectDeps({ stop = null, writerArgs = "", scenarios = [], restarts = 
     readFile: p => {
       if (/consumer\.json$/.test(p)) return CONSUMER;
       if (/godspeed-mission-control\/\.factory\/STOP$/.test(p) && stop) return stop;
+      if (/godspeed-mission-control\/\.factory\/owner-pause$/.test(p) && ownerPause) return "Asked by the owner in the chat: r1.\n";
       if (/scope-amendment\.json$/.test(p)) return JSON.stringify({ release: "x", amendments: [{ decidedBy: "release-driver", deferredTickets: ["02-eleven.md"] }] });
       return base.readFile(p);
     },
@@ -319,12 +320,12 @@ test("item 7: a STOP's writer runs when its name is in the process's command lin
   assert.equal(writerRuns("", STAGE_ARGS), false);
 });
 
-test("item 7: a PAUSE carries the owner's mark only when his own request in the chat wrote it", async () => {
-  const asked = "Operator paused scheduled launches; wakes continue.\nAsked by the owner in the chat: r1.\n";
-  const a = await readWorld(TEST_ENV, projectDeps({ stop: asked, writerArgs: "" }));
-  assert.equal(a.factories[0].stop.ownerAsked, true);
-  const b = await readWorld(TEST_ENV, projectDeps({ stop: "Operator paused scheduled launches; wakes continue.\n", writerArgs: "" }));
-  assert.equal(b.factories[0].stop.ownerAsked, false, "the same first line without the mark is somebody else's");
+test("item 7: the factory is the owner's own pause only when his request in the chat made the owner-pause file", async () => {
+  const text = "Operator paused scheduled launches; wakes continue.\n";
+  const a = await readWorld(TEST_ENV, projectDeps({ stop: text, writerArgs: "", ownerPause: true }));
+  assert.equal(a.factories[0].ownerPause, true);
+  const b = await readWorld(TEST_ENV, projectDeps({ stop: text, writerArgs: "" }));
+  assert.equal(b.factories[0].ownerPause, false, "the same PAUSE text without the file is somebody else's");
 });
 
 test("item 7: a leftover STOP of an older release step is read like any other STOP, and reading it asks GitHub nothing about scenarios", async () => {

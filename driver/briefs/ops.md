@@ -32,10 +32,9 @@ What was tried before, newest last (do something different from it):
 
 A `.factory/STOP` or `.factory/PAUSE` file: no program of the Forge makes one (the factory always runs), so someone did, by hand or
 with an old version. Read its first line and the driver's `pauses.json`. When `pauses.json` holds the owner's own record for it, leave
-it and say so. A pause the owner asked for in the chat carries the line "Asked by the owner in the chat" somewhere in the file: leave it too.
+it and say so. A pause the owner asked for in the chat has a file `.factory/owner-pause` beside it (made before the pause): leave it too.
 Otherwise remove that one file (`rm <the file>` with its full path as the obstacle names it, nothing else in that folder) and prove a
-lap can start again (the timer, the next launch). Read the file again right before you remove it: a pause the owner asks for is made
-and then marked a moment later.
+lap can start again (the timer, the next launch). Look for `owner-pause` again right before you remove it.
 
 ## Never
 
