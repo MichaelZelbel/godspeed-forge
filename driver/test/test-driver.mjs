@@ -862,3 +862,26 @@ test("ticket 04: a rung that needs the AI that cannot sign in waits, also when t
   assert.ok(log.some(e => e.kind === "acting run waits" && /cannot sign in/.test(e.why)));
 });
 
+
+test("a missing browser tool: one plain notice for the episode however many rounds, none while it works, and no second one when it goes again within a week", async () => {
+  const f = fixture();
+  ownerHasAsked(f.deps);
+  let browser = { ok: false, why: "the browser proof failed: agent-browser: command not found" };
+  const rw = f.deps.readWorld || readWorld;
+  f.deps.readWorld = async (e, d) => { const w = await rw(e, d); w.server = { ...(w.server || {}), browser }; return w; };
+  const told = () => JSON.parse(fs.readFileSync(f.env.NOTICES_FILE, "utf8")).notices.filter(n => /browser tool/.test(n.text));
+  const at = h => ({ ...f.deps, now: () => NOW + h * 3600000 });
+  await round(f.env, at(0));
+  assert.equal(told().length, 1);
+  assert.equal(told()[0].text, "The factory's browser tool is missing on this server, so checks that need a browser cannot run. Run the Forge's install line again, then `godspeed-forge setup`.");
+  await round(f.env, at(1));
+  await round(f.env, at(30));
+  assert.equal(told().length, 1, "once, even long after");
+  assert.ok(!f.launched.some(l => /browser/.test(JSON.stringify(l))), "no helper is sent for it");
+  browser = { ok: true };
+  await round(f.env, at(31));
+  assert.equal(told().length, 1, "nothing while it works");
+  browser = { ok: false, why: "the browser proof failed again" };
+  await round(f.env, at(32));
+  assert.equal(told().length, 1, "a browser that flaps does not tell the owner again for a week, like every other obstacle's record");
+});

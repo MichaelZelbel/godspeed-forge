@@ -217,3 +217,10 @@ test("a refused question for Michael or a refused decision sends the next attemp
   const refused = h("decide", { outcome: "refused", cause: "how", summary: "Your last answer was refused" });
   assert.equal(nextStep(ob(), [diag("what"), refused], ctx()).do, "decide");
 });
+
+test("a missing browser tool tells the owner once, then waits; no helper is ever sent", () => {
+  assert.equal(nextStep(ob("browser-missing"), [], ctx()).do, "tell-michael");
+  const told = nextStep(ob("browser-missing", 30), [], ctx({ toldAt: H(29) }));
+  assert.equal(told.do, "wait-external");
+  assert.equal(nextStep(ob("browser-missing", 30), [h("housekeeping")], ctx({ toldAt: H(29), candidates: [A, B] })).do, "wait-external");
+});

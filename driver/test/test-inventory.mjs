@@ -449,3 +449,8 @@ test("work that belongs to an approved release is not backlog; a retired notice 
   const l = advance([bl], { b: { rung: 3, rungSince: NOW - H, milestone: NOW - 9 * H, launched: true, told: true, tries: [{ rung: 1 }, { rung: 2 }] } }, NOW);
   assert.equal(l.rows[0].rung, 1); assert.equal(l.actions.launch, null, "a day's cool-off first");
 });
+
+test("a missing browser tool has no chain entry: it is told once by the ladder and nothing else escalates it", () => {
+  const entries = inv(mkWorld({ releases: [], items: {} }), [{ id: "br", kind: "browser-missing", since: ago(30), evidence: ["no browser"] }]);
+  assert.ok(!entries.some(e => e.obstacleKind === "browser-missing"));
+});

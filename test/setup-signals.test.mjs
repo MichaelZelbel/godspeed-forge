@@ -12,7 +12,7 @@ import { runSetupCommand } from '../lib/cli.mjs';
 import { answersFrom, setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults } from '../lib/config.mjs';
-import './home.mjs';
+import { AGENT_BROWSER_STAND_IN, BROWSER_PASSED } from './home.mjs';
 import { testCase } from './cases.mjs';
 // test cases: 32
 
@@ -196,7 +196,7 @@ if (process.argv[2] === 'command') {
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-question-'));
     const result = await interrupt(root, 'builder-question', 'SIGINT');
     assertStopped(result, { code: 130, sentence: INTERRUPTED, kept: null });
-    assert.deepEqual(result.lines, ['Using Claude Code to set up the Forge.', INTERRUPTED]);
+    assert.deepEqual(result.lines, ['Using Claude Code to set up the Forge.', BROWSER_PASSED, INTERRUPTED]);
     // The next run is not refused as already running. No App page had been shown, so GitHub made no App and
     // the next run simply asks again and creates one App per role.
     const next = await nextSetup(root);
@@ -227,7 +227,7 @@ if (process.argv[2] === 'command') {
     const result = await interrupt(root, 'builder-question', 'terminal');
     assertStopped(result, { code: 130, sentence: INTERRUPTED, kept: null });
     // In a terminal the sentence starts on a line of its own instead of running onto the open question.
-    assert.deepEqual(result.lines, ['Using Claude Code to set up the Forge.', '', INTERRUPTED]);
+    assert.deepEqual(result.lines, ['Using Claude Code to set up the Forge.', BROWSER_PASSED, '', INTERRUPTED]);
   }
 
   // Stopped while waiting for the address from an App's GitHub page, by a signal or by input that closes (#61):
@@ -453,6 +453,7 @@ if (process.argv[2] === 'command') {
       gh: 'mkdir -p "${@: -1}/.git"',
       git: `case "$1" in remote) echo https://github.com/owner/repo.git;; clone) mkdir -p "\${@: -1}/.git";; rev-parse) echo ${FACTORY_REVISION};; esac`,
       bun: 'true',
+      'agent-browser': AGENT_BROWSER_STAND_IN,
       python3: 'if [ "$2" = init ]; then mkdir -p factory; echo "# Mission" > MISSION.md; fi'
     };
     for (const [name, body] of Object.entries(tools)) {
@@ -514,7 +515,7 @@ if (process.argv[2] === 'command') {
     const { stdout, stderr, code: exitCode } = await realCommand(root, (printed, child) => {
       if (!stopped && printed.endsWith(ORG_QUESTION)) { stopped = true; stop(child); }
     }, { pty });
-    assert.equal(stdout, `Using Claude Code to set up the Forge.\n${ORG_QUESTION}\n${sentence}\n`);
+    assert.equal(stdout, `Using Claude Code to set up the Forge.\n${BROWSER_PASSED}\n${ORG_QUESTION}\n${sentence}\n`);
     assert.equal(stderr, '');
     assert.equal(exitCode, code);
   }

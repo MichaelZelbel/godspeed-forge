@@ -383,7 +383,7 @@ testCase('setup runs the final check before the factory\'s mission questions and
     if (command === 'git' && args[0] === 'clone') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
     if (command === 'git' && (args[0] === 'fetch' || args[0] === 'checkout') && options.cwd !== p.checkout) return { stdout: '' };
     if (command === 'git' && args[0] === 'rev-parse' && options.cwd !== p.checkout) return { stdout: `${FACTORY_REVISION}\n` };
-    if (command === 'python3' || command === 'bun') return { stdout: '' };
+    if (command === 'python3' || command === 'bun' || command === 'bash') return { stdout: '' };
     return w.run(command, args, options);
   };
   const said = [];

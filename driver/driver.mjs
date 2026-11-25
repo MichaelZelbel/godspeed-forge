@@ -140,6 +140,7 @@ export function contextFor(env, ob, step, world, history, readFile = f => fs.rea
 export function tellText(ob, world, now) {
   const hours = Math.max(1, Math.floor((now - Date.parse(ob.since)) / HOUR));
   if (ob.kind === "no-ai") return plain(`None of the AIs that keep your factory moving has answered for ${hours} hours, so nothing gets fixed right now; Mission Control keeps trying every five minutes and carries on by itself.`);
+  if (ob.kind === "browser-missing") return plain("The factory's browser tool is missing on this server, so checks that need a browser cannot run. Run the Forge's install line again, then `godspeed-forge setup`.");
   const f = ob.ticketKey ? findTicket(world, ob.ticketKey) : null;
   const what = f ? `"${f.ticket.title}" in ${versionWords((/(\d+\.\d+\.\d+(?:-[A-Za-z]+\.\d+(?:\.\d+)*)?)/.exec(f.release.id) || [])[1] || f.release.id)}` : ob.project ? `The factory's work on ${ob.project}` : "The factory";
   return plain(`${what} has not moved for ${hours} hours. Mission Control is on it and tries a different way each time; you need to do nothing unless it asks you.`);

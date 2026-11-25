@@ -258,7 +258,8 @@ function buildEntries(world, ledger, obstacles, ctx) {
   });
   // every obstacle the driver already has (its helpers are the rung 0 owner); a kind this code has never
   // seen has no owner: it goes to the acting run at once
-  each("obstacle", obstacles, o =>
+  // browser-missing is told once by the ladder (ladder.mjs) and has no chain entry: the owner is the only one who can fix it
+  each("obstacle", (obstacles || []).filter(o => o.kind !== "browser-missing"), o =>
     add({ id: `ob:${o.id}`, kind: "obstacle", obstacleKind: o.kind, title: `${o.kind}: ${o.ticketKey || o.project || o.timer || o.repo || ""}`.trim(), milestoneAt: ts(o.since), limitH: LIMITS.obstacle, obstacleId: o.id, ticketKey: o.ticketKey,
       owner: KNOWN_OBSTACLES.has(o.kind) ? OWNERS.obstacle : null, evidence: o.evidence || [] }));
   return out;

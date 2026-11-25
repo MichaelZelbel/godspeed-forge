@@ -54,11 +54,11 @@ testCase('a fresh server gets every tool from its maker, each said in one line')
   assert.deepEqual(lines, [
     'Installing the basic tools the others need.', 'Installing Git.', "Installing GitHub's command line tool.",
     'Installing Python 3.10 or newer with virtual environments.', 'Installing Node.js 22.', 'Installing Bun.', 'Installing uv.',
-    'Installing Claude Code.', 'Installing Codex.', TOOLS_READY,
+    'Installing Claude Code.', 'Installing Codex.', 'Installing the browser tool.', TOOLS_READY,
   ]);
   assert.equal(s.scripts.filter(x => /^apt-get -o DPkg::Lock::Timeout=600 update -qq$/.test(x)).length, 1, 'the package lists are read once before the first plain package');
   const all = s.scripts.join('\n');
-  for (const source of ['https://cli.github.com/packages', 'https://deb.nodesource.com/node_22.x', 'https://bun.sh/install', 'https://astral.sh/uv/install.sh', 'https://claude.ai/install.sh', 'npm install -g --no-fund --no-audit @openai/codex', 'python3 python3-venv python-is-python3']) assert.ok(all.includes(source), source);
+  for (const source of ['https://cli.github.com/packages', 'https://deb.nodesource.com/node_22.x', 'https://bun.sh/install', 'https://astral.sh/uv/install.sh', 'https://claude.ai/install.sh', 'npm install -g --no-fund --no-audit @openai/codex', 'npm install -g --no-fund --no-audit agent-browser@0.44.0 && agent-browser install --with-deps', 'python3 python3-venv python-is-python3']) assert.ok(all.includes(source), source);
   assert.ok(all.includes('ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude'), 'Claude Code is put where every shell finds it');
 }
 
@@ -72,7 +72,7 @@ testCase('a tool that cannot be installed stops the install in one plain sentenc
 testCase('a server without apt that is missing tools stops the install in one sentence naming exactly what is missing');
 {
   const s = server(new Set(['basics', 'git', 'python']), { apt: false }), lines = [];
-  assert.deepEqual(await installServerTools({ run: s.run, say: l => lines.push(l) }), { ok: false, stop: "This server is missing GitHub's command line tool, Node.js 22, Bun, uv, Claude Code and Codex, which the Forge can install only on a server with apt, so nothing was installed: install them first, then run this line again." });
+  assert.deepEqual(await installServerTools({ run: s.run, say: l => lines.push(l) }), { ok: false, stop: "This server is missing GitHub's command line tool, Node.js 22, Bun, uv, Claude Code, Codex and the browser tool, which the Forge can install only on a server with apt, so nothing was installed: install them first, then run this line again." });
   assert.deepEqual(lines, []);
   assert.deepEqual(s.scripts, [], 'nothing was tried');
   const one = server(new Set(TOOLS.map(t => t.key).filter(k => k !== 'uv')), { apt: false });
@@ -185,7 +185,7 @@ testCase('on a server without apt that lacks tools the whole install stops befor
 {
   const r = await rootInstall({ found: dockerFound(), tools: o => installServerTools({ ...o, run: server(new Set(['basics', 'git', 'python', 'node', 'gh', 'bun', 'uv']), { apt: false }).run }) });
   assert.equal(r.code, 1);
-  assert.deepEqual(r.warnings, ['This server is missing Claude Code and Codex, which the Forge can install only on a server with apt, so nothing was installed: install them first, then run this line again.']);
+  assert.deepEqual(r.warnings, ['This server is missing Claude Code, Codex and the browser tool, which the Forge can install only on a server with apt, so nothing was installed: install them first, then run this line again.']);
   assert.deepEqual(r.lines, ['Found Godspeed 2.0.0-beta.29, which runs in Docker on this server.']);
   assert.ok(!fs.existsSync(r.paths.addon) && !fs.existsSync(path.join(r.workspace, 'skills', 'forge')));
   assert.deepEqual(fs.readdirSync(r.units), []);

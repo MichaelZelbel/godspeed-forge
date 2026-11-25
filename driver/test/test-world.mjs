@@ -361,3 +361,15 @@ test("item 7: a leftover STOP of an older release step is read like any other ST
     assert.ok(!asked.some(a => a.includes("actions/workflows")), `no scenario run is read: ${asked.join(" | ")}`);
   }
 });
+
+test("the browser proof runs as the factory user every round: a pass reads ok, a failure reads not ok and is not an unreadable part", async () => {
+  const proofs = [];
+  const run = fail => ({ ...deps(), sh: (cmd, o = {}) => { if (/forge-browser-proof/.test(cmd)) { proofs.push(!!o.asForge); if (fail) throw new Error("agent-browser: command not found"); return ""; } return sh(cmd); } });
+  const ok = await readWorld(TEST_ENV, run(false));
+  assert.deepEqual(ok.server.browser, { ok: true });
+  const bad = await readWorld(TEST_ENV, run(true));
+  assert.equal(bad.server.browser.ok, false);
+  assert.match(bad.server.browser.why, /agent-browser: command not found/);
+  assert.ok(!bad.unreadable.some(u => /browser/.test(u.part)));
+  assert.deepEqual(proofs, [true, true]);
+});
