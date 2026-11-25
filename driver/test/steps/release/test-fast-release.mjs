@@ -213,7 +213,7 @@ function sim(o = {}) {
       onExit: (f) => exits.push(f),
       runExits: () => exits.splice(0).forEach((f) => f()),
       records: {
-        releases: () => [ID],
+        releases: () => [...new Set([...records.keys()].map((k) => k.split("/")[1]))],
         read: (p) => (records.has(p) ? records.get(p) : null),
         json: (p) => (records.has(p) ? JSON.parse(records.get(p)) : null),
         ticketFiles: () => [...records.keys()].filter((k) => k.includes("/tickets/")),
@@ -404,6 +404,16 @@ test("the factory merging every few minutes while the builds run changes nothing
   assert.equal(s.commits.get(s.frozenCommit).parents[0], hex("dcbba308dc"), "not main's newest head");
   assert.ok(s.main.length >= 7, "main moved on meanwhile");
   assert.equal(fs.existsSync(s.stop), false, "nothing held the factory for it");
+});
+
+test("a newer release approved while the version builds does not take the step off the pinned one", async () => {
+  const s = sim();
+  // beta.33 was approved that night while beta.32 was being frozen
+  s.schedule(at("2026-11-24T23:10:00Z"), () => s.records.set("releases/godspeed-2.0.0-beta.33-keeps-what-you-add/plan.md", PLAN.replace(/beta\.32/g, "beta.33").replace("#616, 2 #1033", "#1140, 2 #1141")));
+  await driveUntil(s, "2026-11-25T02:00:00Z");
+  assert.deepEqual(s.people, []);
+  assert.ok(s.goAt && minutesToGo(s) <= 30, JSON.stringify(s.looks));
+  assert.equal(s.commits.get(s.frozenCommit).parents[0], hex("dcbba308dc"));
 });
 
 test("the old step on the same night needed a person: it stopped on the server image nobody built", async () => {

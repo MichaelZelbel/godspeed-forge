@@ -818,7 +818,8 @@ async function lookStage(ctx) {
   const names = records.releases();
   const stagingOf = (text) => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
   const releases = names.map((id) => { const s = records.read(G.stagingPath(id)); return { id, plan: records.read(`releases/${id}/plan.md`) || "", hasStaging: !!s, staging: stagingOf(s) }; });
-  const unfinished = Object.entries(ctx.state.releases).filter(([, v]) => v && v.started && !v.finished && !v.halted).map(([k]) => k);
+  // a release whose commit is pinned is under way as much as one frozen: a newer approval does not take the step off it
+  const unfinished = Object.entries(ctx.state.releases).filter(([, v]) => v && (v.started || v.pin) && !v.finished && !v.halted).map(([k]) => k);
   const installed = installedVersion(releases);
   const { pick, why, superseded } = pickRelease({ releases, inProgress: ctx.only ? [ctx.only] : unfinished, publicVersion: pub, installedVersion: installed, repo: cfg.repo });
   if (!ctx.only) for (const r of superseded) log(`Superseded: ${r.version} is approved but older than ${installed}, which is installed on your server; it is skipped.`);
