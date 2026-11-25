@@ -1,0 +1,106 @@
+name: drill
+# The standstill drill (scripts/drill-standstill.sh) on a throwaway machine: a GitHub-hosted Ubuntu runner is one, fresh for
+# every job, with systemd and root through sudo, and the drill shadows codex and gh, so it needs no key and no secret.
+#
+# Why here (2026-11-25): the Forge 0.3.3's acceptance (every recorded standstill reaches the repair program within 60 minutes,
+# and the fast drill passes on a throwaway machine and fails on 0.3.1 for the release-first case) could only be seen on such a
+# machine, and the builder had none, so the factory's loop reviewer parked #175 as "needs owner". Now every pull request shows it.
+#
+# Two jobs, each on its own fresh machine:
+#   drill        installs the Forge from the archive of the exact commit under test (the pull request's head, or the
+#                `commit` input of a hand-started run) with the public install line, then runs the fast drill of both
+#                scenarios (beta31 and release-first); both must pass.
+#   drill-0-3-1  installs the Forge 0.3.1 (FORGE_VERSION=v0.3.1) and runs the release-first scenario with the same drill; it must
+#                FAIL, and fail at the check, not by crashing: the release clock of 0.3.1 starts only once every ticket is done.
+# Each job writes one line per result into its summary.
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'The commit to drill (a sha or branch of this repository); empty drills the commit this run is on'
+        required: false
+        default: ''
+concurrency:
+  group: drill-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  drill:
+    name: drill (both scenarios pass)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - name: The archive of the commit under test, as GitHub would serve it
+        run: |
+          set -eu
+          sha=$(git rev-parse HEAD)
+          echo "SHA=$sha" >> "$GITHUB_ENV"
+          git archive --format=tar.gz --prefix="godspeed-forge-$sha/" -o "$RUNNER_TEMP/forge.tar.gz" HEAD
+      - name: Install with the public install line, then the fast drill of both scenarios
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" FORGE_DRILL_THROWAWAY=yes bash scripts/drill-standstill.sh run "file://$RUNNER_TEMP/forge.tar.gz" 2>&1 | tee "$RUNNER_TEMP/drill.log"
+      - name: One line per result
+        if: always()
+        run: |
+          log="$RUNNER_TEMP/drill.log"
+          {
+            echo "### The fast standstill drill on ${SHA:0:7}"
+            if [ -f "$log" ]; then
+              awk '/^=== The fast drill, scenario /{sc=$6} /^(PASS|FAIL): /{print "- " sc ": " $0} /^THE DRILL (PASSED|FAILED)/{print "- **" sc ": " $0 "**"} /^(ALL FAST DRILLS PASSED|A FAST DRILL FAILED)/{print "- **" $0 "**"}' "$log"
+              grep -q '^ALL FAST DRILLS PASSED' "$log" || { echo "- the drill did not pass; its last lines:"; tail -n 15 "$log" | sed 's/^/    /'; }
+            else
+              echo "- the drill did not start"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  drill-0-3-1:
+    name: drill (release-first fails on 0.3.1)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - name: Install the Forge 0.3.1 with the public install line
+        run: sudo env "PATH=$PATH" FORGE_DRILL_THROWAWAY=yes FORGE_VERSION=v0.3.1 bash scripts/drill-standstill.sh install
+      - name: The release-first drill fails on 0.3.1, at the check
+        run: |
+          set +e
+          sudo env "PATH=$PATH" bash scripts/drill-standstill.sh fast release-first > "$RUNNER_TEMP/drill.log" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/drill.log"
+          # It must fail, and at the check: the check ran (it names minute 0 and its five results) and said so. A crash before the
+          # check would also exit non-zero, and that proves nothing about 0.3.1.
+          [ "$code" -ne 0 ] || { echo "the release-first drill passed on 0.3.1, so it does not tell 0.3.1 from 0.3.3"; exit 1; }
+          grep -q '^minute 0 = ' "$RUNNER_TEMP/drill.log" || { echo "the drill stopped before its check (exit $code), so 0.3.1 was not judged"; exit 1; }
+          [ "$(grep -cE '^(PASS|FAIL): ' "$RUNNER_TEMP/drill.log")" -eq 5 ] || { echo "the check did not give its five results"; exit 1; }
+          grep -q '^THE DRILL FAILED' "$RUNNER_TEMP/drill.log" || { echo "the drill exited $code without its check saying it failed"; exit 1; }
+          echo "The release-first drill fails on 0.3.1 at its check, as it should."
+      - name: One line per result
+        if: always()
+        run: |
+          log="$RUNNER_TEMP/drill.log"
+          {
+            echo "### The release-first drill on the Forge 0.3.1 (it must fail)"
+            if [ -f "$log" ]; then
+              grep -E '^(PASS|FAIL): ' "$log" | sed 's/^/- release-first on 0.3.1: /'
+              grep -q '^THE DRILL FAILED' "$log" && echo "- **release-first on 0.3.1: THE DRILL FAILED, as it must**" || { echo "- **release-first on 0.3.1 did not fail at its check**; its last lines:"; tail -n 15 "$log" | sed 's/^/    /'; }
+            else
+              echo "- the drill did not start (the install of 0.3.1 failed)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
