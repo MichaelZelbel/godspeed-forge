@@ -50,13 +50,8 @@
 //      them: freeze.mjs --no-staging (so the scenarios can start on the tag first, step 3 of the
 //      role, and run beside the install), the scenarios on candidate/<version>, stage-server.mjs,
 //      staging-check.mjs --tell.
-//   5. Pauses Cole Medin's factory while the scenarios run (the scenario AI key is small and a lap
-//      would spend it too) by creating <factory>/.factory/STOP, and removes it the moment the
-//      scenarios have ended (before the install is waited for and before anything is read to
-//      summarise them), and in every other case: when the step ends, fails, or the process is
-//      stopped. A STOP file this script made is also removed at the start of the next look when it
-//      is older than stopMaxAgeMinutes, and by a look that finds no scenarios running, because a
-//      stale STOP stops every lap silently. A STOP somebody else made is never touched.
+//   5. Never pauses the factory: no STOP file is made or removed here, however long the scenarios run (the Forge 0.3.3,
+//      item 7: the factory always runs, and the scenarios prove the release's own frozen commit while laps work on main).
 //   6. MONEY: at most one candidate run, plus one rerun of only the failed jobs. The dispatch is
 //      written to the state file before it happens, and a crash in between is resumed by looking at
 //      GitHub, never by dispatching again.
@@ -110,8 +105,6 @@ const MINUTE = 60 * 1000;
 export const CONFIG_DEFAULTS = {
   repo: "", // AUTO_STAGE_REPO: the settings' main project repository
   stateDir: "", // AUTO_STAGE_STATE_DIR: steps.stage.state_dir
-  stopFile: "", // AUTO_STAGE_STOP_FILE: steps.stage.stop_file, else <the main project's checkout>/.factory/STOP
-  stopMaxAgeMinutes: 120, // AUTO_STAGE_STOP_MAX_AGE_MINUTES
   noticesFile: "", // AUTO_STAGE_NOTICES_FILE: notices.godspeed_notices_file
   scenarioMac: true, // AUTO_STAGE_MAC: the role's "-f mac=true once per candidate"
   scenarioWaitMinutes: 100, // AUTO_STAGE_SCENARIO_WAIT_MINUTES: how long one look waits for the scenarios, rerun included
@@ -127,8 +120,6 @@ export function loadConfig(env = process.env) {
   return {
     repo: env.AUTO_STAGE_REPO || d.repo || RELEASE.productRepo,
     stateDir: env.AUTO_STAGE_STATE_DIR || d.stateDir,
-    stopFile: env.AUTO_STAGE_STOP_FILE || d.stopFile,
-    stopMaxAgeMinutes: num("AUTO_STAGE_STOP_MAX_AGE_MINUTES", d.stopMaxAgeMinutes),
     noticesFile: env.AUTO_STAGE_NOTICES_FILE || d.noticesFile || RELEASE.noticesFile || `${G.GODSPEED_ON_SERVER}/.godspeed/notices.json`,
     scenarioMac: env.AUTO_STAGE_MAC === undefined ? d.scenarioMac : !/^(0|false|no)$/i.test(env.AUTO_STAGE_MAC),
     scenarioWaitMinutes: num("AUTO_STAGE_SCENARIO_WAIT_MINUTES", d.scenarioWaitMinutes),
@@ -512,61 +503,6 @@ export const clearFailure = (state) => {
   delete state.failing;
 };
 
-// ---------- the factory's STOP file ----------
-
-const STOP_MARK = "auto-stage";
-const stopText = (now, pid) => `${STOP_MARK} ${pid} ${new Date(now).toISOString()}\nThe release step pauses the factory while the scenarios run (the driver's stage step).\n`;
-
-// Creates the STOP file unless one is there already. Returns true when this call made it.
-export function createStop(file, now, pid = process.pid) {
-  if (fs.existsSync(file)) return false;
-  if (!fs.existsSync(path.dirname(file))) return false; // no factory here: nothing to pause, and no folder made as root in someone's checkout
-  try {
-    fs.writeFileSync(file, stopText(now, pid), { flag: "wx" });
-  } catch (e) {
-    if (e.code === "EEXIST") return false; // somebody made it a moment ago
-    throw e;
-  }
-  return true;
-}
-
-// Ours: the first line is "auto-stage <pid> ...", or "stage <pid> ..." (on 2026-11-24 a helper relabelled the step's
-// STOP so, and the step then no longer knew it as its own and left the factory halted). Anything else is somebody else's.
-export const stopIsMine = (file) => {
-  try {
-    return /^(auto-stage|stage) \d+\b/.test(fs.readFileSync(file, "utf8"));
-  } catch {
-    return false;
-  }
-};
-
-// Makes the STOP, or takes over one of ours that an earlier look left (killed, or relabelled): it is written again
-// with this process's number, so that whoever reads it sees a writer that runs. -> whether the STOP is this look's now
-export function takeStop(file, now, pid = process.pid) {
-  if (createStop(file, now, pid)) return true;
-  if (!stopIsMine(file)) return false;
-  const tmp = `${file}.${pid}.tmp`;
-  fs.writeFileSync(tmp, stopText(now, pid));
-  fs.renameSync(tmp, file);
-  return true;
-}
-
-// Removes a STOP file this script made; never one somebody else made. Returns whether it removed.
-export function removeStop(file) {
-  if (!fs.existsSync(file) || !stopIsMine(file)) return false;
-  fs.rmSync(file, { force: true });
-  return true;
-}
-
-// At the start of a look: a STOP this script made that is older than the limit is removed.
-export function guardStaleStop(file, now, maxAgeMinutes) {
-  if (!fs.existsSync(file) || !stopIsMine(file)) return { removed: false };
-  const age = now - fs.statSync(file).mtimeMs;
-  if (age <= maxAgeMinutes * MINUTE) return { removed: false, ageMinutes: Math.round(age / MINUTE) };
-  fs.rmSync(file, { force: true });
-  return { removed: true, ageMinutes: Math.round(age / MINUTE) };
-}
-
 // ---------- the notice queue (notebook core/notices.mjs format) ----------
 
 export function queueNotice(file, { id, text, about, facts, at = new Date().toISOString() }) {
@@ -717,11 +653,6 @@ async function lookStage(ctx) {
   const save = () => {
     if (!dry) saveState(ctx.stateFile, ctx.state);
   };
-
-  const stale = dry
-    ? { removed: false }
-    : guardStaleStop(cfg.stopFile, now(), cfg.stopMaxAgeMinutes);
-  if (stale.removed) log(`A STOP file of this script was ${stale.ageMinutes} minutes old, so it was removed (the factory runs again).`);
 
   const pub = await ctx.publicVersion();
   const names = records.releases();
@@ -1160,28 +1091,10 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
     return { outcome: "halted", why: "scenarios ignored" };
   }
 
-  // The factory is paused only while something runs or may still be rerun: a look that merely tries the
-  // install again does not hold it up.
-  const needStop = sc.result === "none" || sc.result === "running" || (sc.result === "failed" && !rs.rerunAt);
-  const paused = needStop && takeStop(cfg.stopFile, now()); // a STOP of ours left by a killed look is taken back
-  // The STOP is held only while scenarios run: it goes the moment a run has ended, before the install is waited for and
-  // before anything is read to summarise it, and is taken again only for the one rerun of the failed jobs. On 2026-11-24
-  // a summary GitHub could not make kept the factory halted for two hours.
-  let held = paused;
-  const releaseStop = () => {
-    if (held && removeStop(cfg.stopFile)) log("The factory's STOP file was removed.");
-    held = false;
-  };
-  const holdStop = () => {
-    if (paused && !held && (held = takeStop(cfg.stopFile, now()))) log("The factory is paused again while the failed jobs run once more.");
-  };
-  ctx.onExit(releaseStop);
-  if (!needStop && removeStop(cfg.stopFile)) log("A STOP file an earlier look of this step left behind was removed: no scenarios run now.");
-  log(paused ? "The factory is paused while the scenarios run (STOP file made)." : needStop ? "A STOP file was there already, not made here; it is left as it is." : "Nothing is running, so the factory is not paused.");
   let decided = null;
   let named = null; // a failed run's jobs: {jobs, aggregate, from}
   const causes = {}; // job -> its cause, read from its log
-  try {
+  {
     // ---- the scenarios: one candidate run, never a second dispatch
     if (sc.result === "none") {
       if (rs.dispatchedAt) {
@@ -1218,8 +1131,6 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
           });
 
     sc = await waitDone();
-    const ended = (x) => x.result === "passed" || x.result === "failed"; // nothing of it runs now (a rerun pauses the factory again)
-    if (ended(sc)) releaseStop();
     await server;
     if (sc.result === "failed" && !rs.rerunAt) {
       const info = await ctx.runInfo(sc.run);
@@ -1230,12 +1141,10 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
       rs.rerunAt = new Date(now()).toISOString(); // once, and only the failed jobs
       rs.rerunFromAttempt = info.attempt;
       save();
-      holdStop();
       await ctx.rerunFailed(sc.run);
       log(`Scenario run ${sc.run} failed in ${(sc.failedJobs || []).length} job(s); those jobs only were run once more.`);
       await ctx.sleep(Math.min(cfg.pollSeconds, 30) * 1000);
       sc = await waitDone();
-      if (ended(sc)) releaseStop();
     }
     if (!["passed", "failed"].includes(sc.result)) {
       log(`The scenarios on ${tagName} have not finished (${sc.result}); the next look picks it up.`);
@@ -1276,8 +1185,6 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
       haltWith("not-staged", `Godspeed ${version} is frozen and its tests ran, but it could not be put on the server after three tries (${serverProblem || "no record was written"}). Nothing is public.`, "the install did not work three times");
       return { outcome: "halted", why: "not staged" };
     }
-  } finally {
-    releaseStop();
   }
   const staged = decided; // the answer the look itself saw; a read after the wait could be a GitHub hiccup
 
@@ -1408,7 +1315,6 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
   const pollApi = R.retrying(R.githubApi(token, env), { log });
   const childEnv = { ...env, FORGE_RELEASE_CONFIG: configText(), STAGING_READ_TOKEN: token, STAGING_NOTICES_FILE: cfg.noticesFile };
   const readEnv = { ...env, STAGING_READ_TOKEN: token };
-  const exits = [];
   const jobLists = new Map();
   const records = new G.Records(env);
   const stateFile = path.join(cfg.stateDir, "state.json");
@@ -1422,8 +1328,6 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
     state: loadState(stateFile),
     now: () => Date.now(),
     sleep,
-    onExit: (fn) => exits.push(fn),
-    runExits: () => exits.splice(0).forEach((f) => f()),
     run: (args) => runChild(args, childEnv),
     // A real result for the owner (the install is on his server, tests failed): the same queue and ids as ever.
     notify: ({ id, text, about }) => {
@@ -1522,12 +1426,6 @@ export async function look({ env = process.env, dry = false, only = null, log = 
   let ctx;
   try {
     ctx = await realContext({ cfg, env, dry, only, log, clearHaltCommand });
-    const onSignal = () => {
-      ctx.runExits();
-      process.exit(143);
-    };
-    process.on("SIGTERM", onSignal);
-    process.on("SIGINT", onSignal);
     const result = await autoStage(ctx);
     log(`Result: ${result.outcome}.`);
     if (!dry && ctx.state.failing) {
@@ -1548,8 +1446,6 @@ export async function look({ env = process.env, dry = false, only = null, log = 
       return { error: e.message };
     }
     throw e;
-  } finally {
-    if (ctx) ctx.runExits();
   }
 }
 
