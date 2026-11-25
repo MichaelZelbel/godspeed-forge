@@ -9,7 +9,6 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { containment, containmentCommits, GODSPEED_RELEASE } from "./journal.mjs";
 import { deliver, readEnvFile, telegramCreds, pollSeen, seenKey } from "./facts.mjs";
-import { isStageStop } from "./world.mjs";
 
 const HOUR = 3600000, MIN = 60000;
 const sysRun = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: "utf8", timeout: 60000, env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: "/root" }, ...opts });
@@ -212,21 +211,19 @@ export async function rung0(env, world, state, now, run = sysRun, writeTicket = 
 }
 
 // ---------------------------------------------------------------- 6 what is visibly moving
-// GitHub Actions runs in progress or queued in the release repository, and auto-stage's STOP file (younger than 2 hours).
-// -> { runs: [{headBranch, headSha, createdAt, name}], stop: {at} | null }
+// GitHub Actions runs in progress or queued in the release repository, and the release programs alive right now.
+// (A STOP file is no activity: no program makes one any more, the Forge 0.3.3, item 7.)
+// -> { runs: [{headBranch, headSha, createdAt, name}], procs, at }
 export function readActivity(env, world, run = sysRun, now = Date.now()) {
   const runs = [];
   for (const status of ["in_progress", "queued"]) {
     const r = run("gh", ["api", `repos/${env.REPO}/actions/runs?status=${status}&per_page=50`]);
     try { for (const x of JSON.parse(r.stdout).workflow_runs || []) runs.push({ headBranch: x.head_branch, headSha: x.head_sha, createdAt: x.run_started_at || x.created_at, name: x.name }); } catch { /* unreadable: nothing is called moving */ }
   }
-  let stop = null;
-  // auto-stage writes only the main project's; a STOP whose writer has ended is no work but a leftover, which housekeeping removes
-  for (const f of world.factories || []) { const st = f && f.stop; if (f && f.primary !== false && st && (isStageStop(st) || /^auto-stage\b/.test(String(st.line || ""))) && st.writerAlive !== false && now - Date.parse(st.at) < 2 * HOUR) stop = { at: st.at }; }
   // a release program alive right now (auto-stage's look, the freeze, the stage-server install): visibly working
   const ps = run("ps", ["-eo", "etimes=,args="]); // elapsed seconds: each program is bounded by its own start
   const procs = String(ps.stdout || "").split(String.fromCharCode(10)).map(l => /^\s*(\d+)\s+(.*)$/.exec(l)).filter(m => m && /release\/(auto-stage|freeze|stage-server|staging-check)\.mjs/.test(m[2]) && !/--dry-run|--explain/.test(m[2])).map(m => ({ startedAt: now - Number(m[1]) * 1000, args: m[2].slice(0, 120) }));
-  return { runs, stop, procs, at: now };
+  return { runs, procs, at: now };
 }
 
 // 8 / 9.9 the owner's tap on "Seen" (the machine bot's inline button): ids of the notices acknowledged, and the new update offset

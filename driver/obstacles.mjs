@@ -102,12 +102,11 @@ export function findObstacles(world, ledger = {}, now = Date.now(), cfg0 = {}) {
       add("factory-stopped", `timer:${unit}`, { ...where, timer: unit }, [`${unit} of the factory user is ${state} for ${(cfg.timerRounds || {})[unit]} rounds, and the network guard is not running`]);
     }
     const st = f.stop;
-    // a PAUSE is a pause (the inventory's pause entry covers it): it is never a fault of the factory
-    if (st && !f.pause && st.kind !== "PAUSE" && !/\/\.factory\/PAUSE$/.test(String(st.file || "")) && st.scenariosRunning !== null && st.scenariosRunning !== undefined) {
-      const hours = (now - ts(st.at)) / 3600000;
-      const legit = st.writerAlive === true && st.scenariosRunning === true && hours < cfg.stopHours;
-      if (!legit) add("factory-stopped", `stop:${f.project}`, { since: st.at, ...where, stop: { file: st.file, line: st.line, writer: st.writer, pid: st.pid } },
-        [`${st.file} is there since ${st.at}: "${st.line}"`, `its writer ${st.writerAlive ? "is still running" : "is not running"}; ${st.scenariosRunning ? "a candidate's scenarios run" : "no candidate's scenarios run"}${hours >= cfg.stopHours ? `; over ${cfg.stopHours} hours` : ""}`]);
+    // a PAUSE is a pause (the inventory's pause entry covers it): it is never a fault of the factory. Every STOP is one: no program
+    // makes the factory's STOP any more (the Forge 0.3.3, item 7), so each one is somebody's and the ops helper decides
+    if (st && !f.pause && st.kind !== "PAUSE" && !/\/\.factory\/PAUSE$/.test(String(st.file || ""))) {
+      add("factory-stopped", `stop:${f.project}`, { since: st.at, ...where, stop: { file: st.file, line: st.line, writer: st.writer, pid: st.pid } },
+        [`${st.file} is there since ${st.at}: "${st.line}"`, `its writer ${st.writerAlive ? "is still running" : "is not running"}`]);
     }
   }
   // a hidden check without a tool that can run: the loop's verifier refuses every change it covers. The

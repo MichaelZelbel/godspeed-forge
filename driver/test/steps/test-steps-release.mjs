@@ -1,4 +1,4 @@
-// test cases: 11
+// test cases: 12
 // node driver/test/steps/test-steps-release.mjs
 // The three release steps (stage, plan, keep-main-green) as the driver calls them: what they ask of the
 // settings, what run() returns, and that a halt is returned and never sent. The helpers' own behaviour is
@@ -157,6 +157,19 @@ test("run() returns the halt of a look, and a look's refusal as an error, never 
   assert.deepEqual([fine.ok, fine.halt], [true, undefined]);
 });
 
+test("item 7: the stage step has no setting for a STOP, and a leftover steps.stage.stop_file in the settings is ignored", async () => {
+  assert.ok(!stage.SETTINGS.some((x) => /stop/i.test(x.key)), "no STOP key is declared: " + stage.SETTINGS.map((x) => x.key).join(", "));
+  const c = ctxFor();
+  c.settings.steps.stage.stop_file = "/var/lib/godspeed-forge/nothing-reads-this";
+  c.settings.steps.stage.stop_max_age_minutes = 5;
+  let seen = null;
+  const r = await stage.run({ ...c, impl: { look: async ({ env }) => { seen = env; return { result: { outcome: "waiting" } }; } } });
+  assert.equal(r.ok, true, r.error);
+  assert.deepEqual(Object.keys(seen).filter((k) => /STOP/.test(k)), [], "no STOP variable reaches the step");
+  assert.equal(A.loadConfig(seen).stopFile, undefined);
+  assert.equal(A.loadConfig({ ...seen, AUTO_STAGE_STOP_FILE: "/x/STOP" }).stopFile, undefined, "nor does one from an old environment");
+});
+
 test("a halt of the stage step queues no notice, however often it is looked at", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "steps-halt-"));
   const notices = path.join(dir, "notices.json");
@@ -169,7 +182,7 @@ test("a halt of the stage step queues no notice, however often it is looked at",
   ctx.notify = (n) => sent.push(n);
   // two looks that find nothing to stage still return the standing halt
   for (let i = 0; i < 2; i++) {
-    const r = await A.autoStage({ cfg: { repo: "owner/product", stopFile: path.join(dir, "STOP"), stopMaxAgeMinutes: 120 }, log() {}, dry: true, state, now: () => Date.now(), publicVersion: async () => "2.0.0-beta.1", records: { releases: () => [], read: () => null, json: () => null }, notify: ctx.notify });
+    const r = await A.autoStage({ cfg: { repo: "owner/product" }, log() {}, dry: true, state, now: () => Date.now(), publicVersion: async () => "2.0.0-beta.1", records: { releases: () => [], read: () => null, json: () => null }, notify: ctx.notify });
     assert.equal(r.halt.key, "not-staged");
     assert.equal(r.halt.words, "frozen, but not on the server");
   }

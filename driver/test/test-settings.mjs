@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadSettings, renderEnvFile, CORE } from "../settings.mjs";
+import * as stageStep from "../steps/stage.mjs";
 
 const root = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
 const example = JSON.parse(fs.readFileSync(path.join(root, "settings.example.json"), "utf8"));
@@ -110,4 +111,13 @@ test("the environment file the keeper's and dead-man's units read is the same va
   assert.match(text, /^FD_REPO=owner\/repository$/m);
   assert.match(text, /^FD_PLAN_PATTERN="\^release-\\\\d"$/m, "a value with a backslash is quoted so systemd reads it back unchanged");
   assert.ok(!/\bKEY\b|TOKEN=|SECRET/i.test(text.replace(/FD_TOKEN_SCRIPT=\S+/, "")), "no secret is in it: the settings hold none");
+});
+
+test("item 7 (the Forge 0.3.3): a server's driver.json that still has steps.stage.stop_file and stop_max_age_minutes starts cleanly, and neither reaches any step", () => {
+  const dir = folder(f => { f.d.steps = { ...(f.d.steps || {}), stage: { ...((f.d.steps || {}).stage || {}), stop_file: "/var/lib/godspeed-forge/nothing-reads-this", stop_max_age_minutes: 5 } }; });
+  const s = loadSettings(dir, { steps: [...steps, { name: "stage", SETTINGS: stageStep.SETTINGS }] });
+  assert.equal(s.settings.steps.stage.stop_file, "/var/lib/godspeed-forge/nothing-reads-this", "it is still in the file: nobody deleted it");
+  assert.deepEqual(Object.keys(s.env).filter(k => /STOP/i.test(k)), [], "but no setting turns it into anything the steps read");
+  assert.ok(!stageStep.SETTINGS.some(x => /stop/i.test(x.key)));
+  assert.equal(s.env.FD_REPO, "owner/repository", "everything else loads as before");
 });

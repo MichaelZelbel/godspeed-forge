@@ -158,14 +158,15 @@ test("a project with a lap running is not idle, whatever the scheduler says abou
   assert.deepEqual(kinds(findObstacles(world({}, { factories: [factory({ lastDecisions: said(0), board: [10], activeRuns: [{ id: "m1", workflow: "archon-manager" }] })] }), ledger(), NOW)), ["factory-idle"], "a manager run is not a lap");
 });
 
-test("factory-stopped: legit while its writer lives and the candidate's scenarios run, for at most 4 hours", () => {
-  const stop = (o = {}) => world({}, { factories: [factory({ stop: { file: "/home/godspeed-forge/godspeed-mission-control/.factory/STOP", kind: "STOP", line: "auto-stage 9 x", writer: "auto-stage", pid: 9, at: H(1), writerAlive: true, scenariosRunning: true, ...o } })] });
-  assert.deepEqual(findObstacles(stop(), ledger(), NOW), []);
-  assert.deepEqual(kinds(findObstacles(stop({ at: H(5) }), ledger(), NOW)), ["factory-stopped"], "over the cap");
-  assert.deepEqual(kinds(findObstacles(stop({ writerAlive: false, scenariosRunning: false }), ledger(), NOW)), ["factory-stopped"]);
-  assert.deepEqual(kinds(findObstacles(stop({ scenariosRunning: false }), ledger(), NOW)), ["factory-stopped"]);
-  assert.deepEqual(findObstacles(stop({ scenariosRunning: null }), ledger(), NOW), [], "unknown: the unreadable obstacle says so, nothing is concluded");
-  const o = findObstacles(stop({ writerAlive: false, scenariosRunning: false }), ledger(), NOW)[0];
+test("factory-stopped: every STOP is one, whoever wrote it, however young, whether or not its writer lives (the Forge 0.3.3, item 7: no program makes one any more)", () => {
+  const stop = (o = {}) => world({}, { factories: [factory({ stop: { file: "/home/godspeed-forge/godspeed-mission-control/.factory/STOP", kind: "STOP", line: "auto-stage 9 x", writer: "auto-stage", pid: 9, at: H(1), writerAlive: true, ...o } })] });
+  assert.deepEqual(kinds(findObstacles(stop(), ledger(), NOW)), ["factory-stopped"], "a young STOP whose writer lives: the old release step's own case is no longer an exception");
+  assert.deepEqual(kinds(findObstacles(stop({ scenariosRunning: true }), ledger(), NOW)), ["factory-stopped"], "even with scenarios running");
+  assert.deepEqual(kinds(findObstacles(stop({ at: H(5) }), ledger(), NOW)), ["factory-stopped"]);
+  assert.deepEqual(kinds(findObstacles(stop({ writerAlive: false }), ledger(), NOW)), ["factory-stopped"]);
+  assert.deepEqual(kinds(findObstacles(stop({ writerAlive: null }), ledger(), NOW)), ["factory-stopped"], "whether its writer lives is not known: still one");
+  assert.deepEqual(kinds(findObstacles(stop({ writer: "Operator", line: "Operator stopped new factory launches.", pid: null, writerAlive: false }), ledger(), NOW)), ["factory-stopped"], "a STOP somebody made by hand");
+  const o = findObstacles(stop({ writerAlive: false }), ledger(), NOW)[0];
   assert.equal(o.project, "godspeed-mission-control");
   assert.equal(o.since, H(1));
 });

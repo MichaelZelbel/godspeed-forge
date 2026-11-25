@@ -187,7 +187,7 @@ export async function round(env, deps = {}) {
         `the release step's look at it: ${String(k.look || "nothing (no look about it)").split(/\r?\n/).filter(Boolean).join(" / ").slice(0, 1500)}`,
         `its stage in the auto-stage state: ${JSON.stringify(files.autoStage || null).slice(0, 1500)}`,
         `its staging record: ${JSON.stringify(files.staging || null).slice(0, 800)}`,
-        (k.held || []).length ? `held earlier by: ${k.held.join("; ")}` : "nothing checkable runs for it: no GitHub run on its candidate, release branch or version pull request, no STOP file, no freeze, install or check program",
+        (k.held || []).length ? `held earlier by: ${k.held.join("; ")}` : "nothing checkable runs for it: no GitHub run on its candidate, release branch or version pull request, no freeze, install or check program",
         `the driver's release clock: still for ${k.minutes} minutes; an acting run at ${STANDSTILL.helperMinutes}, the other AI at ${STANDSTILL.otherAiMinutes}, the repair program and the owner at ${STANDSTILL.repairMinutes}. This is rung ${rung}.`] };
       const unit = nextActUnit(entryId);
       try {
@@ -513,7 +513,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       }
     } catch (e) { record({ kind: "supersession check failed", why: String(e.message).slice(0, 200) }); }
     const nextRelease = await (deps.nextRelease || nextReleaseFacts)(env, world, jv, now);
-    // what is visibly moving (6): GitHub runs in progress and auto-stage's STOP file
+    // what is visibly moving (6): GitHub runs in progress and the release programs
     // the credit used so far: the journal's, plus any debt a failed write left in the state (it fails closed: never refilled)
     const debt = (state.creditDebt ||= {});
     const credits = { ...jv.credits }; for (const [k, ms] of Object.entries(debt)) credits[k] = (credits[k] || 0) + ms; for (const [k, ms] of Object.entries(roundCredit)) credits[k] = (credits[k] || 0) + ms;
@@ -739,7 +739,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     }
     for (const r of adv.rows) if (byClock.has(r.entry.id)) r.byClock = true;
     let L = adv.actions.launch;
-    if (L && !dry && entries.length) { // work may have started since the round began (auto-stage's STOP, a run): look again right before launching
+    if (L && !dry && entries.length) { // work may have started since the round began (a run): look again right before launching
       try { const again = withSteps(await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, world)); const m = heldUntil(L.entry, again && { ...again, waitingOnMain: !!(stage && /(main'?s?\b[^.]*\b(required check|Windows setup|image))|(image\b[^.]*not in the registry)/i.test(String(stage.reason || ""))), releaseId: (stage && stage.id) || undefined, onlyRelease: jv.open.length === 1 ? jv.open[0].id : null }, world, credits, now); if (Number.isFinite(m) && m > now) { record({ kind: "acting run held", entry: L.entry.id, why: "work started on it meanwhile" }); L = null; } } catch { /* unreadable: launch as decided */ }
     }
     // a provider whose acting runs could not sign in waits until housekeeping has linked its sign-in again: when the rung would need it,
@@ -875,8 +875,8 @@ function pendingQuestions(env) {
 const IMAGE_WF = env => env.IMAGE_WORKFLOW || process.env.IMAGE_WORKFLOW || "";
 const HOLD_FILE = e => e.HOLD_FILE || path.join(e.FD_KEEPER_HOME || "/usr/local/lib/godspeed/forge/keeper", "HOLD");
 const when = s => { const t = Date.parse(s); return Number.isFinite(t) ? t : NaN; };
-// Every pause that is in force: the keeper's HOLD file, a project's PAUSE or STOP file written by a person (a
-// program's STOP is housekeeping's), and a deliberately parked project (its units in a paused-<date> folder).
+// Every pause that is in force: the keeper's HOLD file, a project's PAUSE or STOP file written by a person (no
+// program makes a STOP any more), and a deliberately parked project (its units in a paused-<date> folder).
 // An expiry written in it ("until <iso time>") is its deadline.
 export function readPauses(env, now, world = {}) {
   const out = readPauseFiles(env, now, world);
@@ -886,7 +886,7 @@ export function readPauses(env, now, world = {}) {
   for (const p of out) {
     const rec = (Array.isArray(recs) ? recs : []).find(x => x && x.target === p.id);
     if (rec && rec.messageId && rec.telegramUser && allowed.includes(String(rec.telegramUser))) { p.ownerRef = `Telegram message ${rec.messageId}`; if (rec.until) p.expiresAt = Date.parse(rec.until); }
-    else p.maxHours = /^STOP/.test(p.id) ? 2 : 2; // a program's pause expires at its maximum (auto-stage: 2 hours)
+    else p.maxHours = /^STOP/.test(p.id) ? 2 : 2; // a pause nobody dated expires at its maximum
   }
   return out;
 }

@@ -46,10 +46,10 @@ export const queueKey = (repo, heading) => `${repo}\n${norm(heading)}`;
 
 // ---------------------------------------------------------------- 6. waiting is allowed only while it is visibly running
 // Activity that is visibly moving an entry's work: a GitHub Actions run in progress on the candidate or release branch (scenarios:
-// 3 hours) or on a ticket's pull request head (its own timeout, 6 hours), auto-stage's STOP file younger than 2 hours. While it
+// 3 hours) or on a ticket's pull request head (its own timeout, 6 hours). While it
 // lasts the entry shows as moving and does not escalate; its deadline is the activity's own maximum. Ceilings are paused by it
 // and never reset: when the activity ends they apply again.
-export const ACTIVITY = { scenariosHours: 3, runHours: 6, stopHours: 2, inProgressHold: 3, creditHours: 6 };
+export const ACTIVITY = { scenariosHours: 3, runHours: 6, inProgressHold: 3, creditHours: 6 };
 // A hard cap on moving credit (by construction): the time an entry may spend "moving" since its last milestone is at most
 // creditHours in total, summed over every window; a ceiling is paused by at most that much over the release's whole life.
 // The credit used is kept in the journal ({t:"credit"}), so a lost state cannot refill it. After the cap, activity holds
@@ -90,11 +90,10 @@ export function movingUntilFor(e, activity, world) {
     // (only when auto-stage's own reason names main's check, main's image or main's Windows setup, and only for the release it is waiting for: otherwise main's runs belong to other work and hide nothing)
     const forStage = activity.releaseId ? activity.releaseId === e.release : activity.onlyRelease === e.release;
     if (activity.waitingOnMain && forStage) for (const r of runs) if (r.headBranch === "main") out.push(Date.parse(r.createdAt) + ACTIVITY.runHours * H);
-    // auto-stage's STOP and its programs belong to the release it is staging (activity.releaseId); with none known, to the only open release
+    // its programs belong to the release it is staging (activity.releaseId); with none known, to the only open release
     const mine = activity.releaseId ? activity.releaseId === e.release : activity.onlyRelease === e.release; // ambiguous (several open releases, none named): it hides nothing
     if (mine) {
       for (const p of activity.procs || []) if (Number.isFinite(p.startedAt)) out.push(p.startedAt + ACTIVITY.scenariosHours * H); // bounded by its own start: a hung program does not hold forever
-      if (activity.stop && Number.isFinite(Date.parse(activity.stop.at))) out.push(Date.parse(activity.stop.at) + ACTIVITY.stopHours * H);
     }
   }
   // a step's child that is alive right now is visibly running: its own entry, and the release the stage step works on, are held until its time limit
@@ -147,7 +146,7 @@ export function buildInventory(world, ledger, obstacles, ctx) {
     if (!Number.isFinite(m)) continue;
     const h = heldUntil(e, activity, world, ctx.credits, ctx.now);
     if (Number.isFinite(h)) e.movingUntil = h;
-    else e.evidence = [...(e.evidence || []), `visible activity is still present on it (a run, a STOP file or a program), but its ${ACTIVITY.creditHours} hours of moving credit are used up: it no longer holds escalation. Look at what is running and decide whether it really moves this.`];
+    else e.evidence = [...(e.evidence || []), `visible activity is still present on it (a run or a program), but its ${ACTIVITY.creditHours} hours of moving credit are used up: it no longer holds escalation. Look at what is running and decide whether it really moves this.`];
   }
   return entries;
 }
@@ -252,7 +251,7 @@ function buildEntries(world, ledger, obstacles, ctx) {
     } else { // any other pause is a program's: no acting run ever undoes a pause (Michael may have parked it on purpose); he is told
       add({ id: `pause:${p.id}`, kind: "pause-program", owner: `${ownerName()}'s decision`, remindOnly: true, title: `${p.what} since ${when} UTC (no record of who asked)`, milestoneAt: since, limitH: 24,
         reminder: `${p.what} is still paused since ${when} UTC and nothing records who asked; say continue or it stays paused.`,
-        evidence: [`${p.what}: ${p.line || ""}`, `there is no pause record with a reference to ${ownerName()}'s own words; a program's stale STOP file is removed by housekeeping, anything else waits for his word, and he is reminded daily`] });
+        evidence: [`${p.what}: ${p.line || ""}`, `there is no pause record with a reference to ${ownerName()}'s own words; it waits for his word, and he is reminded daily`] });
     }
   });
   // every obstacle the driver already has (its helpers are the rung 0 owner); a kind this code has never
