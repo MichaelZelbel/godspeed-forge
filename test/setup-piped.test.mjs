@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
+import { AGENT_BROWSER_STAND_IN, BROWSER_PASSED } from './home.mjs';
 import { testCase } from './cases.mjs';
 // test cases: 5
 
@@ -48,6 +49,7 @@ async function pipedSetup({ piped = '', end = true, onOutput = () => {} } = {}) 
     gh: 'case "$1 $2" in "api -i") printf "HTTP/2.0 200 OK\\nX-Oauth-Scopes: repo, workflow\\n\\n{}\\n";; "repo clone") mkdir -p "${@: -1}/.git";; api*) echo "{}";; esac',
     git: `case "$1" in remote) echo https://github.com/owner/repo.git;; clone) mkdir -p "\${@: -1}/.git";; rev-parse) echo ${FACTORY_REVISION};; symbolic-ref) echo origin/main;; diff) echo MISSION.md;; config) exit 1;; esac`,
     bun: 'true',
+    'agent-browser': AGENT_BROWSER_STAND_IN,
     python3: 'if [ "$2" = init ]; then mkdir -p factory harness; echo "# Mission" > MISSION.md; echo "{}" > harness/harness.config.json; fi'
   };
   for (const [name, body] of Object.entries(tools)) {
@@ -78,6 +80,7 @@ async function pipedSetup({ piped = '', end = true, onOutput = () => {} } = {}) 
   assert(complete > 0, stdout);
   assert.deepEqual(lines.slice(0, complete), [
     'Using Claude Code to set up the Forge.',
+    BROWSER_PASSED,
     ORG_QUESTION,
     'Create the builder App in your browser: <page>',
     ADDRESS_QUESTION,
@@ -114,7 +117,7 @@ async function pipedSetup({ piped = '', end = true, onOutput = () => {} } = {}) 
 {
   testCase('input already closed still prints the question it stops at');
   const { stdout, stderr, code } = await pipedSetup();
-  assert.equal(stdout, `Using Claude Code to set up the Forge.\n${ORG_QUESTION}\n${INPUT_CLOSED}\n`);
+  assert.equal(stdout, `Using Claude Code to set up the Forge.\n${BROWSER_PASSED}\n${ORG_QUESTION}\n${INPUT_CLOSED}\n`);
   assert.equal(stderr, '');
   assert.equal(code, 1);
 }
@@ -129,7 +132,7 @@ async function pipedSetup({ piped = '', end = true, onOutput = () => {} } = {}) 
       if (printed.endsWith(ADDRESS_QUESTION)) child.stdin.end();
     }
   });
-  assert.equal(stdout, `Using Claude Code to set up the Forge.\n${ORG_QUESTION}\nCreate the builder App in your browser: <page>\n${ADDRESS_QUESTION}\n${INPUT_CLOSED}\n`);
+  assert.equal(stdout, `Using Claude Code to set up the Forge.\n${BROWSER_PASSED}\n${ORG_QUESTION}\nCreate the builder App in your browser: <page>\n${ADDRESS_QUESTION}\n${INPUT_CLOSED}\n`);
   assert.equal(stderr, '');
   assert.equal(code, 1);
 }
@@ -144,7 +147,7 @@ const pageAction = raw => {
 {
   testCase('a piped y then yes at the organization question opens the organization App page');
   const { stdout, raw, stderr, code } = await pipedSetup({ piped: 'y\nyes\n' });
-  assert.equal(stdout, `Using Claude Code to set up the Forge.\n${ORG_QUESTION}\n${RETRY}\n${ORG_QUESTION}\nCreate the builder App in your browser: <page>\n${ADDRESS_QUESTION}\n${INPUT_CLOSED}\n`);
+  assert.equal(stdout, `Using Claude Code to set up the Forge.\n${BROWSER_PASSED}\n${ORG_QUESTION}\n${RETRY}\n${ORG_QUESTION}\nCreate the builder App in your browser: <page>\n${ADDRESS_QUESTION}\n${INPUT_CLOSED}\n`);
   assert.equal(pageAction(raw), 'https://github.com/organizations/owner/settings/apps/new');
   assert.equal(stderr, '');
   assert.equal(code, 1);
@@ -153,7 +156,7 @@ const pageAction = raw => {
 {
   testCase('piped input that ends after an answer that is neither yes nor no stops setup with no App page');
   const { stdout, stderr, code } = await pipedSetup({ piped: 'maybe\n' });
-  assert.equal(stdout, `Using Claude Code to set up the Forge.\n${ORG_QUESTION}\n${RETRY}\n${ORG_QUESTION}\n${INPUT_CLOSED}\n`);
+  assert.equal(stdout, `Using Claude Code to set up the Forge.\n${BROWSER_PASSED}\n${ORG_QUESTION}\n${RETRY}\n${ORG_QUESTION}\n${INPUT_CLOSED}\n`);
   assert.equal(stderr, '');
   assert.equal(code, 1);
 }

@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import { isWorking, ticketKeyOf } from "./progress.mjs";
 import { onMain } from "./delivery.mjs";
 
-export const KINDS = ["question", "parked", "check-failed", "no-progress", "dead-end", "factory-idle", "factory-stopped", "factory-restarts", "main-red", "unreadable", "unit-failed", "disk", "memory", "stale-process", "login", "no-ai", "tools-missing"];
+export const KINDS = ["question", "parked", "check-failed", "no-progress", "dead-end", "factory-idle", "factory-stopped", "factory-restarts", "main-red", "unreadable", "unit-failed", "disk", "memory", "stale-process", "login", "no-ai", "tools-missing", "browser-missing"];
 export const TICKET_KINDS = ["parked", "check-failed", "no-progress", "dead-end"];
 // machine problems: housekeeping first, then the ops helper (ladder.mjs)
 export const MACHINE_KINDS = ["unit-failed", "disk", "memory", "stale-process", "login", "factory-stopped", "factory-restarts"];
@@ -131,6 +131,7 @@ export function findObstacles(world, ledger = {}, now = Date.now(), cfg0 = {}) {
     if (s.memAvailPct != null && s.memAvailPct <= cfg.memAvailPct) add("memory", "memory", {}, [`${s.memAvailPct}% memory available`]);
     if (Number.isFinite(s.userManagerStarts) && s.userManagerStarts > cfg.maxRestarts) add("factory-restarts", "user-manager", {}, [`the factory user's manager (user@) started ${s.userManagerStarts} times in the last 30 minutes; every restart ends the laps that run`]);
     for (const p of s.staleProcs || []) add("stale-process", String(p.pid), {}, [`process ${p.pid} (${p.user}) running ${p.ageMin} min: ${p.cmd}`]);
+    if (s.browser && s.browser.ok === false) add("browser-missing", "browser", {}, [s.browser.why]);
     const lg = s.logins || {};
     if (lg.gh === false) add("login", "gh", {}, ["gh is not logged in"]);
     for (const k of ["codex", "claude"]) {

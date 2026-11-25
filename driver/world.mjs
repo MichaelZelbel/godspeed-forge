@@ -252,6 +252,20 @@ const tryRun = (deps, cmd, asForge, unreadable, part) => {
 const firstLine = s => String(s || "").trim().split(/\r?\n/)[0] || "";
 
 export const ANONYMOUS_UNIT = /^run-[A-Za-z0-9]+\.(service|scope)$/;
+// The factory's browser tool proof, shared by setup (lib/setup.mjs imports it) and the health check: a local page opened
+// and its text read back, as the factory user. A failing proof is the reading itself, not
+// an unreadable part. The 60 seconds are the proof's own, inside the shell's 120.
+export const BROWSER_PROOF = [
+  'dir=$(mktemp -d) || exit 1',
+  'trap \'agent-browser --session forge-proof close >/dev/null 2>&1; rm -rf "$dir"\' EXIT',
+  'echo "<html><body>forge-browser-proof</body></html>" > "$dir/page.html"',
+  'timeout 60 agent-browser --session forge-proof open "file://$dir/page.html" >/dev/null || exit 1',
+  'timeout 60 agent-browser --session forge-proof get text body | grep -q forge-browser-proof'
+].join("\n");
+function readBrowser(deps) {
+  try { deps.sh(BROWSER_PROOF, { asForge: true }); return { ok: true }; } catch (e) { return { ok: false, why: `the browser proof failed: ${String(e.message).slice(0, 200)}` }; }
+}
+
 function readServer(env, deps, activeIds, unreadable) {
   const s = { failedUnits: [], anonymousFailedUnits: [], diskPct: null, memAvailPct: null, staleProcs: [], userManagerStarts: null, guardRunning: null, logins: { gh: false, codex: "unknown", claude: "unknown" } };
   const failed = tryRun(deps, "systemctl --failed --no-legend --plain | awk '{print $1}'", false, unreadable, "server/units");
@@ -281,6 +295,7 @@ function readServer(env, deps, activeIds, unreadable) {
   // while it decides; a timer it holds right now is not a stop
   const guard = tryRun(deps, (env.NETNS_GUARD ? `systemctl is-active ${env.NETNS_GUARD} || true` : "echo inactive"), false, unreadable, "server/netns-guard");
   if (guard !== null) s.guardRunning = /^(active|activating|deactivating|reloading)$/.test(firstLine(guard));
+  s.browser = readBrowser(deps);
   const gh = tryRun(deps, "gh auth status >/dev/null 2>&1 && echo ok || echo no", true, unreadable, "server/login-gh");
   if (gh !== null) s.logins.gh = firstLine(gh) === "ok";
   const cx = tryRun(deps, "codex login status 2>&1 | head -1", true, unreadable, "server/login-codex");

@@ -19,9 +19,9 @@ import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { run as runProcess } from '../lib/process.mjs';
 import { ARCHON_REVISION, ARCHON_SOURCE, FACTORY_REPOSITORY, FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
-import './home.mjs';
+import { BROWSER_PASSED } from './home.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 202
+// test cases: 204
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -123,6 +123,7 @@ assert(await isPresent(oldCache));
 assert(!calls.some(call => call.args.includes('schedule')));
 assert.deepEqual(messages, [
   'Using Claude Code to set up the Forge.',
+  BROWSER_PASSED,
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release',
   'Setup is complete for owner/repo. Automatic work is off. A typical release costs about $5 to $40 of Claude Code use, based on Anthropic\'s published average of about $6 a day for one person using Claude Code, with most people under $12, and a release taking one to a few days of that work. On a Pro or Max plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready, say "plan release repo" in your chat, then "run one lap" to watch the first change being made, then "turn on automatic work".'
@@ -145,6 +146,7 @@ await setupRepository('owner/codex-repo', {
 });
 assert.deepEqual(codexMessages, [
   'Using Codex to set up the Forge.',
+  BROWSER_PASSED,
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release',
   'Setup is complete for owner/codex-repo. Automatic work is off. A typical release costs about $3 to $25 of Codex use, based on OpenAI\'s published usage prices for the Codex models, which are lower than Claude Code\'s, and a release taking one to a few days of agent work. On a ChatGPT Plus or Pro plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready, say "plan release codex-repo" in your chat, then "run one lap" to watch the first change being made, then "turn on automatic work".'
@@ -397,6 +399,7 @@ await assert.rejects(setupRepository('owner/retry-check', retryOptions(value => 
   error => error instanceof ReportedSetupError && error.message === 'final-check');
 assert.deepEqual(retryFailed, [
   'Using Claude Code to set up the Forge.',
+  BROWSER_PASSED,
   'Setup stopped because the final check found that the guard keeping your project\'s hidden test scenarios away from the coding agent does not work on this server, because the python command there does not run Python 3. Install the python-is-python3 package on this server before trying setup again.'
 ]);
 for (const hidden of ['Factory refused', 'Holdout fence', 'consumer.py', 'Traceback', 'ghs_report_secret', 'report']) {
@@ -417,6 +420,7 @@ assert.deepEqual(
 );
 assert.deepEqual(retryPassed, [
   'Using Claude Code to set up the Forge.',
+  BROWSER_PASSED,
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release',
   'Setup is complete for owner/retry-check. Automatic work is off. A typical release costs about $5 to $40 of Claude Code use, based on Anthropic\'s published average of about $6 a day for one person using Claude Code, with most people under $12, and a release taking one to a few days of that work. On a Pro or Max plan this comes out of your plan\'s usage limits instead of a separate bill. The Forge adds no separate charge. This is a rough guide, not a quote: a large release can cost more. When you are ready, say "plan release retry-check" in your chat, then "run one lap" to watch the first change being made, then "turn on automatic work".'
@@ -465,7 +469,7 @@ const appsKeptOptions = output => {
 const appsKeptFirst = [];
 await assert.rejects(setupRepository('owner/apps-kept', appsKeptOptions(value => appsKeptFirst.push(value))),
   error => error instanceof ReportedSetupError && error.message === 'final-check');
-assert.deepEqual(appsKeptFirst, ['Using Claude Code to set up the Forge.', FINAL_CHECK_FALLBACK]);
+assert.deepEqual(appsKeptFirst, ['Using Claude Code to set up the Forge.', BROWSER_PASSED, FINAL_CHECK_FALLBACK]);
 const appsKeptSecond = [];
 await assert.rejects(setupRepository('owner/apps-kept', appsKeptOptions(value => appsKeptSecond.push(value))),
   error => error instanceof ReportedSetupError && error.message === 'final-check');
@@ -733,6 +737,7 @@ await assert.rejects(setupRepository('owner/abandoned-page', {
 }), error => error instanceof ReportedSetupError && error.message === 'github');
 assert.deepEqual(abandonedOutputs, [
   'Using Claude Code to set up the Forge.',
+  BROWSER_PASSED,
   'Create the builder App in your browser: https://example.test/create',
   'Setup stopped because the GitHub page for creating its builder App was left unfinished, so GitHub did not hand that App over. Try setup again, finish creating the builder App on the GitHub page it opens, and paste the address your browser shows afterwards.'
 ]);
@@ -763,6 +768,7 @@ await assert.rejects(setupRepository('owner/abandoned-release-page', {
 assert.deepEqual(abandonedReleaseKinds, ['builder']);
 assert.deepEqual(abandonedReleaseOutputs, [
   'Using Claude Code to set up the Forge.',
+  BROWSER_PASSED,
   'Create the builder App in your browser: https://example.test/create',
   'Create the release App in your browser: https://example.test/create',
   builderKept('Forge builder'),
@@ -793,6 +799,7 @@ try {
 }
 assert.deepEqual(unwritableOutputs, [
   'Using Claude Code to set up the Forge.',
+  BROWSER_PASSED,
   'Create the builder App in your browser: https://example.test/create',
   builderKept('Forge builder'),
   'Setup stopped because it could not save the details of the GitHub App it just created on this server. Let setup write to the credentials folder in the Forge\'s private state folder before trying setup again.'
@@ -2094,7 +2101,7 @@ for (const [name, report, message] of [
   const failing = { doctor: async () => { throw Object.assign(new Error('Command failed'), { stderr: report }); } };
   const stopped = await project.attempt(failing);
   assertStopped(stopped, [message, 'final-check'], project.retryState);
-  assert.deepEqual(stopped.messages, ['Using Claude Code to set up the Forge.', FORGE_APPS_KEPT, message]);
+  assert.deepEqual(stopped.messages, ['Using Claude Code to set up the Forge.', BROWSER_PASSED, FORGE_APPS_KEPT, message]);
   assert.deepEqual(stopped.prompts, []);
   assert(!(await isPresent(join(project.stateDirectory, 'registration.json'))));
   assertStopped(await project.attempt(failing), [message, 'final-check'], project.retryState);
@@ -2111,7 +2118,7 @@ testCase('a finished setup being set up again says the Apps are kept when it sto
   const message = 'Setup stopped because the build tools it downloaded could not prepare the project on this server. Install the latest version of the Forge on this server before trying setup again.';
   const stopped = await project.attempt({ init: async () => { throw new Error('python3 failed.'); } });
   assertStopped(stopped, [message, 'initialization'], project.retryState);
-  assert.deepEqual(stopped.messages, ['Using Claude Code to set up the Forge.', FORGE_APPS_KEPT, message]);
+  assert.deepEqual(stopped.messages, ['Using Claude Code to set up the Forge.', BROWSER_PASSED, FORGE_APPS_KEPT, message]);
   assert(completedFor(project.repository)((await project.attempt()).messages.at(-1)));
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
 }
@@ -2633,7 +2640,7 @@ for (const [name, mission] of [
   await stopThenRetry(name, {
     ...mission,
     reason: 'settings',
-    before: [...appPages, FORGE_APPS_KEPT],
+    before: [BROWSER_PASSED, ...appPages, FORGE_APPS_KEPT],
     message: 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
   });
 }
@@ -2644,7 +2651,7 @@ await stopThenRetry('unwritable-mission', {
   onPrompt: async ({ state }) => chmod(join(state, 'projects', 'owner', 'unwritable-mission'), 0o500),
   undo: async ({ state }) => chmod(join(state, 'projects', 'owner', 'unwritable-mission'), 0o700),
   reason: 'settings',
-  before: [...appPages, FORGE_APPS_KEPT],
+  before: [BROWSER_PASSED, ...appPages, FORGE_APPS_KEPT],
   message: MISSION_NOT_SAVED
 });
 
@@ -2735,7 +2742,7 @@ for (const [name, answers] of [['empty-purpose', ['', 'Users.']], ['empty-users'
   await stopThenRetry(name, {
     answers,
     reason: 'mission',
-    before: [...appPages, FORGE_APPS_KEPT],
+    before: [BROWSER_PASSED, ...appPages, FORGE_APPS_KEPT],
     message: 'Setup stopped because both mission questions need an answer: what the software is for and who uses it. Try setup again and answer both.'
   });
 }
@@ -2752,7 +2759,7 @@ for (const [name, mode, message] of [
     onPrompt: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), mode),
     undo: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), 0o644),
     reason: 'mission-file',
-    before: [...appPages, FORGE_APPS_KEPT],
+    before: [BROWSER_PASSED, ...appPages, FORGE_APPS_KEPT],
     message
   });
 }
@@ -2974,6 +2981,7 @@ await stopThenRetry('failing-preparation', {
   run: (command, args) => command === 'python3' && args[1] === 'init'
     && Object.assign(new Error('python3 failed.'), { stderr: `Traceback (most recent call last):\nPermissionError: [Errno 13] Permission denied: '${root}/x'\n` }),
   reason: 'initialization',
+  before: [BROWSER_PASSED],
   message: 'Setup stopped because the build tools it downloaded could not prepare the project on this server. Install the latest version of the Forge on this server before trying setup again.'
 });
 
@@ -3051,7 +3059,7 @@ testCase('a damaged build tools folder is replaced and setup finishes');
     afterMission: async () => chmod(projectState, 0o500),
     undo: async () => chmod(projectState, 0o700),
     reason: 'registration',
-    before: [...appPages, FORGE_APPS_KEPT],
+    before: [BROWSER_PASSED, ...appPages, FORGE_APPS_KEPT],
     message: 'Setup stopped because it could not record on this server that setup finished. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
   });
 }
@@ -3110,7 +3118,7 @@ async function closedInputSetup(name, start) {
   const closed = await closedInputSetup('repository', (options, config) => setupRepository('owner/closed-input', { ...options, config }));
   await assert.rejects(closed.result, error => error instanceof ReportedSetupError && error.message === 'input-closed');
   assert.deepEqual(closed.printed, [
-    'Using Claude Code to set up the Forge.', 'Create the builder App in your browser: https://example.test/create', INPUT_CLOSED
+    'Using Claude Code to set up the Forge.', BROWSER_PASSED, 'Create the builder App in your browser: https://example.test/create', INPUT_CLOSED
   ]);
   const command = await closedInputSetup('command', options => setupCommand('owner/closed-input', options));
   assert.equal(await command.result, 1);
@@ -3305,7 +3313,7 @@ for (const repository of ['MichaelZelbel/forge-trial-recipes', 'a-very-long-orga
 }
 
 // The Archon source's dependencies are installed by a call of setup's own, before init, and only when it runs.
-async function archonInstallRun(repository, { failInstall = false, folderExists = false } = {}) {
+async function archonInstallRun(repository, { failInstall = false, folderExists = false, failBrowser = null } = {}) {
   const home = await mkdtemp(join(tmpdir(), 'forge-archon-home-'));
   const destination = join(home, '.cache/factory/archon', ARCHON_REVISION);
   if (folderExists) await mkdir(destination, { recursive: true });
@@ -3321,6 +3329,7 @@ async function archonInstallRun(repository, { failInstall = false, folderExists 
       await mkdir(join(runOptions.cwd, 'node_modules'), { recursive: true });
       throw new Error('install failed');
     }
+    if (command === 'bash' && failBrowser?.test(args[1])) throw new Error('browser step failed');
     if (command === 'git' && args[0] === 'clone' && args.at(-1) === destination) {
       await mkdir(destination, { recursive: true });
       return { stdout: '' };
@@ -3371,4 +3380,31 @@ testCase('setup leaves an existing Archon folder to init and installs nothing it
   assert(!calls.some(call => call.command === 'bun'));
   assert(!calls.some(call => call.command === 'git' && call.args[0] === 'clone' && call.args.includes(ARCHON_SOURCE)));
   assert.equal(calls.filter(call => call.args[1] === 'init').length, 1);
+}
+
+const BROWSER_STOP = 'Setup stopped because the browser tool could not be installed or could not open a page. Run the Forge\'s install line on this server again, then try setup again.';
+
+testCase('setup installs the pinned browser tool for this user, then proves it opens a page, after the Archon install and before init');
+{
+  const { outcome, calls, messages } = await archonInstallRun('owner/browser-ok');
+  assert.equal(outcome, null);
+  const scripts = calls.filter(call => call.command === 'bash').map(call => call.args[1]);
+  assert.equal(scripts.length, 3);
+  assert.match(scripts[0], /^command -v agent-browser \|\| npm install -g --prefix "\$HOME\/\.local" --no-fund --no-audit agent-browser@0\.44\.0$/);
+  assert.equal(scripts[1], 'agent-browser install');
+  assert.match(scripts[2], /open "file:\/\/\$dir\/page\.html".*get text body \| grep -q forge-browser-proof/s);
+  const at = predicate => calls.findIndex(predicate);
+  assert(at(call => call.command === 'bun') < at(call => call.command === 'bash'));
+  assert(at(call => call.command === 'bash') < at(call => call.args[1] === 'init'));
+  assert.equal(messages.filter(message => message === BROWSER_PASSED).length, 1);
+}
+
+testCase('a browser step that fails stops setup in plain words and never reaches init');
+for (const [step, failBrowser] of [['install', /^agent-browser install$/], ['proof', /forge-browser-proof/]]) {
+  const { outcome, calls, messages } = await archonInstallRun(`owner/browser-fails-${step}`, { failBrowser });
+  assert(outcome instanceof ReportedSetupError && outcome.message === 'browser', step);
+  assert.equal(messages.at(-1), BROWSER_STOP);
+  assert(!messages.includes(BROWSER_PASSED));
+  assert(!calls.some(call => call.args[1] === 'init'));
+  assert(!/factory|archon|config|token/i.test(BROWSER_STOP));
 }

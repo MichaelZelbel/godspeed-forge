@@ -130,6 +130,9 @@ export function nextStep(obstacle, history = [], ctx = {}) {
   // a call refused because it would have acted as the owner (owner-guard.mjs): the refusal already stopped it, so no helper is
   // sent; it stays on the record for an hour after the last refusal, and only refusals that go on for longer reach the chain
   if (obstacle.kind === "as-owner") return { do: "wait-external", approachNote: "The guard refused the call, so nothing was posted or pushed under the owner's account; the run signs in only as the Apps." };
+  // only the owner can put the browser tool back (the Forge's install line, then setup): he is told once, in the round that
+  // finds it, and the next round that proves the browser clears it
+  if (obstacle.kind === "browser-missing") return told === null ? { do: "tell-michael", approachNote: "" } : { do: "wait-external", approachNote: "The owner was told once; the next round clears this when the browser works again." };
   if (machineLike(obstacle.kind)) {
     if (!history.some(h => h.helper === "housekeeping")) return { do: "housekeeping", approachNote: "" };
     // the ops helper traced it to our own checking setup (a missing hidden-check tool, the test machine):

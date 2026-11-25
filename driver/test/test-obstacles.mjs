@@ -219,3 +219,12 @@ test("item 7: a hand-made PAUSE raises factory-stopped in its first round, like 
   assert.equal(findObstacles(stopAsked, {}, at).filter(o => o.kind === "factory-stopped").length, 1, "the file covers a PAUSE, never a STOP");
   assert.equal(findObstacles(mk("STOP"), {}, at, { ownerPauses: ["PAUSE:godspeed-mission-control"] }).filter(o => o.kind === "factory-stopped").length, 1, "a record for the PAUSE does not cover a STOP");
 });
+
+test("browser-missing: a failed browser proof is one obstacle for the owner, a working one is none", () => {
+  const w = browser => world({}, { server: { failedUnits: [], diskPct: 50, memAvailPct: 80, staleProcs: [], logins: { gh: true }, browser } });
+  assert.deepEqual(kinds(findObstacles(w({ ok: true }), ledger(), NOW)), []);
+  const bad = findObstacles(w({ ok: false, why: "the browser proof failed: exit 1" }), ledger(), NOW);
+  assert.deepEqual(kinds(bad), ["browser-missing"]);
+  assert.deepEqual(bad[0].evidence, ["the browser proof failed: exit 1"]);
+  assert.deepEqual(kinds(findObstacles(w({ ok: false, why: "x" }), ledger(), NOW)), ["browser-missing"], "the same cause is the same obstacle every round");
+});
