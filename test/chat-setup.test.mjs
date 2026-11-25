@@ -1,6 +1,6 @@
 // Setup from the chat (lib/owner/setup.mjs, lib/chat-setup.mjs): the owner's `setup` requests against a worker that runs the
 // real setup with stand-in commands and GitHub, in this process. No network, no AI.
-// test cases: 6
+// test cases: 7
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,6 +11,7 @@ import { createChatSetup, openSession, chatSetupFiles, CHAT_SETUP_MESSAGES, draf
 import { setupCommand, DRAFT_MESSAGES } from '../lib/setup.mjs';
 import { defaults, credentialPath } from '../lib/config.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
+import { STRIKE_QUESTION, CONFIRM_QUESTION, struckNumbers } from '../lib/factory-setup.mjs';
 
 const REPO = 'owner/repo';
 const CODE = 'GITHUB-CODE-SENTINEL';
@@ -19,7 +20,7 @@ let nextPort = 44000 + Math.floor(Math.random() * 1000);
 const timing = { pollMs: 10, maxMs: 15000, quietMs: 150 };
 
 // One server: a state folder with the watch page's record, a projects folder, and the commands setup runs.
-function world({ claude = true } = {}) {
+function world({ claude = true, factory = null } = {}) {
   const PORT = nextPort++;
   const root = tmpDir('forge-chat-setup-');
   const state = path.join(root, 'state');
@@ -61,7 +62,7 @@ function world({ claude = true } = {}) {
     const { options, close } = createChatSetup({ repository, paths: { state }, session, deps: { run, start: () => { throw new Error('no sign-in expected'); }, probe: async () => true, github: { base, sleepMs: 5, appWaitMs: 5000 } } });
     const interrupted = new Promise(resolve => { S2.interrupt = resolve; });
     workers.push((async () => {
-      await setupCommand(repository, { ...options, interrupted, config: { ...defaults(root), projectsRoot } });
+      await setupCommand(repository, { ...options, ...(factory && { factorySetup: context => factory(context, options.prompt, S) }), interrupted, config: { ...defaults(root), projectsRoot } });
       await close();
       if (session.state.status !== 'done') session.finish('stopped');
     })());
@@ -201,6 +202,40 @@ testCase('the draft is only what the project says: its description, its README, 
   assert.deepEqual(await draftMission({ repository: REPO, checkout: '/x', run, readme: () => { throw new Error('none'); } }), {});
   const described = async () => ({ stdout: 'From GitHub\n' });
   assert.deepEqual(await draftMission({ repository: REPO, checkout: '/x', run: described, readme: read('# App\n\nIntro.\n\n## Users\n\nBakers\nand cooks.\n\n## Install\n') }), { purpose: 'From GitHub', users: 'Bakers and cooks.' });
+}
+
+testCase('the strike list, the confirmation and the push run in the chat: numbers strike, "keep all" keeps, no sends nothing, yes sends once');
+{
+  const entries = ['one', 'two', 'three', 'four', 'five', 'six', 'seven'];
+  const factory = async ({ output }, prompt, S) => {
+    output('Proposed:');
+    entries.forEach((entry, index) => output(`${index + 1}. ${entry}`));
+    let kept;
+    for (;;) {
+      const struck = struckNumbers(await prompt(STRIKE_QUESTION));
+      if (struck) { kept = entries.filter((_, index) => !struck.has(index + 1)); break; }
+    }
+    S.kept = kept;
+    while (String(await prompt(CONFIRM_QUESTION(REPO))).trim().toLowerCase() !== 'yes') S.declined = (S.declined ?? 0) + 1;
+    S.pushed += 1;
+  };
+  for (const [answer, expected] of [['2 5', ['one', 'three', 'four', 'six', 'seven']], ['keep all', entries]]) {
+    const w = world({ factory });
+    await toDraft(w);
+    const list = await w.say('yes');
+    assert.match(list, /1\. one[\s\S]*7\. seven/);
+    assert.match(list, /say "keep all"/);
+    assert.ok(!/press Enter/.test(list));
+    const confirm = await w.say(answer);
+    assert.match(confirm, new RegExp(CONFIRM_QUESTION(REPO).slice(0, 20)));
+    assert.deepEqual(w.S.kept, expected);
+    await w.say('no');
+    assert.equal(w.S.pushed, 0, 'no push without a yes');
+    const last = await w.say('yes');
+    assert.equal(w.S.pushed, 1);
+    assert.match(last, /Setup is complete/);
+    await Promise.all(w.workers);
+  }
 }
 
 process.exit(0);

@@ -148,6 +148,9 @@ If the page does not open, your hosting company's firewall may be blocking it: l
   state folder); the web server holds only its bcrypt hash. `godspeed-forge watch`, typed as root, shows the address and
   the sign-in again. Asked in the chat ("where can I watch the factory?"), Godspeed gives the address and the user name,
   never the password.
+- **One path is open without the sign-in:** `/forge-setup/*`, GET only. It exists so GitHub's redirect can reach a setup
+  started from the chat. Each App has its own random address, the listener behind it runs only while that setup waits,
+  and the first code that arrives is the only one taken.
 - **It only shows.** Nothing on the page can start, stop, answer or change a run: after the sign-in only reading
   requests (GET and HEAD) reach Archon, never its internal or webhook paths, and your sign-in is not passed on to it.
   Archon's server behind it listens on the server itself only and starts no run of its own. Archon's server also does background work of its own (it resumes a
