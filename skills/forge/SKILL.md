@@ -1,6 +1,6 @@
 ---
 name: forge
-description: The Forge, which builds the owner's GitHub projects with an AI software factory and makes a release public only on their go. Use it first for a short message with no other context, such as "go", "yes", "take it back" or one that starts with a handle like F7, whenever .godspeed/forge/waiting.json lists something: the Forge sent the owner a message the chat may not have seen, and this is the answer. Also use when the owner asks to plan a release ("plan release my-app", "plan the next my-app release", "what should go into the next version?"); says "go", "make it public", "take it back", "release status", "where is the release?" or asks in any words how the next version of one of their projects is coming along; says "turn on automatic work", "pause the factory" or "run one lap"; asks where to watch the factory at work ("where can I watch the factory?", "show me the factory working", "where do I see the laps?"); replies to a Forge question (a message that starts with a Forge handle such as F7, or a bare answer when .godspeed/forge/waiting.json shows exactly one question waiting); or asks to set up the Forge.
+description: The Forge, which builds the owner's GitHub projects with an AI software factory and makes a release public only on their go. Use it first for a short message with no other context, such as "go", "yes", "take it back" or one that starts with a handle like F7, whenever .godspeed/forge/waiting.json lists something: the Forge sent the owner a message the chat may not have seen, and this is the answer. Also use when the owner asks to plan a release ("plan release my-app", "plan the next my-app release", "what should go into the next version?"); says "go", "make it public", "take it back", "release status", "where is the release?" or asks in any words how the next version of one of their projects is coming along; says "turn on automatic work", "pause the factory" or "run one lap"; asks where to watch the factory at work ("where can I watch the factory?", "show me the factory working", "where do I see the laps?"); replies to a Forge question (a message that starts with a Forge handle such as F7, or a bare answer when .godspeed/forge/waiting.json shows exactly one question waiting); or asks to set up the Forge, or replies to a setup the Forge is running in this chat (.godspeed/forge/setup.json exists).
 ---
 
 # The Forge
@@ -65,10 +65,15 @@ Never write anything else under `.godspeed/forge/`, and never change the files t
 
 ## What the owner may ask, and the kind of request
 
-- **Set up the Forge** for a project: you do not run it. Setup happens in the server's terminal, where the owner
-  signs the server in to GitHub and creates two GitHub Apps. Say: "Type this in your server's terminal, logged in
-  as root: godspeed-forge setup owner/repository, with your GitHub project in place of owner/repository." When they
-  named the project, put its name in the command instead.
+- **Set up the Forge** for a project, or any short reply while a setup is open (`.godspeed/forge/setup.json` exists):
+  kind `setup`, with `project` the repository as `owner/repository` (when the owner named only the project's name, use
+  the repository of that name if you know it, else ask) and `words` the owner's message exactly. Setup runs in this chat:
+  the Forge's `say` holds each sign-in link and code, each link for creating and installing a GitHub App, the
+  purpose and users it read from the project, the numbered list of what the project must never become and the final
+  yes; the owner answers each in a short reply, which is again kind `setup`. Setup waits for the owner, so a request may
+  come back with only part of it; say what it says. Never ask for, accept or repeat a sign-in code or a password: when the
+  owner pastes a code, do not send it, tell them to type it in the server's terminal. If the Forge says setup needs the
+  terminal (Claude Code's own sign-in, or updating the page that gives this chat a way back from GitHub), pass that on.
 - **Go** or **make it public**: kind `go`.
 - **Take it back**: kind `take-back`.
 - **Release status**, **where is the release**: kind `status`.

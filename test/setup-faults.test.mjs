@@ -13,7 +13,7 @@ import { Server } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { files } from '../lib/files.mjs';
-import { InputClosed, setupCommand } from '../lib/setup.mjs';
+import { DRAFT_MESSAGES, InputClosed, setupCommand } from '../lib/setup.mjs';
 import { signIn, AGENT_QUESTION, CODE_QUESTION } from '../lib/signin.mjs';
 import { createFactorySetup, CONFIRM_QUESTION, STRIKE_QUESTION } from '../lib/factory-setup.mjs';
 import { defaults } from '../lib/config.mjs';
@@ -45,6 +45,9 @@ const EXEMPT = {
 // Modules in lib/ that setup does not use at all, and why. Neither check of this file applies to them, and the check
 // below follows setup's imports from its entry points, so the day setup reaches one of them it is checked again.
 const NOT_SETUP = {
+  'chat-callback.mjs': 'the chat setup\'s listener for GitHub\'s redirect, started by the chat worker around setup, never by setup itself; test/chat-callback.test.mjs covers it',
+  'chat-setup.mjs': 'the chat setup\'s adapters, which hand setup its questions and sign-ins from outside and are never imported by it; test/chat-setup.test.mjs covers them',
+  'chat-setup-command.mjs': 'the worker command the chat\'s setup requests start, which builds those adapters around setup',
   'godspeed.mjs': 'the bridge to Godspeed, used by the installer, the chat inbox and the driver steps, never by setup',
   'inbox.mjs': 'the chat inbox, which its own service runs, never setup',
   'watch.mjs': 'the page where the owner watches the factory, which the install line, godspeed-forge watch and its hourly timer set up, and the setup command only once setup finished, as it installs the driver; test/watch.test.mjs makes its commands fail',
@@ -282,7 +285,7 @@ async function setup(world, { behaviour = {}, faults } = {}) {
   const output = [];
   const watched = faults ? { events: [], faults, fired: [] } : null;
   const github = Object.fromEntries(Object.entries(world.github).map(([op, call]) => [op, point('github', op, call)]));
-  const answers = { 'What is this software for?': 'Purpose.', 'Who uses it?': 'Users.', [AGENT_QUESTION]: 'claude', [CODE_QUESTION]: 'the code', [STRIKE_QUESTION]: '2 5', [CONFIRM_QUESTION(repository)]: 'yes' };
+  const answers = { [DRAFT_MESSAGES.question]: 'no', 'What is this software for?': 'Purpose.', 'Who uses it?': 'Users.', [AGENT_QUESTION]: 'claude', [CODE_QUESTION]: 'the code', [STRIKE_QUESTION]: '2 5', [CONFIRM_QUESTION(repository)]: 'yes' };
   const start = startPoint(standInStart(world));
   current = watched;
   let code;
@@ -292,6 +295,7 @@ async function setup(world, { behaviour = {}, faults } = {}) {
       commands: { run: point('command', 'run', standInCommands(behaviour, world)) },
       prompt: point('prompt', 'prompt', async question => answers[question]),
       signIn: context => signIn({ ...context, start }),
+      draftMission: async () => ({ purpose: 'Drafted purpose.', users: 'Drafted users.' }),
       factorySetup: createFactorySetup({ home: join(root, 'home') })
     });
   } finally {
