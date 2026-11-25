@@ -5,7 +5,7 @@
 // code (as real network failures do), and GitHub calls and questions as if the input closed. Every place in lib/ that reads or writes a file, runs a command, calls GitHub, asks a question
 // or takes that hold must be made to fail by some scenario here, so a new step that no scenario reaches fails
 // this test.
-// test cases: 20
+// test cases: 21
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -277,7 +277,7 @@ function standInCommands(behaviour, world = {}) {
 
 // One run of `godspeed-forge setup`, watched when faults is given.
 async function setup(world, { behaviour = {}, faults } = {}) {
-  await writeFile(paths.config, JSON.stringify({ ...defaults(root), projectsRoot }));
+  await writeFile(paths.config, JSON.stringify({ ...defaults(root), projectsRoot, ...world.config }));
   world.noCallback = behaviour.noCallback ?? null;
   const output = [];
   const watched = faults ? { events: [], faults, fired: [] } : null;
@@ -361,6 +361,21 @@ const SCENARIOS = [
   { name: 'no checks named', finish: 'complete', behaviour: { checksLeftEmpty: true } },
   // #100: a temporary a stopped earlier run left beside its saves; the own pid with no save in flight is
   // stale by rule, so the run's sweep looks the folder up and removes the entry.
+  // A project whose owner already runs the factory, with its two Apps named in the Forge's config: nothing is installed.
+  { name: 'adopted factory', finish: 'complete', arrange: async world => {
+    const checkout = join(projectsRoot, repository);
+    await writeJson(join(checkout, '.factory/consumer.json'), { source: buildToolsSource, revision: 'a'.repeat(40) });
+    await writeJson(join(checkout, 'factory/consumer.py'), '# the owner\'s factory\n');
+    await writeJson(join(checkout, 'MISSION.md'), '# Mission\n');
+    await mkdir(join(checkout, '.git'), { recursive: true });
+    const named = {};
+    for (const kind of ['builder', 'release']) {
+      await writeJson(join(root, `${kind}.pem`), 'PRIVATE KEY');
+      named[kind] = { slug: `own-${kind}`, id: 7, key_file: join(root, `${kind}.pem`) };
+    }
+    world.config = { adoptedApps: { [repository]: named } };
+    world.live = { builder: 1, release: 1 };
+  } },
   { name: 'leftover temporary', finish: 'complete', arrange: async world => {
     await setup(world, { behaviour: { doctor: 'fail' } });
     await writeJson(join(credentialFolder, `builder-app.json.${process.pid}.tmp`), '{"id": 1');

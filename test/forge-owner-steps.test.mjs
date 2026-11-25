@@ -2,7 +2,7 @@
 // GitHub on 127.0.0.1, a stand-in bridge to Godspeed, a stand-in coding agent, project checkouts with an origin on
 // this machine and a stand-in factory/consumer.py. The acceptance of tickets 03 (questions reach the chat) and 04
 // (a finished release stages itself) of the Forge 0.1.0 plan, and ticket 02's facts. No network, no AI.
-// test cases: 19
+// test cases: 23
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,7 +10,7 @@ import { testCase } from './cases.mjs';
 import { fakeGithub, standInBridge, setUpProject, projectCheckout, standInGh, tmpDir, assertPlain } from './forge-owner-fakes.mjs';
 import * as questionsStep from '../driver/steps/owner-questions.mjs';
 import * as releasesStep from '../driver/steps/owner-releases.mjs';
-import { plan, go, status } from '../lib/owner/releases.mjs';
+import { plan, go, takeBack, status } from '../lib/owner/releases.mjs';
 import { answer } from '../lib/owner/questions.mjs';
 import { releaseRecord, saveRelease, readQuestions, factsFile, WAITING_FILE } from '../driver/steps/owner/records.mjs';
 import { loadSettings, CORE } from '../driver/settings.mjs';
@@ -544,6 +544,111 @@ testCase('a project profile sends its staging address as the link, after its dep
   assert.equal((await status({ id: 'st', kind: 'status', project: 'broken' }, reqCtx)).say, 'broken 0.1.0 could not be put on your staging copy. Nothing is public yet.');
   const g = await go({ id: 'g-broken', kind: 'go', project: 'broken', words: 'go, I will fix the staging copy myself' }, reqCtx);
   assert.match(g.say, /^broken 0\.1\.0 is public now: https:\/\/github\.example\/acme\/broken\/releases\/\d+$/, 'its checks passed, so no "although"');
+}
+
+testCase('a profile with build, extra checks and a staging command runs them at their places, and a failing staging command stops staging with its output as the cause');
+{
+  const { co: c, project, issue } = await plannedProject('ownsteps', { unit: 'true' }, {
+    build: { commands: ['mkdir -p dist && echo built > dist/app.txt'], produces: ['dist'] },
+    checks: [{ name: 'links', run: 'test -f dist/app.txt' }],
+    deploy: 'echo "$FORGE_VERSION"; cat "$FORGE_BUILD_DIR/dist/app.txt"; echo "disk is full" >&2; exit 4'
+  });
+  gh.merge('acme/ownsteps', issue, c.commit({ unit: 'true' }, 'owned change'));
+  const n = bridge.sent.length;
+  await releasesStep.run(ctxFor([project]));
+  const record = releaseRecord(state, 'acme/ownsteps', '0.1.0');
+  assert.deepEqual(record.checks.map(x => [x.name, x.ok]), [['build', true], ['unit', true], ['links', true]]);
+  assert.equal(fs.readFileSync(path.join(state, 'projects', 'acme', 'ownsteps', 'releases', '0.1.0', 'build', 'dist', 'app.txt'), 'utf8'), 'built\n');
+  assert.equal(record.state, 'failed');
+  assert.equal(record.failed.staging, true);
+  const text = 'ownsteps 0.1.0 passed its own checks, but it could not be put on your staging copy, so it is not ready to try. It said: 0.1.0\nbuilt\ndisk is full';
+  assert.deepEqual(sentSince(n).map(x => x.text), [text]);
+  assert.equal(gh.repo('acme/ownsteps').refs['heads/staging'] !== undefined, true, 'the staging branch moved first, as before');
+  const bad = await plannedProject('badbuild', { unit: 'true' }, { build: { commands: ['echo no compiler >&2; exit 2'] }, checks: ['true'] });
+  gh.merge('acme/badbuild', bad.issue, bad.co.commit({ unit: 'true' }, 'change'));
+  const m = bridge.sent.length;
+  await releasesStep.run(ctxFor([bad.project]));
+  assert.deepEqual(sentSince(m).map(x => x.text), ['badbuild 0.1.0 did not pass its own checks, so it is not ready to try. The build failed. It said: no compiler To fix it, ask me to plan the next badbuild release.']);
+  const extra = await plannedProject('badcheck', { unit: 'true' }, { checks: ['echo "missing alt text" >&2; exit 1'] });
+  gh.merge('acme/badcheck', extra.issue, extra.co.commit({ unit: 'true' }, 'change'));
+  const k = bridge.sent.length;
+  await releasesStep.run(ctxFor([extra.project]));
+  assert.match(sentSince(k)[0].text, /The check "check 1" failed\. It said: missing alt text /);
+}
+
+testCase('a profile that is not valid fails the release with a sentence, and a profile named by path is read from that file');
+{
+  const wrong = await plannedProject('wrongprofile', { unit: 'true' }, { build: { commands: ['true'], produces: ['../outside'] } });
+  gh.merge('acme/wrongprofile', wrong.issue, wrong.co.commit({ unit: 'true' }, 'change'));
+  const n = bridge.sent.length;
+  await releasesStep.run(ctxFor([wrong.project]));
+  assert.match(sentSince(n)[0].text, /The project's own steps could not be used: what its build produces must be a list of paths inside the project, none going up out of it\./);
+  const file = path.join(root, 'kept-profile.json');
+  fs.writeFileSync(file, JSON.stringify({ staging_url: 'https://kept.example' }));
+  const kept = await plannedProject('keptprofile', { unit: 'true' }, file);
+  gh.merge('acme/keptprofile', kept.issue, kept.co.commit({ unit: 'true' }, 'change'));
+  const m = bridge.sent.length;
+  await releasesStep.run(ctxFor([kept.project]));
+  assert.deepEqual(sentSince(m).map(x => x.text), ['keptprofile 0.1.0 is ready to try: https://kept.example. Shall I make it public? Reply go.']);
+}
+
+testCase('the public step runs on go before anything is made public on GitHub, and the undo runs on take-back before anything is taken back');
+{
+  const settingsDir = path.join(root, 'settings');
+  fs.mkdirSync(path.join(settingsDir, 'projects'), { recursive: true });
+  const marker = path.join(root, 'public-ran.txt');
+  const write = profile => fs.writeFileSync(path.join(settingsDir, 'projects', 'acme--twoway.json'), JSON.stringify({ repository: 'acme/twoway', profile }));
+  const { co: c, project, issue } = await plannedProject('twoway', { unit: 'true' });
+  gh.merge('acme/twoway', issue, c.commit({ unit: 'true' }, 'change'));
+  await releasesStep.run(ctxFor([project]));
+  const repo = gh.repo('acme/twoway');
+  repo.refs['heads/live'] = repo.refs['tags/candidate/0.1.0'];
+  const before = repo.refs['heads/live'];
+  const ctx = { ...reqCtx, settingsDir };
+  write({ public: 'echo "cannot reach the server" >&2; exit 5', undo: `echo undone >> "${marker}"` });
+  const refused = await go({ id: 'g-pub1', kind: 'go', project: 'twoway', words: 'go' }, ctx);
+  assert.deepEqual(refused, { ok: false, say: 'I did not make twoway 0.1.0 public: the project\'s own public step failed, so nothing changed on GitHub. It said: cannot reach the server Say go again once it is fixed.' });
+  assert.equal(repo.refs['tags/v0.1.0'], undefined, 'no tag');
+  assert.equal(repo.refs['heads/live'], before, 'live did not move');
+  assert.equal(releaseRecord(state, 'acme/twoway', '0.1.0').state, 'staged');
+  write({ public: `echo "$FORGE_VERSION $FORGE_CANDIDATE_COMMIT" > "${marker}"`, undo: 'echo "cannot undo" >&2; exit 6' });
+  const done = await go({ id: 'g-pub2', kind: 'go', project: 'twoway', words: 'go' }, ctx);
+  assert.equal(done.ok, true, done.say);
+  assert.match(fs.readFileSync(marker, 'utf8'), /^0\.1\.0 [0-9a-f]{40}\n$/);
+  const keptLive = repo.refs['heads/live'];
+  const stuck = await takeBack({ id: 'tb1', kind: 'take-back', project: 'twoway', words: 'back' }, ctx);
+  assert.deepEqual(stuck.ok, false);
+  assert.match(stuck.say, /^I did not take back twoway 0\.1\.0: the project's own undo step failed, so nothing changed on GitHub\. It said: cannot undo /);
+  assert.equal(repo.refs['heads/live'], keptLive, 'live did not move');
+  assert.equal(releaseRecord(state, 'acme/twoway', '0.1.0').state, 'public');
+}
+
+testCase('the add-on finds the profile in the folder the driver was given (FD_SETTINGS_DIR), and a profile file it cannot read stops go');
+{
+  const settingsDir = path.join(root, 'driver-settings');
+  fs.mkdirSync(path.join(settingsDir, 'projects'), { recursive: true });
+  const file = path.join(settingsDir, 'projects', 'acme--elsewhere.json');
+  const marker = path.join(root, 'elsewhere-ran.txt');
+  const { co: c, project, issue } = await plannedProject('elsewhere', { unit: 'true' });
+  gh.merge('acme/elsewhere', issue, c.commit({ unit: 'true' }, 'change'));
+  await releasesStep.run(ctxFor([project]));
+  const repo = gh.repo('acme/elsewhere');
+  repo.refs['heads/live'] = repo.refs['tags/candidate/0.1.0'];
+  const was = process.env.FD_SETTINGS_DIR;
+  process.env.FD_SETTINGS_DIR = settingsDir;
+  try {
+    fs.writeFileSync(file, '{ not json');
+    const stopped = await go({ id: 'g-el1', kind: 'go', project: 'elsewhere', words: 'go' }, reqCtx);
+    assert.equal(stopped.ok, false);
+    assert.match(stopped.say, /the project's own public step failed, so nothing changed on GitHub/);
+    assert.equal(repo.refs['tags/v0.1.0'], undefined, 'no tag');
+    fs.writeFileSync(file, JSON.stringify({ repository: 'acme/elsewhere', profile: { public: `echo ran > "${marker}"` } }));
+    const done = await go({ id: 'g-el2', kind: 'go', project: 'elsewhere', words: 'go' }, reqCtx);
+    assert.equal(done.ok, true, done.say);
+    assert.equal(fs.readFileSync(marker, 'utf8'), 'ran\n');
+  } finally {
+    if (was === undefined) delete process.env.FD_SETTINGS_DIR; else process.env.FD_SETTINGS_DIR = was;
+  }
 }
 
 await gh.close();

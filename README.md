@@ -65,7 +65,8 @@ Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 0700 and credential files under the private `credentials/` subtree are mode 0600. Project state
 contains only non-secret setup records. The defaults are the projects directory, a plain release-cost estimate,
 and the `git`, `gh`, and `python3` command names. The config and setup output never contain App
-credentials or ids, and the project checkout never contains App credentials.
+credentials, and the project checkout never contains App credentials. Config holds App ids and key-file paths only
+for a project that names its own Apps in `adoptedApps`, never the key itself.
 
 Setup keeps a list of the GitHub Apps it made for a repository, with each App's role, name, slug and id
 and never a key, in that repository's project checkout at `.git/godspeed-forge-apps.json`, which git never
@@ -199,11 +200,58 @@ by the release App. The one exception: GitHub lets an App move a branch over a c
 only with the Workflows permission, which neither Forge App has, so that one move is made with this server's own `gh`
 sign-in (setup signs it in with the `workflow` scope).
 
-None of this needs a setting. A project can add a profile in its driver settings file
-(`projects/<owner>--<repository>.json`): `"profile": { "staging_url": "...", "deploy": "...", "health": "..." }`, where
-`staging_url` is the link you get instead of the pre-release's page, `deploy` puts the candidate on your staging copy
-after `staging` moved, and `health` must then succeed and print the candidate's commit. The steps' other settings, all
-optional, are in `driver/settings.example.json`.
+## Your own steps (the project profile)
+
+None of this needs a setting. A project can name its own steps in a profile, kept in the project's file in the driver's
+settings folder (`/etc/godspeed-forge`, or `~/.config/godspeed-forge`): `projects/<owner>--<repository>.json`, key
+`profile`. Every key is optional; a step that is not named does not run.
+
+```json
+"profile": {
+  "build": { "commands": ["npm ci", "npm run build"], "produces": ["dist"] },
+  "checks": ["npm run lint-links", { "name": "pages", "run": "npm run check-pages" }],
+  "deploy": "./deploy-staging.sh",
+  "staging_url": "https://staging.example.com",
+  "health": "curl -s https://staging.example.com/version",
+  "public": "./publish.sh",
+  "undo": "./unpublish.sh",
+  "timeout_minutes": 25
+}
+```
+
+Each step is a command whose non-zero exit is a failed step; what it printed last is told to you as the cause.
+
+- `build` runs on the candidate, in its temporary copy, before its other checks. What it `produces` (paths inside the
+  project) is kept in the release's private folder on this server, named by `FORGE_BUILD_DIR` for the later steps.
+- `checks` run on the candidate after the project's own tests; a failing one stops the release before staging.
+- `deploy` puts the candidate on your staging copy after the branch `staging`
+  moved; `health` must then succeed and print the candidate's commit; `staging_url` is the link you get. A failing
+  `deploy` command stops staging and its output is in the message.
+- `public` runs when you say go, before anything is made public on GitHub; if it fails nothing is made public, the release
+  stays on staging and you can say go again. `undo` does the same on take-back. Because a GitHub refusal after the
+  command makes the next go or take-back run it again, both must be safe to run twice.
+- Commands run as the account the Forge runs as (the factory's account on a server the Forge set up, else the service's
+  own) and see `FORGE_VERSION`, `FORGE_CANDIDATE_COMMIT` and `FORGE_BUILD_DIR`. `timeout_minutes` defaults to
+  `steps.owner-releases.check_minutes` (25) for build, checks and staging, and to 25 minutes for `public` and `undo`.
+
+`profile` can also be the path of a JSON file with the same keys (absolute, or relative to the project's checkout), for a
+profile kept in the project's own repository. The Forge only reads a file you name there and never looks for one: the
+factory merges changes to the project without anyone watching, so a file in the project can change, and naming it is your
+decision to let whoever can change it run commands on this server. `driver/settings.example.json` shows the keys.
+
+## A project that already runs the factory
+
+Setting up a checkout that already has Cole Medin's factory (its settings file is there, with its program and the project's
+mission, and this Forge never began installing in it) adopts it: setup changes nothing in the project, the factory, its
+schedule or its timers, and does not reinstall it. It tells you what it adopted and, in one sentence, when the build tools
+the factory runs on are not the version this Forge pins; it never changes them. The coding assistant, GitHub sign-in and
+the browser check are the same as for any setup.
+
+To use GitHub Apps you already run in place of new ones, name them in the Forge's `config.json` before setup, one entry per
+repository: `"adoptedApps": { "owner/repository": { "builder": { "slug": "...", "id": 123, "key_file": "/path/key.pem" },
+"release": { "slug": "...", "id": 456, "key_file": "/path/key.pem" } } }`. Setup reads each key file, checks with GitHub that
+the App is installed on exactly that repository, and keeps its details where the Forge's own steps read them; it never
+makes an App you named. A project that names none gets the Forge's two Apps made, as in any setup.
 
 ## License
 
