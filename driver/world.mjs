@@ -47,6 +47,7 @@ export const defaultsFor = (e = process.env) => ({
 const realDeps = env => ({
   readFile: p => fs.readFileSync(p, "utf8"),
   mtime: p => fs.statSync(p).mtimeMs,
+  exists: p => { try { fs.lstatSync(p); return true; } catch { return false; } }, // a link counts, as in consumer.py
   readDir: p => fs.readdirSync(p),
   readReleases: (dir, autoStage) => readReleases(dir, autoStage, GODSPEED_RELEASE),
 });
@@ -330,9 +331,11 @@ function readFactory(env, deps, project, primary, world, unreadable) {
   }
   for (const name of ["STOP", "PAUSE"]) {
     const file = path.posix.join(checkout, ".factory", name);
-    let text; try { text = deps.readFile(file); } catch { continue; }
+    // the file existing decides, as in the factory's own consumer.py (stop.exists()): one whose content cannot be read is still the obstacle
+    let text = null; try { text = deps.readFile(file); } catch { /* unreadable, or not there */ }
+    if (text === null) { if (!(deps.exists && deps.exists(file))) continue; text = ""; }
     let mt = Date.now(); try { mt = deps.mtime(file); } catch {}
-    const s = { file, kind: name, ...parseStop(text, mt), writerAlive: null };
+    const s = { file, kind: name, ...parseStop(text, mt), writerAlive: null, mtimeMs: mt };
     if (s.pid && s.writer) {
       const args = tryRun(deps, `if command -v ps >/dev/null 2>&1; then ps -p ${s.pid} -o args= 2>/dev/null || true; else echo __unknown__; fi`, false, unreadable, `${part}/stop-writer`);
       if (args !== null) s.writerAlive = String(args).includes("__unknown__") ? null : writerRuns(s.writer, args); // unknown stays unknown: nothing is removed on a guess
@@ -341,8 +344,23 @@ function readFactory(env, deps, project, primary, world, unreadable) {
     if (name === "STOP" || !f.stop) f.stop = s;
   }
   // the file the owner's own "pause the factory" makes before the pause (lib/factory-control.mjs)
-  f.ownerPause = false;
-  try { deps.readFile(path.posix.join(checkout, ".factory", "owner-pause")); f.ownerPause = true; } catch { /* not his */ }
+  // It holds the identity of the PAUSE it was made with (its mtime) and counts only while that same file is there: a PAUSE that is gone or
+  // is another file makes it stale, and the round deletes it (housekeeping), so a later hand-made PAUSE is nobody's but the obstacle's.
+  f.ownerPause = false; f.staleOwnerMarker = null;
+  const markerFile = path.posix.join(checkout, ".factory", "owner-pause");
+  let marker = null; try { marker = deps.readFile(markerFile); } catch { /* none */ }
+  if (marker !== null) {
+    const id = /^pause-mtime: (\d+)$/m.exec(String(marker));
+    let valid = false;
+    if (f.pause) {
+      if (id) valid = Number(id[1]) === Math.floor(f.pause.mtimeMs);
+      else { // made before its pause, the identity not written yet: good for two minutes
+        let at = NaN; try { at = deps.mtime(markerFile); } catch { /* unknown */ }
+        valid = Number.isFinite(at) ? ((deps.now ? deps.now() : Date.now()) - at) < 2 * 60000 : true;
+      }
+    }
+    if (valid) f.ownerPause = true; else f.staleOwnerMarker = markerFile;
+  }
   return f;
 }
 

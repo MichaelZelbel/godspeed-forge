@@ -191,6 +191,30 @@ test("item 7: a real STOP file in a real checkout is still there, with its conte
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("item 7: the owner-pause file of a PAUSE that is gone or another file is deleted, and only that file", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hk-marker-"));
+  const folder = path.join(dir, ".factory");
+  fs.mkdirSync(folder);
+  const marker = path.join(folder, "owner-pause"), stop = path.join(folder, "STOP");
+  fs.writeFileSync(marker, "Asked by the owner in the chat: r1.\npause-mtime: 1\n");
+  fs.writeFileSync(stop, "x\n");
+  try {
+    const s = server();
+    const w = stopWorld({ file: stop, line: "x" });
+    await housekeep({}, w, { ...s.deps });
+    assert.equal(fs.existsSync(marker), true, "a valid marker (the world says so) is not touched");
+    w.factories[0].staleOwnerMarker = marker;
+    const r = await housekeep({}, w, { ...s.deps });
+    assert.equal(fs.existsSync(marker), false, "a stale one goes");
+    assert.equal(fs.readFileSync(stop, "utf8"), "x\n", "the STOP beside it stays");
+    assert.match(r.done.join("\n"), /owner-pause/);
+    w.factories[0].staleOwnerMarker = path.join(dir, "elsewhere.txt");
+    fs.writeFileSync(path.join(dir, "elsewhere.txt"), "keep");
+    await housekeep({}, w, { ...s.deps });
+    assert.equal(fs.existsSync(path.join(dir, "elsewhere.txt")), true, "nothing else is ever deleted");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a stopped factory timer the round names is started again as the factory user, in its namespace; nothing else is started", async () => {
   const s = server();
   const r = await housekeep({}, { server: { failedUnits: [], staleProcs: [], logins: { gh: true } }, timersToStart: ["archonfactory-querino.timer", "evil.timer", "archonfactory-x.service"] }, s.deps);

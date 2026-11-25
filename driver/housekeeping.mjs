@@ -248,6 +248,14 @@ export async function housekeep(env0, world, deps = {}) {
     } catch (e) { out.failed.push(`${name}: ${lastLine(e.message).slice(0, 200)}`); }
   }
 
+  // ---- the owner-pause file of a PAUSE that is gone or is another file (world.mjs): deleted, so it can never cover a later PAUSE
+  for (const f of (world && world.factories) || []) {
+    const file = f && f.staleOwnerMarker;
+    if (!file || !/\/\.factory\/owner-pause$/.test(String(file)) || FORBIDDEN.test(file)) continue;
+    try { (deps.rmFile || (p => fs.rmSync(p, { force: true })))(file); out.done.push(`removed ${file}: the pause it announced is gone or is another file`); }
+    catch (e) { out.failed.push(`${file}: ${lastLine(e.message).slice(0, 200)}`); }
+  }
+
   // ---- memory: fewer laps while it is tight, the old number back once it is plentiful (switched off:
   // nothing reads MAX_LAPS yet, so tight memory is an obstacle for the ops helper)
   if (env.LOWER_LAPS && Number.isFinite(server.memAvailPct) && (server.memAvailPct < MEM_PCT || server.memAvailPct >= MEM_RESTORE_PCT)) {

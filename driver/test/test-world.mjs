@@ -126,7 +126,7 @@ test("a STOP file names its writer, its process and when it was made", () => {
   assert.equal(p.writer, "stopped"); assert.equal(p.pid, null); assert.equal(p.at, "2026-11-18T10:00:00.000Z");
 });
 
-function projectDeps({ stop = null, writerArgs = "", scenarios = [], restarts = "1", ownerPause = false } = {}) {
+function projectDeps({ stop = null, writerArgs = "", scenarios = [], restarts = "1", ownerPause = "", unreadableStop = false, pause = null } = {}) {
   const calls = [];
   const base = deps();
   return {
@@ -154,12 +154,15 @@ function projectDeps({ stop = null, writerArgs = "", scenarios = [], restarts = 
     },
     readFile: p => {
       if (/consumer\.json$/.test(p)) return CONSUMER;
+      if (unreadableStop && /godspeed-mission-control\/\.factory\/STOP$/.test(p)) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
       if (/godspeed-mission-control\/\.factory\/STOP$/.test(p) && stop) return stop;
-      if (/godspeed-mission-control\/\.factory\/owner-pause$/.test(p) && ownerPause) return "Asked by the owner in the chat: r1.\n";
+      if (/godspeed-mission-control\/\.factory\/PAUSE$/.test(p) && pause) return pause;
+      if (/godspeed-mission-control\/\.factory\/owner-pause$/.test(p) && ownerPause) return ownerPause;
       if (/scope-amendment\.json$/.test(p)) return JSON.stringify({ release: "x", amendments: [{ decidedBy: "release-driver", deferredTickets: ["02-eleven.md"] }] });
       return base.readFile(p);
     },
     mtime: () => Date.parse("2026-11-18T10:00:00Z"),
+    exists: p => unreadableStop && /godspeed-mission-control\/\.factory\/STOP$/.test(p),
   };
 }
 
@@ -320,12 +323,30 @@ test("item 7: a STOP's writer runs when its name is in the process's command lin
   assert.equal(writerRuns("", STAGE_ARGS), false);
 });
 
-test("item 7: the factory is the owner's own pause only when his request in the chat made the owner-pause file", async () => {
+test("item 7: a pause is the owner's own only while it is the PAUSE his chat request made: the file names that PAUSE, and a gone or other PAUSE makes it stale", async () => {
   const text = "Operator paused scheduled launches; wakes continue.\n";
-  const a = await readWorld(TEST_ENV, projectDeps({ stop: text, writerArgs: "", ownerPause: true }));
-  assert.equal(a.factories[0].ownerPause, true);
-  const b = await readWorld(TEST_ENV, projectDeps({ stop: text, writerArgs: "" }));
-  assert.equal(b.factories[0].ownerPause, false, "the same PAUSE text without the file is somebody else's");
+  const MT = Date.parse("2026-11-18T10:00:00Z");
+  const world = async o => (await readWorld(TEST_ENV, projectDeps({ pause: text, writerArgs: "", ...o }))).factories[0];
+  const same = await world({ ownerPause: `Asked by the owner in the chat: r1.\npause-mtime: ${MT}\n` });
+  assert.deepEqual([same.ownerPause, same.staleOwnerMarker], [true, null], "the marker names this PAUSE");
+  const other = await world({ ownerPause: `Asked by the owner in the chat: r1.\npause-mtime: ${MT - 5000}\n` });
+  assert.deepEqual([other.ownerPause, !!other.staleOwnerMarker], [false, true], "it names another PAUSE: the pause now is a hand-made one, and the marker is stale");
+  const none = await world({ ownerPause: "" });
+  assert.deepEqual([none.ownerPause, none.staleOwnerMarker], [false, null], "no marker, no owner pause");
+  const gone = (await readWorld(TEST_ENV, projectDeps({ pause: null, writerArgs: "", ownerPause: `Asked by the owner in the chat: r1.\npause-mtime: ${MT}\n` }))).factories[0];
+  assert.deepEqual([gone.ownerPause, !!gone.staleOwnerMarker], [false, true], "no PAUSE at all: the marker is stale");
+  const pending = await world({ ownerPause: "Asked by the owner in the chat: r1.\n" });
+  assert.equal(pending.ownerPause, false, "made before its pause with no identity yet: the stand-in's clock says it is half an hour old, so it is stale");
+  assert.ok(pending.staleOwnerMarker);
+});
+
+test("item 7: a STOP or PAUSE that exists is the obstacle whether or not its content can be read, as in the factory's own consumer.py", async () => {
+  const f = (await readWorld(TEST_ENV, projectDeps({ stop: "x", unreadableStop: true }))).factories[0];
+  assert.ok(f.stop, "the unreadable STOP is seen");
+  assert.equal(f.stop.kind, "STOP");
+  assert.equal(f.stop.line, "");
+  const none = (await readWorld(TEST_ENV, projectDeps({}))).factories[0];
+  assert.equal(none.stop, null, "none there: none seen");
 });
 
 test("item 7: a leftover STOP of an older release step is read like any other STOP, and reading it asks GitHub nothing about scenarios", async () => {
