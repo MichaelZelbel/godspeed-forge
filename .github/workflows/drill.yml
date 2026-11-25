@@ -48,7 +48,9 @@ jobs:
       - name: Install with the public install line, then the fast drill of both scenarios
         run: |
           set -o pipefail
-          sudo env "PATH=$PATH" FORGE_DRILL_THROWAWAY=yes bash scripts/drill-standstill.sh run "file://$RUNNER_TEMP/forge.tar.gz" 2>&1 | tee "$RUNNER_TEMP/drill.log"
+          # CLAUDE_INSTALL_ALLOW_SUDO: Claude Code's own installer refuses to run under sudo without it (a server's root login has
+          # no sudo; the runner's root does), and the install line installs Claude Code as on any server
+          sudo env "PATH=$PATH" CLAUDE_INSTALL_ALLOW_SUDO=1 FORGE_DRILL_THROWAWAY=yes bash scripts/drill-standstill.sh run "file://$RUNNER_TEMP/forge.tar.gz" 2>&1 | tee "$RUNNER_TEMP/drill.log"
       - name: One line per result
         if: always()
         run: |
@@ -76,7 +78,7 @@ jobs:
         with:
           node-version: '22.19.0'
       - name: Install the Forge 0.3.1 with the public install line
-        run: sudo env "PATH=$PATH" FORGE_DRILL_THROWAWAY=yes FORGE_VERSION=v0.3.1 bash scripts/drill-standstill.sh install
+        run: sudo env "PATH=$PATH" CLAUDE_INSTALL_ALLOW_SUDO=1 FORGE_DRILL_THROWAWAY=yes FORGE_VERSION=v0.3.1 bash scripts/drill-standstill.sh install
       - name: The release-first drill fails on 0.3.1, at the check
         run: |
           set +e
