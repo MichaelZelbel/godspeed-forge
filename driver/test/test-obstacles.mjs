@@ -166,6 +166,8 @@ test("factory-stopped: every STOP is one, whoever wrote it, however young, wheth
   assert.deepEqual(kinds(findObstacles(stop({ writerAlive: false }), ledger(), NOW)), ["factory-stopped"]);
   assert.deepEqual(kinds(findObstacles(stop({ writerAlive: null }), ledger(), NOW)), ["factory-stopped"], "whether its writer lives is not known: still one");
   assert.deepEqual(kinds(findObstacles(stop({ writer: "Operator", line: "Operator stopped new factory launches.", pid: null, writerAlive: false }), ledger(), NOW)), ["factory-stopped"], "a STOP somebody made by hand");
+  const both = world({}, { factories: [factory({ pause: { file: "/home/godspeed-forge/godspeed-mission-control/.factory/PAUSE", kind: "PAUSE", line: "consumer.py 4242 2026-11-21T23:33:00Z", writer: "consumer.py", pid: 4242, at: H(2), writerAlive: false }, stop: { file: "/home/godspeed-forge/godspeed-mission-control/.factory/STOP", kind: "STOP", line: "Operator stopped new factory launches.", writer: "Operator", pid: null, at: H(1), writerAlive: false } })] });
+  assert.deepEqual(kinds(findObstacles(both, ledger(), NOW)), ["factory-stopped"], "a PAUSE file beside it does not hide a STOP");
   const o = findObstacles(stop({ writerAlive: false }), ledger(), NOW)[0];
   assert.equal(o.project, "godspeed-mission-control");
   assert.equal(o.since, H(1));

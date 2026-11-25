@@ -163,7 +163,7 @@ test("the Forge 0.3.3, item 7: no program makes a STOP, so housekeeping removes 
   const removed = [];
   const stopped = [];
   for (const writer of ["auto-stage", "stage", "freeze", "stage-server", "operator", "consumer.py"]) {
-    for (const o of [{ writerAlive: false, scenariosRunning: false }, { writerAlive: false }, { writerAlive: true }, { writerAlive: null }]) {
+    for (const o of [{ writerAlive: false, scenariosRunning: true }, { writerAlive: false }, { writerAlive: true }, { writerAlive: null }]) {
       for (const nowIso of ["2026-11-18T14:30:00Z", "2026-11-18T16:00:00Z", "2026-11-20T00:00:00Z", "2026-12-30T00:00:00Z"]) {
         const s = server();
         const r = await housekeep({}, stopWorld({ writer, line: `${writer} 1424860 2026-11-18T13:47:26.709Z`, ...o }), { ...s.deps, now: () => Date.parse(nowIso), readFile: () => `${writer} 1424860 2026-11-18T13:47:26.709Z`, remove: f => removed.push(f), realpath: p => { throw new Error("no PAUSE"); }, lstat: () => ({ isSymbolicLink: () => false }) });

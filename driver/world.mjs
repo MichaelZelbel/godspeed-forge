@@ -28,7 +28,6 @@ export const defaultsFor = (e = process.env) => ({
   // A fixed command for the runs (tests); unset, each project's own Archon CLI is asked, the way the
   // factory itself asks it (factory/consumer.py native_json: bun <source>/packages/cli/src/cli.ts).
   ARCHON_RUNS: e.FD_ARCHON_RUNS || "",
-  SCENARIOS_WORKFLOW: e.FD_SCENARIOS_WORKFLOW || "scenarios.yml",
   // long-running units of the factory that must run: one that is enabled but stopped counts as down
   // (a plain stop leaves it inactive, not failed, and its own Restart=on-failure does not bring it back)
   LEGACY_UNITS: String(e.FD_LEGACY_UNITS || "").split(",").map(x => x.trim()).filter(Boolean), // units this driver replaces: never a factory timer, never must-run, never an obstacle

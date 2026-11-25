@@ -1315,7 +1315,6 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
   const pollApi = R.retrying(R.githubApi(token, env), { log });
   const childEnv = { ...env, FORGE_RELEASE_CONFIG: configText(), STAGING_READ_TOKEN: token, STAGING_NOTICES_FILE: cfg.noticesFile };
   const readEnv = { ...env, STAGING_READ_TOKEN: token };
-  const exits = [];
   const jobLists = new Map();
   const records = new G.Records(env);
   const stateFile = path.join(cfg.stateDir, "state.json");
@@ -1329,8 +1328,6 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
     state: loadState(stateFile),
     now: () => Date.now(),
     sleep,
-    onExit: (fn) => exits.push(fn),
-    runExits: () => exits.splice(0).forEach((f) => f()),
     run: (args) => runChild(args, childEnv),
     // A real result for the owner (the install is on his server, tests failed): the same queue and ids as ever.
     notify: ({ id, text, about }) => {
@@ -1429,12 +1426,6 @@ export async function look({ env = process.env, dry = false, only = null, log = 
   let ctx;
   try {
     ctx = await realContext({ cfg, env, dry, only, log, clearHaltCommand });
-    const onSignal = () => {
-      ctx.runExits();
-      process.exit(143);
-    };
-    process.on("SIGTERM", onSignal);
-    process.on("SIGINT", onSignal);
     const result = await autoStage(ctx);
     log(`Result: ${result.outcome}.`);
     if (!dry && ctx.state.failing) {
@@ -1455,8 +1446,6 @@ export async function look({ env = process.env, dry = false, only = null, log = 
       return { error: e.message };
     }
     throw e;
-  } finally {
-    if (ctx) ctx.runExits();
   }
 }
 

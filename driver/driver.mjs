@@ -543,7 +543,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       const { look, files, fp } = now0;
       try {
         const named = prev && prev.fp === fp && (prev.named || []).length ? (deps.checkNamed || checkNamedReal)(prev.named).filter(n => n.running && ownedBy(n, releaseOwn(rel.id, files.autoStage))) : [];
-        const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, about, named, now, repo: env.REPO });
+        const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, named, now, repo: env.REPO });
         const t = tick(prev, { fp, work, now, lastRoundAt: jv0.lastRoundAt, journal: (jv.clocks || {})[rel.id] || null });
         t.clock.named = named; t.clock.version = rel.version || t.clock.version;
         t.clock.parts = now0.parts; t.clock.lookText = look; t.clock.files = files; // the parts as now known (unreadable ones the last known)
@@ -1064,7 +1064,7 @@ export function describe(out) {
       lines.push(`  item ${t.item} #${t.issue || "?"} ${t.deferred ? "moved to the next release" : `${it.state || "unread"}${(it.labels || []).includes("needs-owner") ? ", parked (needs-owner)" : ""}`}: ${t.title}`);
     }
   }
-  for (const f of w.factories || []) lines.push(`factory ${f.project}: ${f.activeRuns.length} active run(s), board ${Array.isArray(f.board) ? f.board.length : "?"} parked; last decision: ${(f.lastDecisions.at(-1) || {}).text || "none"}${f.stop ? `; ${f.stop.kind}: "${f.stop.line}" (writer ${f.stop.writerAlive ? "alive" : "not running"}, scenarios ${f.stop.scenariosRunning === null ? "unknown" : f.stop.scenariosRunning ? "running" : "not running"})` : ""}; timers ${Object.entries(f.timers || {}).map(([u, s]) => `${u.replace(/^archonfactory-/, "")}=${s}`).join(", ")}`);
+  for (const f of w.factories || []) lines.push(`factory ${f.project}: ${f.activeRuns.length} active run(s), board ${Array.isArray(f.board) ? f.board.length : "?"} parked; last decision: ${(f.lastDecisions.at(-1) || {}).text || "none"}${f.stop ? `; ${f.stop.kind}: "${f.stop.line}" (writer ${f.stop.writerAlive ? "alive" : "not running"})` : ""}; timers ${Object.entries(f.timers || {}).map(([u, s]) => `${u.replace(/^archonfactory-/, "")}=${s}`).join(", ")}`);
   for (const r of w.superseded || []) lines.push(`release ${r.id}: superseded (older than ${r.by}, installed); not driven`);
   if (w.installed) lines.push(`release ${w.installed.id}: installed on the owner's server, so done; not driven`);
   lines.push(`unreadable: ${(w.unreadable || []).map(u => `${u.part} (${u.error})`).join("; ") || "nothing"}`);

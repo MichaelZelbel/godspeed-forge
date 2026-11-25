@@ -9,12 +9,11 @@ export const KINDS = ["question", "parked", "check-failed", "no-progress", "dead
 export const TICKET_KINDS = ["parked", "check-failed", "no-progress", "dead-end"];
 // machine problems: housekeeping first, then the ops helper (ladder.mjs)
 export const MACHINE_KINDS = ["unit-failed", "disk", "memory", "stale-process", "login", "factory-stopped", "factory-restarts"];
-// stopHours: a STOP made by the release step while the candidate's scenarios run is legit this long
-// (2026-11-18 ruling); maxRestarts: starts of the factory user's manager in 30 minutes that are still fine;
+// maxRestarts: starts of the factory user's manager in 30 minutes that are still fine;
 // deadEndHours: a closed issue with no change linked, but an App's comment naming a delivery GitHub does not confirm, is a dead
 // end after this long (a change may still be linking); deadEndUnnamedMinutes: one closed as completed with nothing at all named
 // is one after a single round, so the cut moves it in the next round (the Forge 0.3.1: beta.31 waited 28 hours on such a ticket)
-export const CONFIG = { allowedHours: { s: 4, m: 8, l: 16 }, checkRedMinutes: 20, idleDecisions: 3, diskPct: 90, memAvailPct: 10, stopHours: 2, maxRestarts: 2, deadEndHours: 1, deadEndUnnamedMinutes: 5 };
+export const CONFIG = { allowedHours: { s: 4, m: 8, l: 16 }, checkRedMinutes: 20, idleDecisions: 3, diskPct: 90, memAvailPct: 10, maxRestarts: 2, deadEndHours: 1, deadEndUnnamedMinutes: 5 };
 
 export const obstacleId = (kind, key) => crypto.createHash("sha1").update(`${kind}\n${key}`).digest("hex").slice(0, 10);
 const IDLE = /workable nothing|found nothing to start/i;
@@ -102,9 +101,10 @@ export function findObstacles(world, ledger = {}, now = Date.now(), cfg0 = {}) {
       add("factory-stopped", `timer:${unit}`, { ...where, timer: unit }, [`${unit} of the factory user is ${state} for ${(cfg.timerRounds || {})[unit]} rounds, and the network guard is not running`]);
     }
     const st = f.stop;
-    // a PAUSE is a pause (the inventory's pause entry covers it): it is never a fault of the factory. Every STOP is one: no program
+    // a PAUSE is a pause (the inventory's pause entry covers it): it is never a fault of the factory. Every STOP is one, also while a
+    // PAUSE file exists beside it: no program
     // makes the factory's STOP any more (the Forge 0.3.3, item 7), so each one is somebody's and the ops helper decides
-    if (st && !f.pause && st.kind !== "PAUSE" && !/\/\.factory\/PAUSE$/.test(String(st.file || ""))) {
+    if (st && st.kind !== "PAUSE" && !/\/\.factory\/PAUSE$/.test(String(st.file || ""))) {
       add("factory-stopped", `stop:${f.project}`, { since: st.at, ...where, stop: { file: st.file, line: st.line, writer: st.writer, pid: st.pid } },
         [`${st.file} is there since ${st.at}: "${st.line}"`, `its writer ${st.writerAlive ? "is still running" : "is not running"}`]);
     }

@@ -83,11 +83,11 @@ export function inReleaseStep(id, stage, look, journal) {
 // ---------------------------------------------------------------- checkable work
 const versionIn = s => (/(\d+\.\d+\.\d+(?:-[a-z]+\.\d+(?:\.\d+)*)?)/i.exec(String(s || "")) || [])[1] || null;
 // -> [{what, until}] the work that holds the clock now (until > now). activity: readActivity's {runs, procs}; autoStage: the
-// release's auto-stage state (its version pull request is rs.bump); about: the stage step's look is about this release; named:
+// release's auto-stage state (its version pull request is rs.bump); named:
 // what an acting run's in-progress named and the driver found running this round, with the time of the answer; repo: the
 // release's repository (a release program names it first: freeze.mjs <repo> <version>, stage-server.mjs <repo> <version>
 // --release <id>).
-export function workFor({ id, activity, autoStage, about, named = [], now, repo = "" }) {
+export function workFor({ id, activity, autoStage, named = [], now, repo = "" }) {
   const out = [];
   const v = versionIn(id), bump = (autoStage && autoStage.bump) || null;
   for (const r of (activity && activity.runs) || []) {

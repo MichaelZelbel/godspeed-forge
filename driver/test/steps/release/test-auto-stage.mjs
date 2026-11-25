@@ -281,7 +281,9 @@ function world({ issues, scenarioSeq, planText = planFor(), staging = null, stat
   const stop = path.join(dir, "factory", "STOP");
   fs.mkdirSync(path.dirname(stop), { recursive: true });
   w.stop = stop;
-  const cfg = { ...A.loadConfig({}), repo: REPO, stateDir: dir, noticesFile: path.join(dir, "notices.json"), pollSeconds: 0, scenarioWaitMinutes: 5, blockedGraceMinutes: 60, dispatchGraceMinutes: 10 };
+  // stopFile and stopMaxAgeMinutes are the settings of the release step before 0.3.3: ignored now, and set here so that a step which
+  // still made a STOP would make it where these tests watch (the Forge 0.3.3, item 7)
+  const cfg = { ...A.loadConfig({}), repo: REPO, stateDir: dir, stopFile: stop, stopMaxAgeMinutes: 120, noticesFile: path.join(dir, "notices.json"), pollSeconds: 0, scenarioWaitMinutes: 5, blockedGraceMinutes: 60, dispatchGraceMinutes: 10 };
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(cfg.noticesFile, JSON.stringify({ notices: [] }));
   let clock = Date.parse("2026-11-14T10:00:00Z");
@@ -1510,9 +1512,12 @@ test("item 7: a full release-step run with the scenarios running never creates t
 
 test("item 7: the install still runs beside the scenarios and a failed first run still gets its one rerun, with the factory running throughout", async () => {
   const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, failed, failed, failed], extra: { serverDelayMs: 30 } });
+  ctx.rerunFailed = async () => { w.reruns++; w.stopSeenDuring.push(["rerun", fs.existsSync(w.stop)]); };
   const r = await A.autoStage(ctx);
   assert.equal(r.outcome, "failed-tests");
   assert.deepEqual([w.dispatches, w.reruns], [1, 1]);
+  const order = w.stopSeenDuring.map(([n]) => n).filter((n) => ["dispatch", "stage-server.mjs", "rerun"].includes(n));
+  assert.deepEqual(order, ["dispatch", "stage-server.mjs", "rerun"], "the install starts beside the scenarios, after they were started and before the failed jobs are run again");
   assert.ok(w.log.some((l) => /is on the server\.$/.test(l)));
   assert.equal(fs.existsSync(w.stop), false);
 });
