@@ -1514,6 +1514,23 @@ test("review fix: a failed build whose run once more GitHub refused is asked aga
   assert.deepEqual(w.calls, [], "nothing frozen");
 });
 
+test("review fix (round 6): a failed build is asked to run once more at most once: a run once more GitHub never shows is a halt, never a second request", async () => {
+  const pin = "9".repeat(40);
+  let asked = 0;
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { buildReady: (kind) => kind !== "image", buildRun: (kind) => (kind === "image" ? { id: 9, status: "completed", conclusion: "failure", startedAt: "2026-11-14T09:40:00Z", attempt: 1, url: "https://x/runs/9" } : null) } });
+  ctx.rerunFailed = async () => { asked++; throw new TypeError("fetch failed"); }; // the request may have arrived; no answer
+  const r1 = await A.autoStage(ctx);
+  assert.equal(r1.outcome, "waiting");
+  assert.ok(A.loadState(ctx.stateFile).releases[w.id].builds[pin].image.rerunAt, "written down before the request, kept after no answer");
+  let t = ctx.now() + 2 * 60000;
+  await A.autoStage({ ...ctx, now: () => t, state: A.loadState(ctx.stateFile) });
+  t += 10 * 60000; // GitHub's list still shows attempt 1, long after
+  const r3 = await A.autoStage({ ...ctx, now: () => t, state: A.loadState(ctx.stateFile) });
+  assert.equal(asked, 1, "never asked a second time");
+  assert.equal(r3.halt.key, "blocked-build-failed");
+  assert.match(r3.halt.words, /its run once more never showed \(https:\/\/x\/runs\/9\)/);
+});
+
 test("review fix: a gate file GitHub cannot give now is a wait in the look's line, never a run of every test, and a halt once it lasted", async () => {
   const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { gate: null } });
   w.tag = "1".repeat(40);

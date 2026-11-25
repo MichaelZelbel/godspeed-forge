@@ -571,16 +571,24 @@ test("review fix (round 2): a check run once more that GitHub refuses is a refus
   assert.deepEqual(asked, [`/repos/${REPO}/actions/runs/11/rerun-failed-jobs`, `/repos/${REPO}/actions/runs/13/rerun-failed-jobs`], "never the paid scenarios");
   assert.deepEqual(await A.rerunFailedRuns(answer(403), REPO, runs), { started: [], refused: "GitHub said 403 to running the failed jobs of run 11 again" });
   assert.deepEqual(await A.rerunFailedRuns(answer(403), REPO, [runs[1]]), { started: [], refused: null }, "nothing a check may run again: nothing asked, nothing refused");
-  // rounds 3 to 5: one taken, the next refused or not answered; the next read sees the taken one on its second attempt and asks
-  // only the other, so no run is ever asked twice, whatever was lost (GitHub's attempt count is the record)
+  // rounds 3 to 6: a run is written down as asked before its request and taken back only on GitHub's no, so a run is asked at
+  // most once, whatever was lost and however stale GitHub's list still is
+  const saves = [];
+  const record = [];
   const partly = async (method, p) => (p.includes("/runs/11/") ? { ok: true, status: 201, json: {} } : { ok: false, status: 403, json: {} });
-  assert.deepEqual(await A.rerunFailedRuns(partly, REPO, runs), { started: [11], refused: "GitHub said 403 to running the failed jobs of run 13 again" });
-  const gone = async (method, p) => { if (p.includes("/runs/13/")) throw new TypeError("fetch failed"); return { ok: true, status: 201, json: {} }; };
-  assert.deepEqual(await A.rerunFailedRuns(gone, REPO, runs), { started: [11], refused: "GitHub did not answer the request to run the failed jobs of run 13 again (fetch failed)" });
+  assert.deepEqual(await A.rerunFailedRuns(partly, REPO, runs, record, () => saves.push([...record])), { started: [11], refused: "GitHub said 403 to running the failed jobs of run 13 again" });
+  assert.deepEqual(record, [11], "the refused run is taken back, the taken one stays");
+  assert.deepEqual(saves[0], [11], "written down before its request");
   asked.length = 0;
-  const after = runs.map((r) => (r.id === 11 ? { ...r, run_attempt: 2 } : r)); // run 11 was taken (its answer may even have been lost)
-  assert.deepEqual(await A.rerunFailedRuns(answer(201), REPO, after), { started: [13], refused: null });
-  assert.deepEqual(asked, [`/repos/${REPO}/actions/runs/13/rerun-failed-jobs`], "run 11 is never asked twice");
+  assert.deepEqual(await A.rerunFailedRuns(answer(201), REPO, runs, record), { started: [13], refused: null }, "GitHub's list still says attempt 1 for run 11: it is not asked again");
+  assert.deepEqual(asked, [`/repos/${REPO}/actions/runs/13/rerun-failed-jobs`]);
+  const lost = [];
+  const gone = async (method, p) => { if (p.includes("/runs/13/")) throw new TypeError("fetch failed"); return { ok: true, status: 201, json: {} }; };
+  assert.deepEqual(await A.rerunFailedRuns(gone, REPO, runs, lost), { started: [11], refused: "GitHub did not answer the request to run the failed jobs of run 13 again (fetch failed); that run is not asked a second time" });
+  assert.deepEqual(lost, [11, 13], "a request with no answer may have arrived: that run stays asked");
+  asked.length = 0;
+  assert.deepEqual(await A.rerunFailedRuns(answer(201), REPO, runs, lost), { started: [], refused: null });
+  assert.deepEqual(asked, [], "nothing is ever asked twice");
 });
 
 test("near the end: every open ticket has a pull request of this repository open, named or closing", () => {
