@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { chmod, lstat, mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { generateKeyPairSync, verify } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { PassThrough } from 'node:stream';
@@ -93,7 +93,7 @@ assert.match(mission, /Keep releases dependable\./);
 assert.match(mission, /Small software teams\./);
 const initCall = calls.find(call => call.args[1] === 'init');
 assert.equal(initCall.cwd, checkout);
-assert.deepEqual(initCall.args.slice(1), ['init', '--source', ARCHON_SOURCE, '--revision', ARCHON_REVISION]);
+assert.deepEqual(initCall.args.slice(1), ['init', '--source', ARCHON_SOURCE, '--revision', ARCHON_REVISION, '--cache', join(homedir(), '.cache/factory/archon')]);
 assert(calls.some(call => call.args.includes(FACTORY_REVISION)));
 assert.deepEqual(JSON.parse(await readFile(join(checkout, '.factory/consumer.json'), 'utf8')), { source: join(root, 'cache/factory/archon', ARCHON_REVISION) });
 
@@ -3339,6 +3339,8 @@ testCase('setup installs the Archon source with bun and its lockfile before init
   assert.equal(install.cwd, destination);
   assert(clone + 1 < at(call => call.command === 'bun'));
   assert(calls.findIndex(call => call.command === 'bun') < calls.findIndex(call => call.args[1] === 'init'));
+  const init = calls.find(call => call.args[1] === 'init');
+  assert.equal(join(init.args[init.args.indexOf('--cache') + 1], ARCHON_REVISION), destination);
   assert.equal(calls.filter(call => call.args[1] === 'init').length, 1);
 }
 
