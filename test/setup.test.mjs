@@ -1055,11 +1055,12 @@ async function setupAttempt(repository, stateDirectory, github, { doctor, init }
 }
 
 const REOPENED = (kind, repository) => `If you finished the GitHub page for the ${kind} App during an earlier setup, delete the ${kind} App it made for ${repository} in your GitHub App settings before you create it again.`;
-const UNUSABLE = (kind, repository, reason) => `Setup stopped because the saved details of the ${kind} App on this server are ${reason}, so setup can no longer use that App; delete the ${kind} App for ${repository} in your GitHub App settings, then try setup again, which creates a new ${kind} App.`;
+// name: the App's name when setup's list knows it (the default is the stand-in's name for it).
+const UNUSABLE = (kind, repository, reason, name = null) => `Setup stopped because the saved details of the ${kind} App${name ? ` "${name}"` : ''} on this server are ${reason}, so setup can no longer use that App; delete ${name ? `"${name}"` : `the ${kind} App for ${repository}`} in your GitHub App settings, then try setup again, which creates a new ${kind} App.`;
 // The stops for a 401 on GET /app: one GitHub sent because this server's clock is off, and any other.
 const CLOCK_STOP = (kind, repository) => [`Setup stopped because GitHub did not accept the sign-in of the ${kind} App for ${repository}, as this server's clock is off. Correct this server's clock, then try setup again.`, 'app-clock'];
 const KEY_REJECTED_STOP = (kind, repository) => [`Setup stopped because GitHub no longer accepts the saved key of the ${kind} App for ${repository}. If your GitHub App settings still list a ${kind} App for ${repository}, delete it, then try setup again, which creates it again.`, 'app-key-rejected'];
-const BOTH_UNUSABLE = (clause, repository) => `Setup stopped because ${clause}, so setup can no longer use either App; delete any builder or release App for ${repository} that your GitHub App settings still list, then try setup again, which creates both Apps again.`;
+const BOTH_UNUSABLE = (clause, repository, named = false) => `Setup stopped because ${clause}, so setup can no longer use either App; delete ${named ? '"Forge builder" and "Forge release"' : `any builder or release App for ${repository} that your GitHub App settings still list`}, then try setup again, which creates both Apps again.`;
 
 const pendingFiles = async directory => (await readdir(directory)).filter(name => name.endsWith('-app-pending.json'));
 const completedFor = repository => message => message.startsWith(`Setup is complete for ${repository}.`);
@@ -1410,7 +1411,7 @@ for (const [kind, damage] of [
   const first = await setupAttempt(repository, retryState, standIn.github);
   const expected = damage.file === 'pending'
     ? [`Setup stopped because it could not finish connecting the ${kind} App. If GitHub created a ${kind} App for ${repository}, delete it in your GitHub App settings, then try setup again.`, 'leftover-app']
-    : [UNUSABLE(kind, repository, 'damaged'), 'damaged-app'];
+    : [UNUSABLE(kind, repository, 'damaged', null), 'damaged-app'];
   assert(first.error instanceof ReportedSetupError && first.error.message === expected[1], `${kind} ${damage.file}`);
   assert.equal(first.messages.at(-1), expected[0]);
   assert(!first.messages.some(message => message.includes('Complete the GitHub page')));
@@ -1438,7 +1439,7 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   await writeFile(join(credentialPath(retryState, repository), `${kind}-app.json`), '{"id": 12345, "pem": "PRIV');
   const first = await setupAttempt(repository, retryState, standIn.github);
   assert(first.error instanceof ReportedSetupError && first.error.message === 'damaged-app', `${kind} ${finished}`);
-  assert.equal(first.messages.at(-1), UNUSABLE(kind, repository, 'damaged'));
+  assert.equal(first.messages.at(-1), UNUSABLE(kind, repository, 'damaged', finished ? `Forge ${kind}` : null));
   assertNoInternalText(first.messages.at(-1), retryState);
   assert(!(await isPresent(join(stateDirectory, `${kind}-installation.json`))));
   standIn.live[kind] -= 1;
@@ -1548,7 +1549,7 @@ testCase('a stop at the release App page finishes on retry');
 // A rerun after a finished setup checks what setup made before saying it is set up (#60). Each missing
 // piece stops with one plain message naming it, and following that message gets setup complete again.
 const appGoneStops = {
-  missing: (kind, repository) => [UNUSABLE(kind, repository, 'missing'), 'missing-app-details'],
+  missing: (kind, repository, name) => [UNUSABLE(kind, repository, 'missing', name), 'missing-app-details'],
   gone: (kind, repository) => [`Setup stopped because the ${kind} App for ${repository} is no longer on your GitHub account. Try setup again, which creates it again; if your GitHub App settings still list a ${kind} App for ${repository}, delete it first.`, 'app-missing'],
   uninstalled: (kind, repository) => [`Setup stopped because the ${kind} App is no longer installed on ${repository}. Try setup again, which asks you to install it again.`, 'app-not-installed'],
   unchecked: (kind, repository) => [`Setup stopped because GitHub could not be reached to check the ${kind} App for ${repository}. Restore this server's access to GitHub before trying setup again.`, 'github-check'],
@@ -1603,7 +1604,7 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   await rm(linkPath);
   await symlink(join(retryState, 'gone', 'target.json'), linkPath);
   const first = await setupAttempt(repository, retryState, standIn.github);
-  assertStopped(first, appGoneStops.missing(kind, repository), retryState);
+  assertStopped(first, appGoneStops.missing(kind, repository, finished ? `Forge ${kind}` : null), retryState);
   assert(!first.messages.some(message => message.startsWith('Setup is complete') || message.includes('damaged')), JSON.stringify(first.messages));
   assert((await lstat(linkPath)).isSymbolicLink(), `${kind} link left in place`);
   assert(!(await isPresent(join(stateDirectory, `${kind}-installation.json`))));
@@ -1642,7 +1643,7 @@ for (const kind of ['builder', 'release']) {
     // The App's saved details were deleted from this server.
     const project = await finishedSetup(`${kind}-details-deleted`);
     await rm(join(project.credentialDirectory, `${kind}-app.json`));
-    assertStopped(await project.attempt(), appGoneStops.missing(kind, project.repository), project.retryState);
+    assertStopped(await project.attempt(), appGoneStops.missing(kind, project.repository, `Forge ${kind}`), project.retryState);
     assert(!(await isPresent(join(project.stateDirectory, `${kind}-installation.json`))));
     assert(!(await isPresent(join(project.stateDirectory, 'registration.json'))));
     // The owner deletes the App, as the stop says, and the next run creates a new one.
@@ -1800,7 +1801,7 @@ for (const [name, slug, damage, reason] of [
   testCase(`${name} stops with one sentence and the retry completes`);
   const project = await finishedSetup(`unusable-${slug}`);
   await damage(join(project.credentialDirectory, 'builder-app.json'));
-  assertStopped(await project.attempt(), [UNUSABLE('builder', project.repository, reason), reason === 'damaged' ? 'damaged-app' : 'missing-app-details'], project.retryState);
+  assertStopped(await project.attempt(), [UNUSABLE('builder', project.repository, reason, 'Forge builder'), reason === 'damaged' ? 'damaged-app' : 'missing-app-details'], project.retryState);
   project.standIn.live.builder -= 1;
   const next = await project.attempt();
   assert.equal(next.error, undefined);
@@ -1812,7 +1813,7 @@ for (const [name, slug, damage, reason] of [
 for (const [name, slug, finished, breakApps, clause] of [
   ['a finished setup with both details files damaged', 'both-damaged', true,
     project => Promise.all(['builder', 'release'].map(kind => writeFile(join(project.credentialDirectory, `${kind}-app.json`), '{'))),
-    () => 'the saved details of the builder and release Apps on this server are damaged'],
+    () => 'the saved details of the builder App "Forge builder" and the release App "Forge release" on this server are damaged'],
   ['an unfinished setup with both details files deleted', 'both-missing', false,
     project => Promise.all(['builder', 'release'].map(kind => rm(join(project.credentialDirectory, `${kind}-app.json`)))),
     () => 'the saved details of the builder and release Apps on this server are missing'],
@@ -1821,13 +1822,13 @@ for (const [name, slug, finished, breakApps, clause] of [
       project.standIn.onGithub.deleted.add('builder');
       await writeFile(join(project.credentialDirectory, 'release-app.json'), '{');
     },
-    repository => `the builder App for ${repository} is no longer on your GitHub account and the saved details of the release App on this server are damaged`]
+    repository => `the builder App for ${repository} is no longer on your GitHub account and the saved details of the release App "Forge release" on this server are damaged`]
 ]) {
   testCase(`${name} names both Apps in one stop, then the retry completes`);
   const project = await finishedSetup(slug);
   if (!finished) await rm(join(project.stateDirectory, 'registration.json'));
   await breakApps(project);
-  assertStopped(await project.attempt(), [BOTH_UNUSABLE(clause(project.repository), project.repository), 'apps-unusable'], project.retryState);
+  assertStopped(await project.attempt(), [BOTH_UNUSABLE(clause(project.repository), project.repository, finished && slug === 'both-damaged'), 'apps-unusable'], project.retryState);
   project.standIn.onGithub.deleted.clear();
   project.standIn.live.builder -= 1;
   project.standIn.live.release -= 1;
@@ -1885,7 +1886,7 @@ for (const finished of [false, true]) {
     await rm(join(project.stateDirectory, `${kind}-installation.json`));
   }
   const first = finished
-    ? [BOTH_UNUSABLE('the saved details of the builder and release Apps on this server are missing', project.repository), 'apps-unusable']
+    ? [`Setup stopped because the saved details of the builder App "Forge builder" and the release App "Forge release" on this server are missing, so setup can no longer use either App; delete "Forge builder" and "Forge release", then try setup again, which creates both Apps again.`, 'apps-unusable']
     : [BOTH_RECORDED(project.repository), 'apps-unusable'];
   assertStopped(await project.attempt(), first, project.retryState);
   // Trying again without deleting them names both Apps again instead of making a second of each.
@@ -2041,7 +2042,7 @@ for (const finished of [true, false]) {
   await writeFile(join(project.credentialDirectory, 'builder-app.json'), '{');
   await rm(releasePath);
   await mkdir(releasePath);
-  assertStopped(await project.attempt(), [UNUSABLE('builder', project.repository, 'damaged'), 'damaged-app'], project.retryState);
+  assertStopped(await project.attempt(), [UNUSABLE('builder', project.repository, 'damaged', finished ? 'Forge builder' : null), 'damaged-app'], project.retryState);
   await rm(releasePath, { recursive: true });
   await writeFile(releasePath, releaseDetails, { mode: 0o600 });
   project.standIn.live.builder -= 1;
