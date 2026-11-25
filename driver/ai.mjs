@@ -442,7 +442,7 @@ export function helperResult(env, unit, deps = {}) {
   if (run.kind === "tests" && run.toolsDir) events = events.split(run.toolsDir).join("../tools"); // the audit reads it from the clone: <run folder>/tools
   // reading the hidden scenarios is allowed to a tests helper: in its commands only (a changed file there still fails)
   if (run.kind === "tests" && run.holdoutsDir) events = events.split("\n").map(l => (l.includes('"command_execution"') ? l.split(run.holdoutsDir).join("../hidden-read") : l)).join("\n");
-  const breaches = auditEvents(events, { runDir: run.work });
+  const breaches = auditEvents(events, { runDir: run.work, allowStopLift: run.kind === "ops" });
   const refusals = read("guard.log").split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   const limit = !report && (run.forceExhausted || exhausted(errorText));
   const result = { state: report && !breaches.length ? "done" : "failed", provider: run.provider, model: run.model, kind: run.kind, startedAt: run.startedAt, endedAt: (exit && exit.at) || iso(now),

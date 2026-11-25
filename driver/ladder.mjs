@@ -131,7 +131,8 @@ export function nextStep(obstacle, history = [], ctx = {}) {
     // a STOP or PAUSE file is nobody's to remove but a person's or the ops helper's (housekeeping removes none since the Forge 0.3.3,
     // item 7): it goes straight to the ops helper, so it is looked at in the round that finds it
     const aStop = obstacle.kind === "factory-stopped" && !!obstacle.stop;
-    if (!aStop && !history.some(h => h.helper === "housekeeping")) return { do: "housekeeping", approachNote: "" };
+    if (aStop) return step("ops", history, ctx, "A STOP or PAUSE file of the factory: no program makes one, so someone did (see your brief).");
+    if (!history.some(h => h.helper === "housekeeping")) return { do: "housekeeping", approachNote: "" };
     // the ops helper traced it to our own checking setup (a missing hidden-check tool, the test machine):
     // that is the tests helper's to repair
     const lastOps = [...history].reverse().find(h => h.helper === "ops" || h.helper === "tests");

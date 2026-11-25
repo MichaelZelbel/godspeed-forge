@@ -13,6 +13,8 @@ export const MACHINE_KINDS = ["unit-failed", "disk", "memory", "stale-process", 
 // deadEndHours: a closed issue with no change linked, but an App's comment naming a delivery GitHub does not confirm, is a dead
 // end after this long (a change may still be linking); deadEndUnnamedMinutes: one closed as completed with nothing at all named
 // is one after a single round, so the cut moves it in the next round (the Forge 0.3.1: beta.31 waited 28 hours on such a ticket)
+// A STOP or PAUSE younger than this is looked at in the next round: the owner's own "pause the factory" writes the file and then the mark.
+export const STOP_GRACE_MS = 2 * 60 * 1000;
 export const CONFIG = { allowedHours: { s: 4, m: 8, l: 16 }, checkRedMinutes: 20, idleDecisions: 3, diskPct: 90, memAvailPct: 10, maxRestarts: 2, deadEndHours: 1, deadEndUnnamedMinutes: 5 };
 
 export const obstacleId = (kind, key) => crypto.createHash("sha1").update(`${kind}\n${key}`).digest("hex").slice(0, 10);
@@ -110,6 +112,7 @@ export function findObstacles(world, ledger = {}, now = Date.now(), cfg0 = {}) {
       if (!st || seen.has(st.file)) continue;
       seen.add(st.file);
       const kind = st.kind === "PAUSE" || /\/\.factory\/PAUSE$/.test(String(st.file || "")) ? "PAUSE" : "STOP";
+      if (Number.isFinite(Date.parse(st.at)) && now - Date.parse(st.at) < STOP_GRACE_MS) continue; // the owner's own request may still be marking it
       if (st.ownerAsked || owned.includes(`${kind}:${f.project}`)) continue; // his own pause: asked for in the chat (a line in the file) or recorded
       add("factory-stopped", `${kind.toLowerCase()}:${f.project}`, { since: st.at, ...where, stop: { file: st.file, kind, line: st.line, writer: st.writer, pid: st.pid } },
         [`${st.file} is there since ${st.at}: "${st.line}"`, `its writer ${st.writerAlive ? "is still running" : "is not running"}`]);
