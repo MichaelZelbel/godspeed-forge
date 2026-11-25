@@ -554,8 +554,9 @@ test("review fix: a check run once more never starts a paid scenario run or a sc
     { id: 4, status: "completed", conclusion: "cancelled", event: "pull_request", path: ".github/workflows/v2-integrated.yml", name: "Integrated Godspeed v2" },
     { id: 5, status: "completed", conclusion: "success", event: "push", path: ".github/workflows/guide.yml", name: "guide" },
     { id: 6, status: "in_progress", conclusion: null, event: "push", path: ".github/workflows/windows-setup.yml", name: "windows setup" },
+    { id: 7, status: "completed", conclusion: "failure", event: "push", path: ".github/workflows/required.yml", name: "required", run_attempt: 2 },
   ];
-  assert.deepEqual(A.rerunnable(runs).map((r) => r.id), [1, 4]);
+  assert.deepEqual(A.rerunnable(runs).map((r) => r.id), [1, 4], "a run already run once more (attempt 2) is never asked again");
 });
 
 test("review fix (round 2): a check run once more that GitHub refuses is a refusal, so it is asked again and never counted", async () => {
@@ -570,15 +571,16 @@ test("review fix (round 2): a check run once more that GitHub refuses is a refus
   assert.deepEqual(asked, [`/repos/${REPO}/actions/runs/11/rerun-failed-jobs`, `/repos/${REPO}/actions/runs/13/rerun-failed-jobs`], "never the paid scenarios");
   assert.deepEqual(await A.rerunFailedRuns(answer(403), REPO, runs), { started: [], refused: "GitHub said 403 to running the failed jobs of run 11 again" });
   assert.deepEqual(await A.rerunFailedRuns(answer(403), REPO, [runs[1]]), { started: [], refused: null }, "nothing a check may run again: nothing asked, nothing refused");
-  // round 3: one taken, the next refused: the taken one is reported, and the next read asks only for the other
+  // rounds 3 to 5: one taken, the next refused or not answered; the next read sees the taken one on its second attempt and asks
+  // only the other, so no run is ever asked twice, whatever was lost (GitHub's attempt count is the record)
   const partly = async (method, p) => (p.includes("/runs/11/") ? { ok: true, status: 201, json: {} } : { ok: false, status: 403, json: {} });
   assert.deepEqual(await A.rerunFailedRuns(partly, REPO, runs), { started: [11], refused: "GitHub said 403 to running the failed jobs of run 13 again" });
-  asked.length = 0;
-  assert.deepEqual(await A.rerunFailedRuns(answer(201), REPO, runs, [11]), { started: [13], refused: null });
-  assert.deepEqual(asked, [`/repos/${REPO}/actions/runs/13/rerun-failed-jobs`], "run 11 is never asked twice");
-  // round 4: one taken, then no answer at all: the taken one is still reported
   const gone = async (method, p) => { if (p.includes("/runs/13/")) throw new TypeError("fetch failed"); return { ok: true, status: 201, json: {} }; };
   assert.deepEqual(await A.rerunFailedRuns(gone, REPO, runs), { started: [11], refused: "GitHub did not answer the request to run the failed jobs of run 13 again (fetch failed)" });
+  asked.length = 0;
+  const after = runs.map((r) => (r.id === 11 ? { ...r, run_attempt: 2 } : r)); // run 11 was taken (its answer may even have been lost)
+  assert.deepEqual(await A.rerunFailedRuns(answer(201), REPO, after), { started: [13], refused: null });
+  assert.deepEqual(asked, [`/repos/${REPO}/actions/runs/13/rerun-failed-jobs`], "run 11 is never asked twice");
 });
 
 test("near the end: every open ticket has a pull request of this repository open, named or closing", () => {

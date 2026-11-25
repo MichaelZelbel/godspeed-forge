@@ -1480,22 +1480,16 @@ test("review fix: a check run once more that GitHub refused is asked again, neve
   assert.equal(w.notices.length, 0, "nothing said: it was run once more only now");
 });
 
-test("review fix (round 3): of a check's failed runs, the ones GitHub took are written down at once and never asked again; only the refused one is", async () => {
+test("review fix (round 3): a check whose runs GitHub took only partly is not counted as run once more until every one was taken", async () => {
   const { w, ctx } = versioned({ pr: { number: 701, state: "open", merged: false, head: V, title: "t" }, required: "failed" });
-  const calls = [];
-  ctx.rerunChecks = async (sha, already) => {
-    calls.push([...already]);
-    return calls.length === 1 ? { started: [11], refused: "GitHub said 403 to running the failed jobs of run 13 again" } : { started: [13], refused: null };
-  };
+  let calls = 0;
+  ctx.rerunChecks = async () => (++calls === 1 ? { started: [11], refused: "GitHub said 403 to running the failed jobs of run 13 again" } : { started: [13], refused: null });
   await A.autoStage(ctx);
-  let st = A.loadState(ctx.stateFile).releases[w.id];
-  assert.deepEqual(st.rerunRuns[V], [11], "the run GitHub took is written down at once");
-  assert.equal((st.reruns || {})[V], undefined, "not counted as run once more while one was refused");
+  assert.equal((A.loadState(ctx.stateFile).releases[w.id].reruns || {})[V], undefined, "not counted while one was refused");
+  assert.ok(w.log.some((l) => /refused to run its failed jobs once more \(GitHub said 403 to running the failed jobs of run 13 again\); it is asked again/.test(l)), w.log.join(" | "));
   await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
-  st = A.loadState(ctx.stateFile).releases[w.id];
-  assert.deepEqual(calls, [[], [11]], "the second read asks only for what was not taken");
-  assert.deepEqual(st.rerunRuns[V], [11, 13]);
-  assert.ok(st.reruns[V], "now it is run once more");
+  assert.equal(calls, 2);
+  assert.ok(A.loadState(ctx.stateFile).releases[w.id].reruns[V], "now it is run once more");
   assert.equal(w.notices.length, 0);
 });
 
