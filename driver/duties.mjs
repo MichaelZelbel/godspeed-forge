@@ -216,14 +216,16 @@ export async function rung0(env, world, state, now, run = sysRun, writeTicket = 
 // -> { runs: [{headBranch, headSha, createdAt, name}], procs, at }
 export function readActivity(env, world, run = sysRun, now = Date.now()) {
   const runs = [];
+  let unreadable = false; // GitHub's runs could not be read: "no runs" would be a guess
   for (const status of ["in_progress", "queued"]) {
     const r = run("gh", ["api", `repos/${env.REPO}/actions/runs?status=${status}&per_page=50`]);
-    try { for (const x of JSON.parse(r.stdout).workflow_runs || []) runs.push({ headBranch: x.head_branch, headSha: x.head_sha, createdAt: x.run_started_at || x.created_at, name: x.name }); } catch { /* unreadable: nothing is called moving */ }
+    if (r.status !== 0) unreadable = true;
+    try { for (const x of JSON.parse(r.stdout).workflow_runs || []) runs.push({ headBranch: x.head_branch, headSha: x.head_sha, createdAt: x.run_started_at || x.created_at, name: x.name }); } catch { unreadable = true; /* unreadable: nothing is called moving */ }
   }
   // a release program alive right now (auto-stage's look, the freeze, the stage-server install): visibly working
   const ps = run("ps", ["-eo", "etimes=,args="]); // elapsed seconds: each program is bounded by its own start
   const procs = String(ps.stdout || "").split(String.fromCharCode(10)).map(l => /^\s*(\d+)\s+(.*)$/.exec(l)).filter(m => m && /release\/(auto-stage|freeze|stage-server|staging-check)\.mjs/.test(m[2]) && !/--dry-run|--explain/.test(m[2])).map(m => ({ startedAt: now - Number(m[1]) * 1000, args: m[2].slice(0, 120) }));
-  return { runs, procs, at: now };
+  return { runs, procs, at: now, ...(unreadable ? { unreadable: true } : {}) };
 }
 
 // 8 / 9.9 the owner's tap on "Seen" (the machine bot's inline button): ids of the notices acknowledged, and the new update offset

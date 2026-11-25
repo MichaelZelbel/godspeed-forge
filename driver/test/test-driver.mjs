@@ -369,8 +369,15 @@ test("a dry run is safe beside a driver that still runs on the same state folder
   fs.writeFileSync(path.join(f.root, "after.txt"), "writes work again once the lock is lifted");
 });
 
+// Since the Forge 0.3.3 the release clock runs for a release whose tickets are parked too, so a test of something else (the AI
+// budget, the AI being off, the retry of a delivery) that keeps a release stuck for hours would also see the clock's helper and
+// notice. These tests wait on the one legitimate pause instead: a question of money, publishing or deleting that was delivered to the
+// owner (a receipt) and names the release's ticket.
+const ownerHasAsked = deps => { const rw = deps.readWorld || readWorld; deps.readWorld = async (e, d) => { const w = await rw(e, d); w.deliveredPages = [{ key: "spend", heading: "Raise the spending limit for #704" }]; return w; }; };
+
 test("no AI at all: recorded, and after six hours Michael gets one plain sentence; nothing launches", async () => {
   const f = fixture();
+  ownerHasAsked(f.deps);
   f.deps.providers = async () => [];
   const t0 = NOW;
   await round(f.env, { ...f.deps, now: () => t0 });
@@ -500,6 +507,7 @@ test("a zero-receipt owner notice retries its original transports without an act
     telegram: async () => { deliveries.push("telegram"); return deliveries.length > 4 ? { ok: true, receipt: "42" } : { ok: false, why: "telegram down" }; },
     issue: async () => { deliveries.push("github"); return deliveries.length > 4 ? { ok: true, receipt: "https://github.com/o/w/issues/1" } : { ok: false, why: "github down" }; },
   };
+  ownerHasAsked(fx.deps);
   const acts = []; fx.deps.launchAct = (e, a, o) => acts.push(o);
   await round(fx.env, fx.deps);
   fx.deps.pauses = () => [];
@@ -555,7 +563,7 @@ test("the acting runs are at most 8 in a rolling day: a full budget waits quietl
   fx.deps.clockCheck = () => ({ ok: false, ghNow: NOW - 20 * 60000, skewMs: 20 * 60000 }); // the machinery's own entry: the clock is wrong
   fs.mkdirSync(fx.env.STATE_DIR, { recursive: true });
   fs.writeFileSync(path.join(fx.env.STATE_DIR, "state.json"), JSON.stringify({ actRuns: Array.from({ length: 8 }, (_, i) => ({ at: NOW - i * 3600000, entry: `x${i}`, provider: "codex" })) }));
-  fx.deps.readWorld = async (e, d) => { const w = await readWorld(e, d); w.queue = [{ repo: REPO, heading: "a question", asked: new Date(NOW - 5 * 3600000).toISOString(), question: "q" }]; w.factories[0].repo = REPO; return w; };
+  fx.deps.readWorld = async (e, d) => { const w = await readWorld(e, d); w.queue = [{ repo: REPO, heading: "a question", asked: new Date(NOW - 5 * 3600000).toISOString(), question: "q" }]; w.factories[0].repo = REPO; w.deliveredPages = [{ key: "spend", heading: "Raise the spending limit for #704" }]; return w; };
   await round(fx.env, fx.deps);
   assert.equal(acts.length, 0, "no run: the day's budget is spent");
   const st = statusOfRound(fx.env);

@@ -1,5 +1,5 @@
 // node driver/test/steps/test-referee.mjs   (no network, no AI, no root): the referee repair's whole flow
-// test cases: 18
+// test cases: 19
 import { testCase } from "../../../test/cases.mjs";
 import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import assert from "node:assert/strict";
 import { repairLook, copyEvidence, auditRepair } from "../../steps/test-machine/referee.mjs";
@@ -175,3 +175,22 @@ testCase("the audit's rules name the places it is given: tools, holdouts, checko
   assert.deepEqual(auditRepair(ev("cat /f/app/x"), { runDir: "/run/x", live: "/live/tools" }).map(b => b.why), [], "a place not given is not guessed");
 }
 
+testCase("the fingerprint is the tools' and holdouts' content: main moving, a worktree appearing and the verifier's own files are not a breach (2026-11-22)");
+{
+  const { fingerprint } = await import("../../steps/test-machine/referee.mjs");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "fp-"));
+  const tools = path.join(root, "tools"), holdouts = path.join(root, "holdouts"), checkout = path.join(root, "checkout");
+  fs.mkdirSync(path.join(tools, "H-01"), { recursive: true }); fs.mkdirSync(holdouts, { recursive: true }); fs.mkdirSync(path.join(checkout, ".git", "worktrees"), { recursive: true });
+  fs.writeFileSync(path.join(tools, "H-01", "run.sh"), "echo H-01\n"); fs.writeFileSync(path.join(holdouts, "HOLDOUT.md"), "scenario\n"); fs.writeFileSync(path.join(checkout, "app.js"), "a\n");
+  const env = { TOOLS_DIR: tools, HOLDOUTS_DIR: holdouts, SOURCE_CHECKOUT: checkout };
+  const before = fingerprint(env);
+  // during the ~35-minute repair: main moves, a lap makes a worktree, the verifier writes and removes its own files in H-01's folder
+  fs.writeFileSync(path.join(checkout, "app.js"), "b\n"); fs.mkdirSync(path.join(checkout, ".git", "worktrees", "pr-895-repair"), { recursive: true });
+  fs.writeFileSync(path.join(checkout, ".git", "HEAD"), "ref: refs/heads/other\n");
+  fs.writeFileSync(path.join(tools, "H-01", "browser.log"), "x"); fs.writeFileSync(path.join(tools, "H-01", "chrome.pid"), "1"); fs.mkdirSync(path.join(tools, "H-01", "tmp")); fs.writeFileSync(path.join(tools, "H-01", "tmp", "shot.png"), "png");
+  assert.equal(fingerprint(env), before, "none of that is the repair's doing");
+  fs.writeFileSync(path.join(tools, "H-01", "run.sh"), "echo changed\n");
+  assert.notEqual(fingerprint(env), before, "a tool's content changing is");
+  fs.writeFileSync(path.join(tools, "H-01", "run.sh"), "echo H-01\n"); fs.writeFileSync(path.join(holdouts, "HOLDOUT.md"), "other\n");
+  assert.notEqual(fingerprint(env), before, "and so is a holdout's");
+}
