@@ -252,8 +252,8 @@ const tryRun = (deps, cmd, asForge, unreadable, part) => {
 const firstLine = s => String(s || "").trim().split(/\r?\n/)[0] || "";
 
 export const ANONYMOUS_UNIT = /^run-[A-Za-z0-9]+\.(service|scope)$/;
-// The factory's browser tool, proved the way setup proves it (lib/setup.mjs BROWSER_PROOF; this folder cannot import
-// from lib/): a local page opened and its text read back, as the factory user. A failing proof is the reading itself, not
+// The factory's browser tool proof, shared by setup (lib/setup.mjs imports it) and the health check: a local page opened
+// and its text read back, as the factory user. A failing proof is the reading itself, not
 // an unreadable part. The 60 seconds are the proof's own, inside the shell's 120.
 export const BROWSER_PROOF = [
   'dir=$(mktemp -d) || exit 1',

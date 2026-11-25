@@ -374,10 +374,8 @@ test("the browser proof runs as the factory user every round: a pass reads ok, a
   assert.deepEqual(proofs, [true, true]);
 });
 
-test("the driver's real browser proof script matches setup's and gives the right answer against a stand-in agent-browser", async () => {
+test("the driver's real browser proof script gives the right answer against a stand-in agent-browser", async () => {
   const { BROWSER_PROOF: driverProof } = await import("../world.mjs");
-  const { BROWSER_PROOF: setupProof } = await import("../../lib/setup.mjs");
-  assert.equal(driverProof, setupProof);
   const { execFileSync } = await import("node:child_process");
   const os = await import("node:os");
   const path = await import("node:path");
