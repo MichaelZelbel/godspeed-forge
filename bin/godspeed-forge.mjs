@@ -23,6 +23,7 @@ if (command === '--version') {
 if (command === 'driver') process.exit(await runDriverCommand(process.argv.slice(3)));
 if (command === 'inbox') process.exit(await (await import('../lib/inbox.mjs')).runInboxCommand());
 if (command === 'watch') process.exit(await (await import('../lib/watch.mjs')).runWatchCommand(process.argv.slice(3)));
+if (command === 'setup-chat' && repository) process.exit(await (await import('../lib/chat-setup-command.mjs')).runChatSetupCommand(repository));
 if (command !== 'setup' || !repository) {
   console.error('Run godspeed-forge setup owner/repository.');
   process.exit(1);

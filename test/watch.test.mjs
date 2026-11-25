@@ -1,7 +1,7 @@
 // The page where the owner watches the factory (lib/watch.mjs), its chat answer (lib/owner/watch.mjs) and the lines
 // setup ends with. The server is a stand-in: a folder of the test's own is its file system, and systemctl, docker, git,
 // bun, caddy and the page's answers are stand-ins, so nothing is installed and nothing reaches the network.
-// test cases: 27
+// test cases: 28
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -132,7 +132,7 @@ testCase("on Godspeed's Docker server the page is built from the pinned Archon, 
   assert.equal(r.built, true);
   assert.deepEqual(p.said, [SAY.preparing]);
   const record = readRecord(p.paths, fs);
-  assert.deepEqual({ ...record, password: '-' }, { format: 1, host: 'srv1.example.com', port: 48445, upstream: 3190, user: USER, password: '-', hash: HASH, source: ARCHON_SOURCE, revision: ARCHON_REVISION, front: 'docker' });
+  assert.deepEqual({ ...record, password: '-' }, { format: 1, host: 'srv1.example.com', port: 48445, upstream: 3190, callbackPort: 3290, user: USER, password: '-', hash: HASH, source: ARCHON_SOURCE, revision: ARCHON_REVISION, front: 'docker' });
   assert.match(record.password, /^[A-HJ-NP-Za-km-z2-9]{20}$/);
   if (posix) assert.equal(fs.statSync(path.join(p.paths.state, 'watch.json')).mode & 0o777, 0o600);
   const lines = commandLines(s);
@@ -153,7 +153,7 @@ testCase("on Godspeed's Docker server the page is built from the pinned Archon, 
   for (const want of ['--network', 'host', '--restart', 'unless-stopped', `--name`, CONTAINER, 'org.godspeed.forge.role=https', 'type=bind,src=/opt/godspeed-forge/https,dst=/etc/caddy,readonly',
     'type=volume,src=gm_godspeed-certificates,dst=/data', 'caddy:2.10.2-alpine']) assert.ok(run.includes(want), want);
   const caddyfile = read(at(root, DOCKER_CADDYFILE));
-  assert.equal(caddyfile, dockerCaddyfile(siteText({ host: 'srv1.example.com', port: 48445, upstream: 3190, user: USER, hash: HASH })));
+  assert.equal(caddyfile, dockerCaddyfile(siteText({ host: 'srv1.example.com', port: 48445, upstream: 3190, callbackPort: 3290, user: USER, hash: HASH })));
   assert.ok(caddyfile.includes(HASH) && !caddyfile.includes(record.password), 'Caddy holds the hash, never the password');
   const hashing = s.calls.find(c => c.args[0] === '-e');
   assert.equal(hashing.options.input, record.password, 'the password reaches the hash on standard input');
@@ -222,7 +222,7 @@ testCase("on a native Godspeed the site goes into Godspeed's add-on folder, chec
   const r = await p.go();
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.deepEqual([r.record.host, r.record.port, r.record.upstream, r.record.front], ['srv2.example.org', 48446, 3191, 'own']);
-  assert.equal(read(at(root, SITE_FILE)), siteText({ host: 'srv2.example.org', port: 48446, upstream: 3191, user: USER, hash: HASH }));
+  assert.equal(read(at(root, SITE_FILE)), siteText({ host: 'srv2.example.org', port: 48446, upstream: 3191, callbackPort: 3290, user: USER, hash: HASH }));
   if (posix) assert.equal(fs.statSync(at(root, SITE_FILE)).mode & 0o777, 0o644, "readable for Godspeed's Caddy, which runs as the notebook's account");
   const lines = commandLines(s);
   const validate = lines.indexOf('/usr/local/bin/caddy validate --config /home/me/.local/state/godspeed/https/Caddyfile --adapter caddyfile');
@@ -286,7 +286,7 @@ testCase('with no Godspeed web address, a server on a tailnet gets the page thro
   assert.equal(record.front, 'forge');
   assert.equal(record.host, 'forge-box.tail1234.ts.net');
   const caddyfile = read(at(root, FORGE_CADDYFILE));
-  assert.equal(caddyfile, dockerCaddyfile(siteText({ host: record.host, port: record.port, upstream: record.upstream, user: USER, hash: HASH })));
+  assert.equal(caddyfile, dockerCaddyfile(siteText({ host: record.host, port: record.port, upstream: record.upstream, callbackPort: record.callbackPort, user: USER, hash: HASH })));
   const unit = read(at(root, `/etc/systemd/system/${FORGE_UNIT}`));
   for (const line of ['ExecStart="/usr/bin/caddy" run --config "/opt/godspeed-forge/https/own.Caddyfile" --adapter caddyfile', 'ProtectSystem=strict', 'NoNewPrivileges=true', 'Restart=always', 'WantedBy=multi-user.target']) assert.ok(unit.includes(`${line}\n`), line);
   const lines = commandLines(s);
@@ -419,26 +419,51 @@ testCase('a build that fails, or an address that does not answer, is never repor
   assert.deepEqual(await page(quiet, s).go(), { ok: false, why: WHY.address });
 }
 
+testCase('a page set up before the chat could set projects up gets its callback port and a site with the open path on its next run');
+{
+  const root = fresh();
+  nativeGodspeed(root);
+  const s = server(root);
+  const p = page(root, s);
+  fs.mkdirSync(p.paths.state, { recursive: true });
+  fs.writeFileSync(path.join(p.paths.state, 'watch.json'), JSON.stringify({ format: 1, host: 'srv2.example.org', port: 48445, upstream: 3190, user: USER, password: 'Kq7dWm2xPz9bTn4hRv3s', hash: HASH, revision: ARCHON_REVISION }));
+  const r = await p.go();
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(readRecord(p.paths, fs).callbackPort, 3290);
+  const site = read(at(root, SITE_FILE));
+  assert.equal(site, siteText({ host: 'srv2.example.org', port: 48445, upstream: 3190, callbackPort: 3290, user: USER, hash: HASH }));
+  assert.equal(site.split('\n').filter(l => l.includes('reverse_proxy')).length, 2);
+  assert.ok(site.indexOf('/forge-setup/*') < site.indexOf('basic_auth'), 'only that path comes before the sign-in');
+}
+
 testCase('the site asks for the sign-in first, lets only GET and HEAD reach Archon and never its internal paths');
 {
-  assert.equal(siteText({ host: 'srv1.example.com', port: 48445, upstream: 3190, user: 'forge', hash: HASH }), [
+  assert.equal(siteText({ host: 'srv1.example.com', port: 48445, upstream: 3190, callbackPort: 3290, user: 'forge', hash: HASH }), [
     '# The page where the owner watches the factory. The Forge (godspeed-forge) writes this file and keeps it.',
     "# Archon's own pages, read-only: a visit signs in first, and only GET and HEAD reach Archon.",
+    '# Only /forge-setup/* is open without it: where GitHub sends the owner back while the chat sets a project up.',
     'srv1.example.com:48445 {',
-    '\tbasic_auth {',
-    `\t\tforge ${HASH}`,
+    '\thandle /forge-setup/* {',
+    '\t\t@change not method GET',
+    '\t\trespond @change 405',
+    '\t\treverse_proxy 127.0.0.1:3290',
     '\t}',
-    '\t@change not method GET HEAD',
-    '\trespond @change "This page only shows the factory\'s work." 405',
-    '\t@inside path /internal/* /webhooks/* /api/webhooks/*',
-    '\trespond @inside 404',
-    '\thandle_path /forge/* {',
-    '\t\troot * /opt/godspeed-forge/watch/status',
-    '\t\tfile_server',
-    '\t}',
-    '\treverse_proxy 127.0.0.1:3190 {',
-    '\t\theader_up -X-Archon-User',
-    '\t\theader_up -Authorization',
+    '\thandle {',
+    '\t\tbasic_auth {',
+    `\t\t\tforge ${HASH}`,
+    '\t\t}',
+    '\t\t@change not method GET HEAD',
+    '\t\trespond @change "This page only shows the factory\'s work." 405',
+    '\t\t@inside path /internal/* /webhooks/* /api/webhooks/*',
+    '\t\trespond @inside 404',
+    '\t\thandle_path /forge/* {',
+    '\t\t\troot * /opt/godspeed-forge/watch/status',
+    '\t\t\tfile_server',
+    '\t\t}',
+    '\t\treverse_proxy 127.0.0.1:3190 {',
+    '\t\t\theader_up -X-Archon-User',
+    '\t\t\theader_up -Authorization',
+    '\t\t}',
     '\t}',
     '}',
     '',

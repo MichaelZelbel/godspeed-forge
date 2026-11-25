@@ -36,7 +36,7 @@ beyond its own job goes as one `Found:` comment onto a `found-list` issue instea
 
 ## Status
 
-Type `godspeed-forge setup owner/repository` in the server's terminal, as root (asked in the chat, Godspeed gives you that line). Before it downloads anything, setup signs the
+Say "set up the Forge for owner/repository" in Godspeed's chat: the whole setup below happens there, with each link and question as a chat message, a link for each GitHub App (GitHub sends your browser back to the page where you watch the factory, so you paste no address), the project's purpose and users drafted for you to confirm, and a yes before anything is pushed. The one step that stays in the server's terminal is Claude Code's own sign-in (`claude auth login`), because the code it shows must never be typed into a chat; a chat setup also needs the watch page up to date (`godspeed-forge watch`, as root, says so when it is not). Without the chat, type `godspeed-forge setup owner/repository` in the server's terminal, as root; that works as before. Before it downloads anything, setup signs the
 server in to GitHub (with permission to change workflow files) and to Claude Code or Codex when either is
 missing, showing the link and code of each tool's own sign-in, and reuses sign-ins that already work. It installs
 the pinned factory, guides you through creating separate builder and release
@@ -148,6 +148,9 @@ If the page does not open, your hosting company's firewall may be blocking it: l
   state folder); the web server holds only its bcrypt hash. `godspeed-forge watch`, typed as root, shows the address and
   the sign-in again. Asked in the chat ("where can I watch the factory?"), Godspeed gives the address and the user name,
   never the password.
+- **One path is open without the sign-in:** `/forge-setup/*`, GET only. It exists so GitHub's redirect can reach a setup
+  started from the chat. Each App has its own random address, the listener behind it runs only while that setup waits,
+  and the first code that arrives is the only one taken.
 - **It only shows.** Nothing on the page can start, stop, answer or change a run: after the sign-in only reading
   requests (GET and HEAD) reach Archon, never its internal or webhook paths, and your sign-in is not passed on to it.
   Archon's server behind it listens on the server itself only and starts no run of its own. Archon's server also does background work of its own (it resumes a

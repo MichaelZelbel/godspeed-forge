@@ -51,7 +51,7 @@ function setup({ uid = 1000 } = {}) {
 }
 
 testCase('the Forge knows the eight kinds the chat can ask for');
-assert.deepEqual([...KINDS].sort(), ['answer', 'go', 'lap', 'plan', 'status', 'take-back', 'watch', 'work-off', 'work-on']);
+assert.deepEqual([...KINDS].sort(), ['answer', 'go', 'lap', 'plan', 'setup', 'status', 'take-back', 'watch', 'work-off', 'work-on']);
 
 testCase('a request is handled once: answered in the outbox, moved to done, and never run again');
 {

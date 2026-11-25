@@ -24,14 +24,15 @@ beyond its own job goes as one `Found:` comment onto a `found-list` issue instea
 
 # Set up a repository
 
-Setup runs in the server's terminal, as root: `godspeed-forge setup owner/repository`. When the owner
-asks for it in the chat, the `forge` skill tells them that line. For each App, the owner identifies whether the repository owner is their personal account or
-organization, completes the creation browser step in that location, follows the installation
-link, chooses the requested account, selects “Only select repositories”, selects only the requested
-repository, and confirm that installation to the command. They must also answer what the software
-is for and who uses it. GitHub redirects each creation step to a local address; the owner pastes
-that address back so the Forge can finish the exchange. Never ask them to paste credentials into
-chat, and never say setup is complete before both repository installations and doctor succeed.
+The owner sets up in the chat: "set up the Forge for owner/repository" is a `setup` request (see the `forge` skill), and the
+Forge answers each step in plain words: the sign-in links and codes for GitHub and Codex, a link for each of the two GitHub
+Apps (GitHub sends the owner's browser back to the watch page's address, so nothing is pasted), the purpose and users it read
+from the project to confirm, the numbered list of what the project must never become, and a yes before anything is pushed.
+Claude Code's own sign-in is the one step that stays in the server's terminal, because its code must never be typed into a chat.
+This needs the watch page to be set up and current: when it is not, the Forge says to run `godspeed-forge watch` once as root.
+`godspeed-forge setup owner/repository` in the server's terminal, as root, does the same without the chat and is unchanged;
+there GitHub redirects each creation step to a local address and the owner pastes it back. Never ask the owner to paste
+credentials or a sign-in code into chat, and never say setup is complete before both repository installations and doctor succeed.
 
 # The page where the owner watches the factory
 
