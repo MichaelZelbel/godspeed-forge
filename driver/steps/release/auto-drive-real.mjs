@@ -169,10 +169,12 @@ export function realDrive({ cfg, env, api, log, itemIssues, readIssues }) {
   };
 }
 
-// The version change of the release step (auto-stage.mjs versionStep): opened with the builder App as ONE
-// commit on release/version-<version> (notebook/package.json and the README together, so its checks run
-// once), approved and merged with the release App, whose token is narrowed to pull requests and contents
-// of this one repository. Nothing here decides anything.
+// The version change of the release step (auto-stage.mjs versionOnPin): opened with the builder App as ONE commit on top of the
+// commit the release is frozen from (onto; main's head when none is named), on release/version-<version> (notebook/package.json
+// and the README together, so its checks run once). That branch is under release/**, where the product builds a commit's server
+// image and Windows setup on the push itself. It is approved and merged with the release App with a MERGE COMMIT (since 25
+// November 2026; a squash made a new commit, so the version commit that was built and checked was never on main and could not be
+// frozen), whose token is narrowed to pull requests and contents of this one repository. Nothing here decides anything.
 export function realVersionPull({ cfg, env, log, readmeWith, versionWith }) {
   const kcfg = K.loadConfig({ ...env, KEEP_MAIN_GREEN_REPO: cfg.repo, KEEP_MAIN_GREEN_STATE_DIR: cfg.stateDir });
   let built = null;
@@ -185,52 +187,86 @@ export function realVersionPull({ cfg, env, log, readmeWith, versionWith }) {
   };
   const bad = (r) => `status ${r.status}${r.json && r.json.message ? `, ${r.json.message}` : ""}`;
   const repo = cfg.repo;
+  const versionIn = (text) => (String(text || "").match(/"version"\s*:\s*"([^"]+)"/) || [])[1] || null;
+  // One commit on <onto> (or main's head) with the version and the README section. -> {sha} | {unchanged} | {cannot}
+  const versionCommit = async ({ version, section, message, onto = null }) => {
+    const { bapi } = builder();
+    let base = onto;
+    if (!base) {
+      const ref = await bapi("GET", `/repos/${repo}/git/ref/heads/main`);
+      if (!ref.ok) return { cannot: `main could not be read (${bad(ref)})` };
+      base = ref.json.object.sha;
+    }
+    const commit = await bapi("GET", `/repos/${repo}/git/commits/${base}`);
+    if (!commit.ok) return { cannot: `${base.slice(0, 7)} could not be read (${bad(commit)})` };
+    const read = async (file) => {
+      const r = await bapi("GET", `/repos/${repo}/contents/${file}?ref=${base}`);
+      return r.ok ? Buffer.from(r.json.content, "base64").toString("utf8") : null;
+    };
+    const pkg = await read(VERSION_FILE);
+    const readme = await read("README.md");
+    if (pkg === null || readme === null) return { cannot: `${pkg === null ? VERSION_FILE : "README.md"} could not be read at ${base.slice(0, 7)}` };
+    const nextPkg = versionWith(pkg, version);
+    if (nextPkg === null) return { cannot: `${VERSION_FILE} has no version line to change` };
+    const nextReadme = readmeWith(readme, version, section);
+    const tree = [];
+    for (const [p, text, was] of [[VERSION_FILE, nextPkg, pkg], ["README.md", nextReadme, readme]]) {
+      if (text === was) continue;
+      const blob = await bapi("POST", `/repos/${repo}/git/blobs`, { content: text, encoding: "utf-8" });
+      if (!blob.ok) return { cannot: `${p} could not be written (${bad(blob)})` };
+      tree.push({ path: p, mode: "100644", type: "blob", sha: blob.json.sha });
+    }
+    if (!tree.length) return { unchanged: true };
+    const t = await bapi("POST", `/repos/${repo}/git/trees`, { base_tree: commit.json.tree.sha, tree });
+    if (!t.ok) return { cannot: `the change could not be made (${bad(t)})` };
+    const c = await bapi("POST", `/repos/${repo}/git/commits`, { message, tree: t.json.sha, parents: [base] });
+    if (!c.ok) return { cannot: `the change could not be committed (${bad(c)})` };
+    return { sha: c.json.sha };
+  };
+  // The branch made at <sha>, or moved there when it is ours already. -> {branch} | {cannot}
+  const pointBranch = async (branch, sha) => {
+    const { bapi } = builder();
+    let b = await bapi("POST", `/repos/${repo}/git/refs`, { ref: `refs/heads/${branch}`, sha });
+    if (!b.ok && b.status === 422) b = await bapi("PATCH", `/repos/${repo}/git/refs/heads/${branch}`, { sha, force: true });
+    if (!b.ok) return { cannot: `${branch} could not be pushed (${bad(b)})` };
+    return { branch };
+  };
   return {
     find: async (branch) => builder().hub.findPull(branch),
     // The version main's notebook/package.json carries now, or null when it cannot be read.
     mainVersion: async () => {
       const r = await builder().bapi("GET", `/repos/${repo}/contents/${VERSION_FILE}?ref=main`);
-      if (!r.ok) return null;
-      const m = Buffer.from(r.json.content, "base64").toString("utf8").match(/"version"\s*:\s*"([^"]+)"/);
-      return m ? m[1] : null;
+      return r.ok ? versionIn(Buffer.from(r.json.content, "base64").toString("utf8")) : null;
     },
-    // -> {pr, head} | {cannot}
-    open: async ({ branch, version, title, body, section, message }) => {
-      const { bapi, hub } = builder();
-      const ref = await bapi("GET", `/repos/${repo}/git/ref/heads/main`);
-      if (!ref.ok) return { cannot: `main could not be read (${bad(ref)})` };
-      const main = ref.json.object.sha;
-      const commit = await bapi("GET", `/repos/${repo}/git/commits/${main}`);
-      if (!commit.ok) return { cannot: `main's commit could not be read (${bad(commit)})` };
-      const read = async (file) => {
-        const r = await bapi("GET", `/repos/${repo}/contents/${file}?ref=${main}`);
-        return r.ok ? Buffer.from(r.json.content, "base64").toString("utf8") : null;
-      };
-      const pkg = await read(VERSION_FILE);
-      const readme = await read("README.md");
-      if (pkg === null || readme === null) return { cannot: `${pkg === null ? VERSION_FILE : "README.md"} could not be read on main` };
-      const nextPkg = versionWith(pkg, version);
-      if (nextPkg === null) return { cannot: `${VERSION_FILE} has no version line to change` };
-      const nextReadme = readmeWith(readme, version, section);
-      const tree = [];
-      for (const [p, text, was] of [[VERSION_FILE, nextPkg, pkg], ["README.md", nextReadme, readme]]) {
-        if (text === was) continue;
-        const blob = await bapi("POST", `/repos/${repo}/git/blobs`, { content: text, encoding: "utf-8" });
-        if (!blob.ok) return { cannot: `${p} could not be written (${bad(blob)})` };
-        tree.push({ path: p, mode: "100644", type: "blob", sha: blob.json.sha });
-      }
-      if (!tree.length) return { cannot: "main already says this version and has its README section" };
-      const t = await bapi("POST", `/repos/${repo}/git/trees`, { base_tree: commit.json.tree.sha, tree });
-      if (!t.ok) return { cannot: `the change could not be made (${bad(t)})` };
-      const c = await bapi("POST", `/repos/${repo}/git/commits`, { message, tree: t.json.sha, parents: [main] });
-      if (!c.ok) return { cannot: `the change could not be committed (${bad(c)})` };
+    // The version a commit's notebook/package.json carries, or null when it cannot be read.
+    versionAt: async (sha) => {
+      const r = await builder().bapi("GET", `/repos/${repo}/contents/${VERSION_FILE}?ref=${sha}`);
+      return r.ok ? versionIn(Buffer.from(r.json.content, "base64").toString("utf8")) : null;
+    },
+    // A commit's first parent, or null.
+    parentOf: async (sha) => {
+      const r = await builder().bapi("GET", `/repos/${repo}/git/commits/${sha}`);
+      return r.ok && r.json && r.json.parents && r.json.parents[0] ? r.json.parents[0].sha : null;
+    },
+    pointBranch,
+    // -> {pr, head} | {unchanged} | {cannot}
+    open: async ({ branch, version, title, body, section, message, onto = null }) => {
+      const c = await versionCommit({ version, section, message, onto });
+      if (!c.sha) return c;
       // The branch is ours (no pull request names it, or find would have found it): made, or moved to this commit.
-      let b = await bapi("POST", `/repos/${repo}/git/refs`, { ref: `refs/heads/${branch}`, sha: c.json.sha });
-      if (!b.ok && b.status === 422) b = await bapi("PATCH", `/repos/${repo}/git/refs/heads/${branch}`, { sha: c.json.sha, force: true });
-      if (!b.ok) return { cannot: `${branch} could not be pushed (${bad(b)})` };
-      const opened = await hub.openPull({ branch, title, body });
-      log(`The version change is on ${branch} (${c.json.sha.slice(0, 7)}).`);
+      const b = await pointBranch(branch, c.sha);
+      if (b.cannot) return b;
+      const opened = await builder().hub.openPull({ branch, title, body });
+      log(`The version change is on ${branch} (${c.sha.slice(0, 7)}).`);
       return { pr: opened.number, head: opened.head };
+    },
+    // The open version pull request moved onto another commit: its branch is pushed again with the version on <onto>. -> {head} | {unchanged} | {cannot}
+    update: async ({ branch, version, section, message, onto }) => {
+      const c = await versionCommit({ version, section, message, onto });
+      if (!c.sha) return c;
+      const b = await pointBranch(branch, c.sha);
+      if (b.cannot) return b;
+      return { head: c.sha };
     },
     required: async (sha) => builder().hub.required(sha),
     // The checks of a commit that did not pass, with the gate's own one-line reason, in one sentence.
@@ -244,12 +280,12 @@ export function realVersionPull({ cfg, env, log, readmeWith, versionWith }) {
       const why = gate ? String(gate.output.title || gate.output.summary).split("\n")[0].trim() : "";
       return [names.length ? `${names.join(", ")} failed` : "", why].filter(Boolean).join("; ") || "its required check failed and names no other check";
     },
-    // -> {ok, sha} | {ok: false, message}
-    merge: async ({ pr, head, title, message }) => {
+    // -> {ok, sha} | {ok: false, message}. method "merge" (a merge commit, the default: the commit that was built stays on main) or "squash".
+    merge: async ({ pr, head, title, message, method = "merge" }) => {
       const api = R.retrying(R.githubApi(R.mintToken(env, repo, "pull_requests=write,contents=write"), env), { log });
       const review = await api("POST", `/repos/${repo}/pulls/${pr}/reviews`, { commit_id: head, event: "APPROVE", body: "The release step's version change: its required check passed." });
       if (!review.ok) log(`The release App's approval of #${pr} was refused (${bad(review)}); merging anyway, as the release step may.`);
-      const m = await api("PUT", `/repos/${repo}/pulls/${pr}/merge`, { merge_method: "squash", sha: head, commit_title: title, commit_message: message });
+      const m = await api("PUT", `/repos/${repo}/pulls/${pr}/merge`, { merge_method: method, sha: head, commit_title: title, commit_message: message });
       return m.ok && m.json && m.json.merged ? { ok: true, sha: m.json.sha } : { ok: false, message: bad(m) };
     },
   };

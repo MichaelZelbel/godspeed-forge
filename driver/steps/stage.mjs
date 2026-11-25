@@ -22,7 +22,11 @@ export const SETTINGS = [
   { key: "steps.stage.stop_max_age_minutes", required: false, default: 120, meaning: "a STOP file the step made is removed when older than this" },
   { key: "steps.stage.poll_seconds", required: false, default: 60, meaning: "seconds between two reads of the scenarios" },
   { key: "steps.stage.dispatch_grace_minutes", required: false, default: 10, meaning: "a started scenario run may take this long to show on GitHub" },
-  { key: "steps.stage.scenario_mac", required: false, default: true, meaning: "start the scenarios with the Mac job" },
+  { key: "steps.stage.scenario_mac", required: false, default: true, meaning: "start the scenarios with the Mac job (only for a stage whose gate file cannot name the release tests)" },
+  { key: "steps.stage.fast_poll_seconds", required: false, default: 30, meaning: "seconds between two reads while what the step waits on is moving (the last tickets' pull requests, the builds, the checks, the tests)" },
+  { key: "steps.stage.look_minutes", required: false, default: 150, meaning: "how long one look may keep watching before it ends (the step's unit allows 200)" },
+  { key: "steps.stage.after_go_jobs", required: false, default: "mac-install,windows-old-names-move", meaning: "the release-gate jobs that are not run before the go but once on the tag after the release went public (comma separated)" },
+  { key: "steps.stage.windows_workflow", required: false, default: "windows-setup.yml", meaning: "the product's workflow that builds the Windows setup" },
 ];
 
 function prepared(ctx) {
@@ -40,6 +44,11 @@ function prepared(ctx) {
     AUTO_STAGE_POLL_SECONDS: String(sv("poll_seconds", 60)),
     AUTO_STAGE_DISPATCH_GRACE_MINUTES: String(sv("dispatch_grace_minutes", 10)),
     AUTO_STAGE_MAC: String(sv("scenario_mac", true)),
+    AUTO_STAGE_FAST_POLL_SECONDS: String(sv("fast_poll_seconds", 30)),
+    AUTO_STAGE_LOOK_MINUTES: String(sv("look_minutes", 150)),
+    AUTO_STAGE_AFTER_GO_JOBS: String(sv("after_go_jobs", "mac-install,windows-old-names-move")),
+    AUTO_STAGE_WINDOWS_WORKFLOW: String(sv("windows_workflow", "windows-setup.yml")),
+    ...(read(ctx, "imageWorkflow") ? { AUTO_STAGE_IMAGE_WORKFLOW: String(read(ctx, "imageWorkflow")) } : {}),
   };
   return { env };
 }
@@ -71,7 +80,10 @@ export async function run(ctx) {
     if (ctx.log) ctx.log(line);
   };
   try {
-    const out = await ((ctx.impl && ctx.impl.look) || S.look)({ env: p.env, dry, log: say, clearHaltCommand: (step, key) => clearCommandFor(ctx, step, key) });
+    // A look that keeps watching starts a fresh page for every read: the driver reads the newest "Waiting:" line as where the
+    // release is (look.txt), so an old page's line must not stay above it. The log keeps every line.
+    const page = () => { lines.length = 0; };
+    const out = await ((ctx.impl && ctx.impl.look) || S.look)({ env: p.env, dry, log: say, page, clearHaltCommand: (step, key) => clearCommandFor(ctx, step, key) });
     if (!dry) writeLook(p.env.AUTO_STAGE_STATE_DIR, out.error ? [...lines, `Not looked: ${out.error}`] : lines);
     if (out.error) return { ok: false, summary: "stage: the look could not be made", error: out.error };
     const r = out.result;
