@@ -31,8 +31,8 @@ What was tried before, newest last (do something different from it):
 3. Prove it: run the check that showed the problem again and quote its new output.
 
 A `.factory/STOP` or `.factory/PAUSE` file: no program of the Forge makes one (the factory always runs), so someone did, by hand or
-with an old version. Read its first line and the driver's `pauses.json`. When `pauses.json` holds the owner's own record for it, leave
-it and say so. A pause the owner asked for in the chat has a file `.factory/owner-pause` beside it (made before the pause): leave it too.
+with an old version. Read its first line. The driver has already left the owner's own pauses alone (his request in the chat, or his record in
+`pauses.json`), so this one is nobody's you can name; if you still find a sign that it is his, leave it and say so.
 Otherwise remove that one file (`rm <the file>` with its full path as the obstacle names it, nothing else in that folder) and prove a
 lap can start again (the timer, the next launch). Look for `owner-pause` again right before you remove it.
 

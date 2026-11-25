@@ -117,6 +117,9 @@ export function nextStep(obstacle, history = [], ctx = {}) {
     if (mine.filter(h => h.helper === "decide").length >= QUESTION_TRIES) return { do: "act", approachNote: `${QUESTION_TRIES} decide attempts gave no decision. ${QUESTION_NOTE}` };
     return step("decide", history, ctx, QUESTION_NOTE);
   }
+  // a STOP or PAUSE file is nobody's to remove but a person's or the ops helper's (housekeeping removes none since the Forge 0.3.3,
+  // item 7): it goes straight to the ops helper, in the round that finds it, however old it is
+  if (obstacle.kind === "factory-stopped" && obstacle.stop) return step("ops", history, ctx, "A STOP or PAUSE file of the factory: no program makes one, so someone did (see your brief).");
   if (age >= TELL_AFTER_HOURS * H && told === null) return { do: "tell-michael", approachNote: `Not moving for ${Math.floor(age / H)} hours with no milestone: say in one plain sentence what is stuck and what is being tried.` };
 
   // closed without its change reaching main: the plan's own rule moves it out at once (auto-stage did
@@ -128,10 +131,6 @@ export function nextStep(obstacle, history = [], ctx = {}) {
   // sent; it stays on the record for an hour after the last refusal, and only refusals that go on for longer reach the chain
   if (obstacle.kind === "as-owner") return { do: "wait-external", approachNote: "The guard refused the call, so nothing was posted or pushed under the owner's account; the run signs in only as the Apps." };
   if (machineLike(obstacle.kind)) {
-    // a STOP or PAUSE file is nobody's to remove but a person's or the ops helper's (housekeeping removes none since the Forge 0.3.3,
-    // item 7): it goes straight to the ops helper, so it is looked at in the round that finds it
-    const aStop = obstacle.kind === "factory-stopped" && !!obstacle.stop;
-    if (aStop) return step("ops", history, ctx, "A STOP or PAUSE file of the factory: no program makes one, so someone did (see your brief).");
     if (!history.some(h => h.helper === "housekeeping")) return { do: "housekeeping", approachNote: "" };
     // the ops helper traced it to our own checking setup (a missing hidden-check tool, the test machine):
     // that is the tests helper's to repair
