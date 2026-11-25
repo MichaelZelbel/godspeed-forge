@@ -17,8 +17,9 @@ import { STRIKE_QUESTION, CONFIRM_QUESTION, struckNumbers } from '../lib/factory
 const REPO = 'owner/repo';
 const CODE = 'GITHUB-CODE-SENTINEL';
 const KEY = 'PRIVATE KEY SENTINEL';
-let nextPort = 44000 + Math.floor(Math.random() * 1000);
-const timing = { pollMs: 10, maxMs: 15000, quietMs: 150 };
+// Ports come from this process's id and stay below the range the system hands out to connections, so test runs in parallel never share one.
+let nextPort = 20000 + (process.pid % 120) * 100;
+const timing = { pollMs: 10, maxMs: 15000, quietMs: 3000 };
 
 // One server: a state folder with the watch page's record, a projects folder, and the commands setup runs.
 function world({ claude = true, factory = null, appStatus = async () => 'installed', appWaitMs = 5000, startWorker: replaceWorker = null } = {}) {
@@ -79,7 +80,10 @@ function world({ claude = true, factory = null, appStatus = async () => 'install
 const local = (link, w) => `http://127.0.0.1:${w.port}${new URL(link).pathname}`;
 const linkIn = (text, pattern) => text.match(pattern)[0];
 async function createApp(w, text, kind) {
-  const link = linkIn(text, new RegExp(`https://forge\\.test:48445/forge-setup/[0-9a-f]{32}/create`));
+  const pattern = new RegExp(`https://forge\\.test:48445/forge-setup/[0-9a-f]{32}/create`);
+  // A slow machine can cut a reply before the link is said: wait for the link itself, not for a quiet moment.
+  for (let tries = 0; !pattern.test(text) && tries < 20; tries++) text += '\n' + await w.say('');
+  const link = linkIn(text, pattern);
   const page = await (await fetch(local(link, w))).text();
   assert.match(page, /method="post" action="https:\/\/github\.com\/settings\/apps\/new"/);
   const redirect = page.match(/redirect_url&quot;:&quot;([^&]+)&quot;/)[1];
