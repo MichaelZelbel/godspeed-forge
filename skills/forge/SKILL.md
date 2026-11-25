@@ -74,6 +74,7 @@ Never write anything else under `.godspeed/forge/`, and never change the files t
   come back with only part of it; say what it says. Never ask for, accept or repeat a sign-in code or a password: when the
   owner pastes a code, do not send it, tell them to type it in the server's terminal. If the Forge says setup needs the
   terminal (Claude Code's own sign-in, or updating the page that gives this chat a way back from GitHub), pass that on.
+  The same setup can also be run by the owner in the server's terminal: `godspeed-forge setup owner/repository`.
 - **Go** or **make it public**: kind `go`.
 - **Take it back**: kind `take-back`.
 - **Release status**, **where is the release**: kind `status`.
