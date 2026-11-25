@@ -128,7 +128,7 @@ export function contextFor(env, ob, step, world, history, readFile = f => fs.rea
     : release ? (release.tickets || []).map(t => `- item ${t.item}: #${t.issue || "?"} ${t.title}${t.deferred ? " (moved to the next release)" : ""}`).join("\n") : "";
   const d = latest(history, "diagnose");
   return {
-    OBSTACLE_ID: ob.id, OBSTACLE_KIND: ob.kind, TICKET_KEY: ob.ticketKey || ob.project || ob.timer || "-", SINCE: ob.since,
+    OBSTACLE_ID: ob.id, OBSTACLE_KIND: ob.kind, TICKET_KEY: ob.ticketKey || ob.project || ob.timer || "-", SINCE: ob.since, STOP_FILE: (ob.stop && ob.stop.file) || "",
     EVIDENCE: bullets(ob.evidence), HISTORY: historyText(history), APPROACH_NOTE: step.approachNote || "",
     DIAGNOSIS: d ? `${d.cause || "unknown"}: ${d.summary || ""}` : "No diagnosis yet.",
     TICKET: String(ticket).slice(0, 12000), ITEMS: items, PLAN: release ? String(release.plan || "").slice(0, 12000) : "",
@@ -188,7 +188,7 @@ export async function round(env, deps = {}) {
         `the release step's look at it: ${String(k.look || "nothing (no look about it)").split(/\r?\n/).filter(Boolean).join(" / ").slice(0, 1500)}`,
         `its stage in the auto-stage state: ${JSON.stringify(files.autoStage || null).slice(0, 1500)}`,
         `its staging record: ${JSON.stringify(files.staging || null).slice(0, 800)}`,
-        (k.held || []).length ? `held earlier by: ${k.held.join("; ")}` : "nothing checkable runs for it: no GitHub run on its candidate, release branch or version pull request, no STOP file, no freeze, install or check program",
+        (k.held || []).length ? `held earlier by: ${k.held.join("; ")}` : "nothing checkable runs for it: no GitHub run on its candidate, release branch or version pull request, no freeze, install or check program",
         `the driver's release clock: still for ${k.minutes} minutes; an acting run at ${STANDSTILL.helperMinutes}, the other AI at ${STANDSTILL.otherAiMinutes}, the repair program and the owner at ${STANDSTILL.repairMinutes}. This is rung ${rung}.`] };
       const unit = nextActUnit(entryId);
       try {
@@ -318,7 +318,7 @@ export async function round(env, deps = {}) {
     const down = {};
     for (const f of world.factories || []) for (const [u, s] of Object.entries(f.timers || {})) if (!/^(active|activating|reloading)$/.test(s)) down[u] = (state.timerRounds[u] || 0) + 1;
     state.timerRounds = down;
-    const fcfg = { firstSeen: state.firstSeen, noAi: state.noAi, timerRounds: down };
+    const fcfg = { firstSeen: state.firstSeen, noAi: state.noAi, timerRounds: down, ownerPauses: ownerPauseTargets(env) };
     // an acting run that could not sign in is a login obstacle of the driver's (housekeeping links the sign-in again and checks it)
     world.actLogins = { ...(state.actLogin || {}) };
     let obstacles;
@@ -514,7 +514,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       }
     } catch (e) { record({ kind: "supersession check failed", why: String(e.message).slice(0, 200) }); }
     const nextRelease = await (deps.nextRelease || nextReleaseFacts)(env, world, jv, now);
-    // what is visibly moving (6): GitHub runs in progress and auto-stage's STOP file
+    // what is visibly moving (6): GitHub runs in progress and the release programs
     // the credit used so far: the journal's, plus any debt a failed write left in the state (it fails closed: never refilled)
     const debt = (state.creditDebt ||= {});
     const credits = { ...jv.credits }; for (const [k, ms] of Object.entries(debt)) credits[k] = (credits[k] || 0) + ms; for (const [k, ms] of Object.entries(roundCredit)) credits[k] = (credits[k] || 0) + ms;
@@ -563,7 +563,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
       const { look, files, fp } = now0;
       try {
         const named = prev && prev.fp === fp && (prev.named || []).length ? (deps.checkNamed || checkNamedReal)(prev.named).filter(n => n.running && ownedBy(n, releaseOwn(rel.id, files.autoStage))) : [];
-        const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, about, named, now, repo: env.REPO, extra: bld ? bld.work : [] });
+        const work = workFor({ id: rel.id, activity, autoStage: files.autoStage, named, now, repo: env.REPO, extra: bld ? bld.work : [] });
         const t = tick(prev, { fp, work, now, lastRoundAt: jv0.lastRoundAt, journal: (jv.clocks || {})[rel.id] || null });
         t.clock.named = named; t.clock.version = rel.version || t.clock.version;
         t.clock.buildTokens = bld ? bld.tokens : undefined; // each ticket's last readable state
@@ -782,7 +782,7 @@ ${body}` }, `${rel.id}: item ${t.item} is done, merge ${sha.slice(0, 7)} (factor
     }
     for (const r of adv.rows) if (byClock.has(r.entry.id)) r.byClock = true;
     let L = adv.actions.launch;
-    if (L && !dry && entries.length) { // work may have started since the round began (auto-stage's STOP, a run): look again right before launching
+    if (L && !dry && entries.length) { // work may have started since the round began (a run): look again right before launching
       try { const again = withSteps(await (deps.activity || ((e, w) => readActivity(e, w, undefined, now)))(env, world)); const m = heldUntil(L.entry, again && { ...again, waitingOnMain: !!(stage && /(main'?s?\b[^.]*\b(required check|Windows setup|image))|(image\b[^.]*not in the registry)/i.test(String(stage.reason || ""))), releaseId: (stage && stage.id) || undefined, onlyRelease: jv.open.length === 1 ? jv.open[0].id : null }, world, credits, now); if (Number.isFinite(m) && m > now) { record({ kind: "acting run held", entry: L.entry.id, why: "work started on it meanwhile" }); L = null; } } catch { /* unreadable: launch as decided */ }
     }
     // a provider whose acting runs could not sign in waits until housekeeping has linked its sign-in again: when the rung would need it,
@@ -918,20 +918,27 @@ function pendingQuestions(env) {
 const IMAGE_WF = env => env.IMAGE_WORKFLOW || process.env.IMAGE_WORKFLOW || "";
 const HOLD_FILE = e => e.HOLD_FILE || path.join(e.FD_KEEPER_HOME || "/usr/local/lib/godspeed/forge/keeper", "HOLD");
 const when = s => { const t = Date.parse(s); return Number.isFinite(t) ? t : NaN; };
-// Every pause that is in force: the keeper's HOLD file, a project's PAUSE or STOP file written by a person (a
-// program's STOP is housekeeping's), and a deliberately parked project (its units in a paused-<date> folder).
+// Every pause that is in force: the keeper's HOLD file, a project's PAUSE or STOP file written by a person (no
+// program makes a STOP any more), and a deliberately parked project (its units in a paused-<date> folder).
 // An expiry written in it ("until <iso time>") is its deadline.
-export function readPauses(env, now, world = {}) {
-  const out = readPauseFiles(env, now, world);
-  // a pause record counts as his only with his Telegram user id and the message it came from (9.6), re-checked each round
+// The pause records that are the owner's own: his Telegram user id and the message it came from, re-checked each round (9.6).
+function ownerRecords(env) {
   const recs = (() => { try { return JSON.parse(fs.readFileSync(path.join(env.STATE_DIR, "pauses.json"), "utf8")); } catch { return []; } })();
   const allowed = String(process.env.FD_ALLOWED_USERS || readEnvFile(env.TG_ENV || "").TELEGRAM_ALLOWED_USERS || "").split(",").map(s => s.trim()).filter(Boolean);
+  return (Array.isArray(recs) ? recs : []).filter(x => x && x.target && x.messageId && x.telegramUser && allowed.includes(String(x.telegramUser)));
+}
+export const ownerPauseTargets = env => { try { return ownerRecords(env).map(r => String(r.target)); } catch { return []; } };
+export function readPauses(env, now, world = {}) {
+  const out = readPauseFiles(env, now, world);
+  const mine = ownerRecords(env);
   for (const p of out) {
-    const rec = (Array.isArray(recs) ? recs : []).find(x => x && x.target === p.id);
-    if (rec && rec.messageId && rec.telegramUser && allowed.includes(String(rec.telegramUser))) { p.ownerRef = `Telegram message ${rec.messageId}`; if (rec.until) p.expiresAt = Date.parse(rec.until); }
-    else p.maxHours = /^STOP/.test(p.id) ? 2 : 2; // a program's pause expires at its maximum (auto-stage: 2 hours)
+    const rec = mine.find(x => x.target === p.id);
+    if (rec) { p.ownerRef = `Telegram message ${rec.messageId}`; if (rec.until) p.expiresAt = Date.parse(rec.until); }
+    else if (p.ownerAsked) p.ownerRef = "his request in the chat";
+    else p.maxHours = 2; // a pause nobody dated expires at its maximum
   }
-  return out;
+  // a PAUSE or STOP file without the owner's record is an obstacle (factory-stopped, obstacles.mjs), not a reminder
+  return out.filter(p => !(/^(PAUSE|STOP):/.test(String(p.id)) && !p.ownerRef));
 }
 function readPauseFiles(env, now, world = {}) {
   const out = [];
@@ -941,8 +948,8 @@ function readPauseFiles(env, now, world = {}) {
     out.push({ id: "hold", all: true, what: "the factory driver is on hold", since: fs.statSync(f).mtimeMs, expiresAt: expiry(line), line });
   } catch {}
   for (const f of world.factories || []) {
-    for (const st of [f && f.pause, f && f.stop && f.stop.kind === "STOP" && !f.stop.writer ? f.stop : null]) { // a PAUSE and an operator STOP are both pauses, each with its own reminder
-      if (st && (st.kind === "PAUSE" || (st.kind === "STOP" && !st.writer))) out.push({ id: `${st.kind}:${f.project}`, repo: f.repo || null, what: `${f.project} has a ${st.kind} file`, since: when(st.at), expiresAt: expiry(st.line), line: st.line });
+    for (const st of [f && f.pause, f && f.stop && f.stop.kind === "STOP" ? f.stop : null]) { // a PAUSE and an operator STOP are both pauses, each with its own reminder
+      if (st && (st.kind === "PAUSE" || st.kind === "STOP")) out.push({ id: `${st.kind}:${f.project}`, ownerAsked: st.kind === "PAUSE" && !!f.ownerPause, repo: f.repo || null, what: `${f.project} has a ${st.kind} file`, since: when(st.at), expiresAt: expiry(st.line), line: st.line });
     }
   }
   try {
@@ -1107,7 +1114,7 @@ export function describe(out) {
       lines.push(`  item ${t.item} #${t.issue || "?"} ${t.deferred ? "moved to the next release" : `${it.state || "unread"}${(it.labels || []).includes("needs-owner") ? ", parked (needs-owner)" : ""}`}: ${t.title}`);
     }
   }
-  for (const f of w.factories || []) lines.push(`factory ${f.project}: ${f.activeRuns.length} active run(s), board ${Array.isArray(f.board) ? f.board.length : "?"} parked; last decision: ${(f.lastDecisions.at(-1) || {}).text || "none"}${f.stop ? `; ${f.stop.kind}: "${f.stop.line}" (writer ${f.stop.writerAlive ? "alive" : "not running"}, scenarios ${f.stop.scenariosRunning === null ? "unknown" : f.stop.scenariosRunning ? "running" : "not running"})` : ""}; timers ${Object.entries(f.timers || {}).map(([u, s]) => `${u.replace(/^archonfactory-/, "")}=${s}`).join(", ")}`);
+  for (const f of w.factories || []) lines.push(`factory ${f.project}: ${f.activeRuns.length} active run(s), board ${Array.isArray(f.board) ? f.board.length : "?"} parked; last decision: ${(f.lastDecisions.at(-1) || {}).text || "none"}${f.stop ? `; ${f.stop.kind}: "${f.stop.line}" (writer ${f.stop.writerAlive ? "alive" : "not running"})` : ""}; timers ${Object.entries(f.timers || {}).map(([u, s]) => `${u.replace(/^archonfactory-/, "")}=${s}`).join(", ")}`);
   for (const r of w.superseded || []) lines.push(`release ${r.id}: superseded (older than ${r.by}, installed); not driven`);
   if (w.installed) lines.push(`release ${w.installed.id}: installed on the owner's server, so done; not driven`);
   lines.push(`unreadable: ${(w.unreadable || []).map(u => `${u.part} (${u.error})`).join("; ") || "nothing"}`);

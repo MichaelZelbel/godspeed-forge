@@ -137,12 +137,12 @@ test("review fixes: supersession needs a freshly verified install and fails clos
   assert.equal(supersessionLook(jv, world, () => ({ status: 0 }), "/c", true).leave.length, 1);
 });
 
-test("what is visibly moving is read from GitHub's runs in progress or queued and auto-stage's STOP file", () => {
+test("what is visibly moving is read from GitHub's runs in progress or queued and the release programs alive; a STOP file is no activity (the Forge 0.3.3, item 7)", () => {
   const run = (cmd, args) => cmd === "ps" ? { stdout: "  600 node --disable-warning=x /usr/local/lib/godspeed-forge/godspeed-dev/scripts/release/auto-stage.mjs\nnode scripts/release/auto-stage.mjs --dry-run\n" } : ({ stdout: JSON.stringify({ workflow_runs: args[1].includes("in_progress") ? [{ head_branch: "candidate/2.0.0-beta.29", head_sha: "s", run_started_at: "2026-11-21T22:00:00Z", name: "scenarios" }] : [] }) });
   const stopAt = new Date(Date.now() - 20 * 60000).toISOString();
   const a = readActivity({ REPO: "o/r" }, { factories: [{ stop: { writer: "auto-stage", at: stopAt, line: "auto-stage 12 x" } }] }, run);
-  assert.equal(a.procs.length, 1, "a live auto-stage counts, a dry run does not"); assert.equal(a.runs.length, 1); assert.equal(a.runs[0].headBranch, "candidate/2.0.0-beta.29"); assert.equal(a.stop.at, stopAt);
-  assert.equal(readActivity({ REPO: "o/r" }, { factories: [{ stop: { writer: "someone", at: stopAt, line: "x" } }] }, () => ({ stdout: "garbage" })).stop, null, "only auto-stage's own STOP counts, unreadable runs count for nothing");
+  assert.equal(a.procs.length, 1, "a live auto-stage counts, a dry run does not"); assert.equal(a.runs.length, 1); assert.equal(a.runs[0].headBranch, "candidate/2.0.0-beta.29"); assert.equal(a.stop, undefined, "a fresh STOP of the old release step holds nothing: nobody makes one any more");
+  assert.equal(readActivity({ REPO: "o/r" }, { factories: [{ stop: { writer: "someone", at: stopAt, line: "x" } }] }, () => ({ stdout: "garbage" })).stop, undefined, "no STOP counts, unreadable runs count for nothing");
 });
 
 test("review fix: the required run to re-run is the one of the newest completed check by start time, and only when that one is bad", () => {

@@ -127,6 +127,43 @@ test("today's real state: a diagnose helper for each parked release ticket and o
   assert.deepEqual(again.steps.map(s => s.do), ["running", "running", "running", "running"]);
 });
 
+test("item 7: a hand-made PAUSE in the factory's folder is the factory-stopped obstacle and an ops helper starts in the first round; the owner's own pause, announced by his file or recorded, starts none", async () => {
+  const PAUSE_TEXT = "Operator paused scheduled launches; wakes continue.\n";
+  const play = async (text, setup = () => {}) => {
+    const f = fixture();
+    f.env.MAX_HELPERS = 8;
+    const rf = f.deps.worldDeps.readFile;
+    f.deps.worldDeps.readFile = p => (/\/\.factory\/PAUSE$/.test(p) ? text : /\/\.factory\/owner-pause$/.test(p) && f.ownerPause ? f.ownerPause : rf(p));
+    f.deps.worldDeps.mtime = () => NOW - 3600 * 1000;
+    setup(f);
+    const out = await round(f.env, f.deps);
+    return { f, out, stopped: out.obstacles.filter(o => o.kind === "factory-stopped"), ops: f.launched.filter(l => l.context.OBSTACLE_KIND === "factory-stopped") };
+  };
+  const hand = await play(PAUSE_TEXT);
+  assert.equal(hand.stopped.length, 1, "raised in the first round");
+  assert.equal(hand.stopped[0].stop.kind, "PAUSE");
+  assert.equal(hand.ops.length, 1, "and an ops helper starts at once, with no housekeeping round first");
+  assert.equal(hand.ops[0].kind, "ops");
+  const IDENTITY = `Asked by the owner in the chat: r1.\npause-mtime: ${NOW - 3600 * 1000}\n`; // the mtime the test gives every file
+  const marked = await play(PAUSE_TEXT, f => { f.ownerPause = IDENTITY; });
+  assert.deepEqual([marked.stopped.length, marked.ops.length], [0, 0], "his own pause, asked for in the chat (the owner-pause file)");
+  const recorded = await play(PAUSE_TEXT, f => {
+    fs.mkdirSync(f.env.STATE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(f.env.STATE_DIR, "pauses.json"), JSON.stringify([{ target: "PAUSE:godspeed-mission-control", why: "he said so", telegramUser: "7", messageId: "55" }]));
+    process.env.FD_ALLOWED_USERS = "7";
+  });
+  delete process.env.FD_ALLOWED_USERS;
+  assert.deepEqual([recorded.stopped.length, recorded.ops.length], [0, 0], "his own pause, recorded with his Telegram message");
+  // he paused in the chat, then resumed with consumer.py unpause (the marker stays), then somebody made a PAUSE by hand: another file
+  const removed = [];
+  const handmade = await play(PAUSE_TEXT, f => { f.ownerPause = IDENTITY; f.deps.worldDeps.mtime = p => (/owner-pause$/.test(p) ? NOW - 3600 * 1000 : NOW - 60 * 1000); f.deps.hkDeps.rmFile = p => removed.push(p); });
+  assert.equal(handmade.stopped.length, 1, "raised in its first round");
+  assert.equal(handmade.ops.length, 1, "and an ops helper starts");
+  assert.deepEqual(removed.map(p => p.replace(/^.*\/\.factory\//, "")), ["owner-pause"], "and the stale marker is deleted in that round");
+  const young = await play(PAUSE_TEXT, f => { f.deps.worldDeps.mtime = () => NOW - 10 * 1000; });
+  assert.equal(young.stopped.length, 1, "a file seconds old is raised in that round too");
+});
+
 test("at most four helpers at once, the oldest obstacle first", async () => {
   const f = fixture();
   f.env.MAX_HELPERS = 2;

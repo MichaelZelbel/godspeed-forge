@@ -15,7 +15,7 @@
 //   - the release's STATE is the stage step's look at it (look.txt, with its minutes and timestamps taken out), its stage in the
 //     auto-stage state file and its staging record; a change of any of them resets the clock and its ladder;
 //   - CHECKABLE WORK pauses the clock, only while it runs and only inside its own limit: a GitHub run in progress on the candidate
-//     tag, the release branch or the release's version pull request; auto-stage's STOP file younger than its limit; a freeze,
+//     tag, the release branch or the release's version pull request; a freeze,
 //     install or check program of the release step that is running; and the unit, GitHub run or pull request an acting run's
 //     "in-progress" named, once the driver has checked it runs (or is open), for at most an hour after the answer;
 //   - never work: the stage step's own repeated waiting sentence, other projects' runs, an acting run's word;
@@ -37,7 +37,6 @@ export const STANDSTILL = Object.freeze({
   toleranceMinutes: 1, // rounds start a few seconds early or late: a round within a minute of that is still the one
   runHours: 6, // a GitHub run on the version pull request: its own timeout
   scenariosHours: 3, // a run on the candidate or release branch, and a release program, are bounded by their own start
-  stopHours: 2, // auto-stage's STOP file
   claimHours: 3, // the loop's own limit on a claim (a claim older than this is no claim); the same hours the factory is told
   silentMinutes: 30, // a run that has written nothing for this long holds nothing: the same half hour progress.mjs calls not working
 });
@@ -173,12 +172,12 @@ export function pageNamesRelease(pages, release) {
 
 // ---------------------------------------------------------------- checkable work
 const versionIn = s => (/(\d+\.\d+\.\d+(?:-[a-z]+\.\d+(?:\.\d+)*)?)/i.exec(String(s || "")) || [])[1] || null;
-// -> [{what, until}] the work that holds the clock now (until > now). activity: readActivity's {runs, stop, procs}; autoStage: the
-// release's auto-stage state (its version pull request is rs.bump); about: the stage step's look is about this release; named:
+// -> [{what, until}] the work that holds the clock now (until > now). activity: readActivity's {runs, procs}; autoStage: the
+// release's auto-stage state (its version pull request is rs.bump); named:
 // what an acting run's in-progress named and the driver found running this round, with the time of the answer; repo: the
 // release's repository (a release program names it first: freeze.mjs <repo> <version>, stage-server.mjs <repo> <version>
 // --release <id>).
-export function workFor({ id, activity, autoStage, about, named = [], now, repo = "", extra = [] }) {
+export function workFor({ id, activity, autoStage, named = [], now, repo = "", extra = [] }) {
   const out = [...extra];
   const v = versionIn(id), bump = (autoStage && autoStage.bump) || null;
   for (const r of (activity && activity.runs) || []) {
@@ -187,9 +186,7 @@ export function workFor({ id, activity, autoStage, about, named = [], now, repo 
     if (/^(candidate|release)\//.test(String(r.headBranch || "")) && v && versionIn(r.headBranch) === v) out.push({ what: `a GitHub run (${r.name || "a workflow"}) on ${r.headBranch}`, until: at + STANDSTILL.scenariosHours * H });
     else if (bump && ((bump.head && r.headSha === bump.head) || (bump.branch && r.headBranch === bump.branch))) out.push({ what: `a GitHub run (${r.name || "a workflow"}) on the version pull request${bump.pr ? ` #${bump.pr}` : ""}`, until: at + STANDSTILL.runHours * H });
   }
-  // auto-stage's STOP belongs to the release the stage step works on (it writes only the main project's); its programs name the
-  // release's version in their arguments, so another release's or project's never count
-  if (about && activity && activity.stop && Number.isFinite(Date.parse(activity.stop.at))) out.push({ what: "auto-stage's STOP file (the scenarios run)", until: Date.parse(activity.stop.at) + STANDSTILL.stopHours * H });
+  // the release programs name the release's version in their arguments, so another release's or project's never count
   for (const p of (activity && activity.procs) || []) {
     const m = /release\/(freeze|stage-server|staging-check)\.mjs/.exec(String(p.args || ""));
     const args = String(p.args || "").split(/\s+/), ri = args.indexOf("--release");

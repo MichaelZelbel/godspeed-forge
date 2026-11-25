@@ -117,6 +117,9 @@ export function nextStep(obstacle, history = [], ctx = {}) {
     if (mine.filter(h => h.helper === "decide").length >= QUESTION_TRIES) return { do: "act", approachNote: `${QUESTION_TRIES} decide attempts gave no decision. ${QUESTION_NOTE}` };
     return step("decide", history, ctx, QUESTION_NOTE);
   }
+  // a STOP or PAUSE file is nobody's to remove but a person's or the ops helper's (housekeeping removes none since the Forge 0.3.3,
+  // item 7): it goes straight to the ops helper, in the round that finds it, however old it is
+  if (obstacle.kind === "factory-stopped" && obstacle.stop) return step("ops", history, ctx, "A STOP or PAUSE file of the factory: no program makes one, so someone did (see your brief).");
   if (age >= TELL_AFTER_HOURS * H && told === null) return { do: "tell-michael", approachNote: `Not moving for ${Math.floor(age / H)} hours with no milestone: say in one plain sentence what is stuck and what is being tried.` };
 
   // closed without its change reaching main: the plan's own rule moves it out at once (auto-stage did

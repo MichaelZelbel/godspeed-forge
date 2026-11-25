@@ -2,7 +2,7 @@
 // GitHub on 127.0.0.1, a stand-in bridge to Godspeed, a stand-in coding agent, project checkouts with an origin on
 // this machine and a stand-in factory/consumer.py. The acceptance of tickets 03 (questions reach the chat) and 04
 // (a finished release stages itself) of the Forge 0.1.0 plan, and ticket 02's facts. No network, no AI.
-// test cases: 18
+// test cases: 19
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -340,7 +340,7 @@ testCase('a release with one item still open does nothing; once it closes with a
   const r = await releasesStep.run(ctxFor([appProject]));
   assert.equal(r.ok, true, r.error);
   assert.equal(appRepo.refs['tags/candidate/1.3.0'], B, 'frozen on the newest merge');
-  assert.deepEqual(co.consumerLog(), ['pause', 'unpause'], 'the factory paused while the checks ran, and runs again');
+  assert.deepEqual(co.consumerLog(), [], 'the factory is never paused or unpaused: no program of the Forge does that (0.3.3, item 7)');
   assert.equal(fs.existsSync(path.join(co.checkout, '.factory', 'PAUSE')), false);
   const pre = appRepo.releases.find(x => x.tag_name === 'candidate/1.3.0');
   assert.deepEqual([pre.prerelease, pre.name], [true, '1.3.0 (to try)']);
@@ -356,7 +356,7 @@ testCase('a release with one item still open does nothing; once it closes with a
   await releasesStep.run(ctxFor([appProject]));
   assert.equal(sentSince(n).length, 1, 'announced once');
   assert.deepEqual(writesSince(again), [], 'and nothing is done twice');
-  assert.deepEqual(co.consumerLog(), ['pause', 'unpause']);
+  assert.deepEqual(co.consumerLog(), []);
   const public_ = await go({ id: 'g1', kind: 'go', project: 'my-app', words: 'go', at: '2026-11-22T13:00:00Z' }, reqCtx);
   assert.deepEqual(public_, { ok: true, say: `my-app 1.3.0 is public now: ${pre.html_url}` });
   assert.deepEqual([appRepo.refs['tags/v1.3.0'], appRepo.refs['heads/live'], appRepo.latestId], [B, B, pre.id]);
@@ -386,7 +386,7 @@ testCase('a failing check gives one message naming it and its count, run once mo
   assert.doesNotMatch(text, /go\b/i, 'no question about going public');
   assertPlain(assert, text);
   assert.equal(fs.readFileSync(runs, 'utf8').trim().split('\n').length, 2, 'one run and one rerun of the failed check');
-  assert.deepEqual(c.consumerLog(), ['pause', 'unpause']);
+  assert.deepEqual(c.consumerLog(), []);
   const rel = gh.repo('acme/failing');
   assert.equal(rel.refs['tags/candidate/0.1.0'], bad, 'the candidate stays frozen, so a go with a reason can still make it public');
   assert.deepEqual(rel.releases, [], 'nothing is put up to try');
@@ -434,7 +434,7 @@ testCase('when GitHub refuses a step of putting a checked release up to try, the
   assert.equal(releaseRecord(state, 'acme/refused', '0.1.0').state, 'staged');
   assert.equal(sentSince(n).length, 1);
   assert.match(sentSince(n)[0].text, /^refused 0\.1\.0 is ready to try: https:\/\/github\.example\/acme\/refused\/releases\/\d+\. Shall I make it public\? Reply go\.$/);
-  assert.deepEqual(c.consumerLog(), ['pause', 'unpause'], 'the checks ran once');
+  assert.deepEqual(c.consumerLog(), [], 'the checks ran once, the factory was left alone');
 }
 
 testCase('a move of staging GitHub refuses the release App because it brings in a workflow change is made once with the owner\'s own sign-in; any other refusal is retried by the App and never uses it');
@@ -487,9 +487,9 @@ testCase('the factory runs again after a check that hangs, after a run that was 
   const n = bridge.sent.length;
   await releasesStep.run({ ...ctxFor([project]), settings: settings({ steps: { 'owner-releases': { python: 'python3', check_minutes: 0.02 } } }) });
   assert.deepEqual(sentSince(n).map(s => s.text), ['slow 0.1.0 did not pass its own checks, so it is not ready to try. The tests did not finish within 0.02 minutes. To fix it, ask me to plan the next slow release.']);
-  assert.deepEqual(c.consumerLog(), ['pause', 'unpause']);
+  assert.deepEqual(c.consumerLog(), []);
   assert.equal(fs.existsSync(path.join(c.checkout, '.factory', 'PAUSE')), false);
-  // a run stopped in the middle of its checks: the next one lifts the pause it made and says so once
+  // a run stopped in the middle of its checks: the next one says so once, and a saved pausedByUs of an older version is read by nothing
   const stopped = await plannedProject('stopped', { unit: 'true' });
   const record = releaseRecord(state, 'acme/stopped', '0.1.0');
   Object.assign(record, { state: 'checking', pausedByUs: true, candidate: { commit: stopped.co.first, tag: 'candidate/0.1.0', at: '2026-11-22T09:00:00Z' } });
@@ -500,8 +500,8 @@ testCase('the factory runs again after a check that hangs, after a run that was 
   await releasesStep.run(ctxFor([stopped.project]));
   await releasesStep.run(ctxFor([stopped.project]));
   assert.deepEqual(sentSince(m).map(s => s.text), ['stopped 0.1.0 did not pass its own checks, so it is not ready to try. The checks did not finish. To fix it, ask me to plan the next stopped release.']);
-  assert.deepEqual(stopped.co.consumerLog(), ['unpause']);
-  assert.equal(fs.existsSync(path.join(stopped.co.checkout, '.factory', 'PAUSE')), false);
+  assert.deepEqual(stopped.co.consumerLog(), [], 'no unpause either');
+  assert.equal(fs.existsSync(path.join(stopped.co.checkout, '.factory', 'PAUSE')), true, 'a PAUSE that is there stays: the driver raises it, this step lifts nothing');
   // the owner paused the factory: the checks run, and the pause stays
   const held = await plannedProject('held', { unit: 'true' });
   gh.merge('acme/held', held.issue, held.co.commit({ unit: 'true' }, 'fine'));
@@ -511,6 +511,19 @@ testCase('the factory runs again after a check that hangs, after a run that was 
   assert.equal(releaseRecord(state, 'acme/held', '0.1.0').state, 'staged');
   assert.deepEqual(held.co.consumerLog(), [], 'neither paused nor unpaused');
   assert.equal(fs.readFileSync(path.join(held.co.checkout, '.factory', 'PAUSE'), 'utf8'), 'the owner paused it\n');
+}
+
+testCase('item 7 (the Forge 0.3.3): an owner release check never creates the factory\'s PAUSE or STOP, not while its checks run, and a leftover steps.owner-releases.python is ignored');
+{
+  const probe = 'd=$(git rev-parse --git-common-dir); test ! -e "$d/../.factory/PAUSE" && test ! -e "$d/../.factory/STOP" && echo "1 of 1 pass"';
+  const lap = await plannedProject('lapgoeson', { unit: probe });
+  gh.merge('acme/lapgoeson', lap.issue, lap.co.commit({ unit: probe }, 'fine'));
+  const n = bridge.sent.length;
+  await releasesStep.run({ ...ctxFor([lap.project]), settings: settings({ steps: { 'owner-releases': { python: 'python3', check_minutes: 5 } } }) });
+  assert.equal(releaseRecord(state, 'acme/lapgoeson', '0.1.0').state, 'staged', 'the checks, which fail if PAUSE or STOP exists while they run, passed');
+  assert.match(sentSince(n)[0].text, /is ready to try/);
+  assert.deepEqual(lap.co.consumerLog(), [], 'consumer.py was never asked for anything');
+  for (const f of ['PAUSE', 'STOP']) assert.equal(fs.existsSync(path.join(lap.co.checkout, '.factory', f)), false, f);
 }
 
 testCase('a project profile sends its staging address as the link, after its deploy and health commands saw the candidate');
