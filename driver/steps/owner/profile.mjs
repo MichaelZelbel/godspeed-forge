@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { shellAs } from "./run.mjs";
+import { defaultSettingsDir } from "../../settings.mjs";
 
 const isLine = v => typeof v === "string" && v.trim().length > 0;
 const safeRelative = p => isLine(p) && !path.isAbsolute(p) && !p.split(/[\\/]/).includes("..");
@@ -75,10 +76,19 @@ export function runStep(settings, line, { cwd, minutes, env = {} }) {
   return { ok: r.status === 0 && !r.timedOut, cause: r.status === 0 && !r.timedOut ? "" : causeOf(r, minutes), stdout: r.stdout };
 }
 
-// The profile of a project as the add-on finds it: the driver's settings folder, as the watch page does.
-export function profileFromSettingsFolder(repository, { dir = process.env.FORGE_SETTINGS_DIR || "/etc/godspeed-forge" } = {}) {
-  try {
-    const project = JSON.parse(fs.readFileSync(path.join(dir, "projects", `${String(repository).replace("/", "--")}.json`), "utf8"));
-    return resolveProfile(project);
-  } catch { return { profile: {} }; }
+// The profile of a project as the add-on finds it, from the same settings folder the driver reads (--settings-dir as
+// handed on, else FD_SETTINGS_DIR, else the driver's default) and by the same rule: the project file whose
+// "repository" names it (or that is named <owner>--<repository>.json). No file means no profile of its own; a file that cannot be read or parsed is a problem.
+export function profileFromSettingsFolder(repository, { dir } = {}) {
+  const folder = path.join(dir || process.env.FD_SETTINGS_DIR || defaultSettingsDir(), "projects");
+  let names;
+  try { names = fs.readdirSync(folder).filter(n => n.endsWith(".json")).sort(); } catch (e) {
+    return e && (e.code === "ENOENT" || e.code === "ENOTDIR") ? { profile: {} } : { problem: "the settings folder holding its profile could not be read" };
+  }
+  for (const name of names) {
+    let project;
+    try { project = JSON.parse(fs.readFileSync(path.join(folder, name), "utf8")); } catch { return { problem: `the settings file ${name} holding its profile could not be read` }; }
+    if (project && (project.repository === repository || name === `${String(repository).replace("/", "--")}.json`)) return resolveProfile(project);
+  }
+  return { profile: {} };
 }

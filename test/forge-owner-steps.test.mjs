@@ -623,4 +623,32 @@ testCase('the public step runs on go before anything is made public on GitHub, a
   assert.equal(releaseRecord(state, 'acme/twoway', '0.1.0').state, 'public');
 }
 
+testCase('the add-on finds the profile in the folder the driver was given (FD_SETTINGS_DIR), and a profile file it cannot read stops go');
+{
+  const settingsDir = path.join(root, 'driver-settings');
+  fs.mkdirSync(path.join(settingsDir, 'projects'), { recursive: true });
+  const file = path.join(settingsDir, 'projects', 'acme--elsewhere.json');
+  const marker = path.join(root, 'elsewhere-ran.txt');
+  const { co: c, project, issue } = await plannedProject('elsewhere', { unit: 'true' });
+  gh.merge('acme/elsewhere', issue, c.commit({ unit: 'true' }, 'change'));
+  await releasesStep.run(ctxFor([project]));
+  const repo = gh.repo('acme/elsewhere');
+  repo.refs['heads/live'] = repo.refs['tags/candidate/0.1.0'];
+  const was = process.env.FD_SETTINGS_DIR;
+  process.env.FD_SETTINGS_DIR = settingsDir;
+  try {
+    fs.writeFileSync(file, '{ not json');
+    const stopped = await go({ id: 'g-el1', kind: 'go', project: 'elsewhere', words: 'go' }, reqCtx);
+    assert.equal(stopped.ok, false);
+    assert.match(stopped.say, /the project's own public step failed, so nothing changed on GitHub/);
+    assert.equal(repo.refs['tags/v0.1.0'], undefined, 'no tag');
+    fs.writeFileSync(file, JSON.stringify({ repository: 'acme/elsewhere', profile: { public: `echo ran > "${marker}"` } }));
+    const done = await go({ id: 'g-el2', kind: 'go', project: 'elsewhere', words: 'go' }, reqCtx);
+    assert.equal(done.ok, true, done.say);
+    assert.equal(fs.readFileSync(marker, 'utf8'), 'ran\n');
+  } finally {
+    if (was === undefined) delete process.env.FD_SETTINGS_DIR; else process.env.FD_SETTINGS_DIR = was;
+  }
+}
+
 await gh.close();

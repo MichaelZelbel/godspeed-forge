@@ -65,7 +65,8 @@ Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 0700 and credential files under the private `credentials/` subtree are mode 0600. Project state
 contains only non-secret setup records. The defaults are the projects directory, a plain release-cost estimate,
 and the `git`, `gh`, and `python3` command names. The config and setup output never contain App
-credentials or ids, and the project checkout never contains App credentials.
+credentials, and the project checkout never contains App credentials. Config holds App ids and key-file paths only
+for a project that names its own Apps in `adoptedApps`, never the key itself.
 
 Setup keeps a list of the GitHub Apps it made for a repository, with each App's role, name, slug and id
 and never a key, in that repository's project checkout at `.git/godspeed-forge-apps.json`, which git never

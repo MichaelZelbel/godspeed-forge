@@ -1,13 +1,13 @@
 // A project that already runs the factory joins the Forge as it is: setup changes nothing in it, reports what it
 // adopted, says when the installed build tools are not the pinned ones, and uses the Apps the owner names.
-// test cases: 4
+// test cases: 5
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupRepository, readySentence } from '../lib/setup.mjs';
 import { credentialPath, defaults, projectStatePath } from '../lib/config.mjs';
-import { ARCHON_REVISION } from '../lib/constants.mjs';
+import { ARCHON_REVISION, FACTORY_REVISION } from '../lib/constants.mjs';
 import { BROWSER_PASSED } from './home.mjs';
 import { testCase } from './cases.mjs';
 
@@ -57,7 +57,7 @@ async function named() {
   }
   return entries;
 }
-async function attempt(state, { apps, github = {} } = {}) {
+async function attempt(state, { apps, github = {}, onCall } = {}) {
   const calls = [];
   const output = [];
   const created = { begin: 0, install: 0 };
@@ -69,7 +69,9 @@ async function attempt(state, { apps, github = {} } = {}) {
   let error;
   const run = async (command, args) => {
     calls.push(`${command} ${args.join(' ')}`);
+    if (onCall) await onCall(command, args);
     if (command === 'git' && args[0] === 'remote') return { stdout: `https://github.com/${repository}.git\n` };
+    if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
     return { stdout: '' };
   };
   await setupRepository(repository, {
@@ -128,4 +130,26 @@ testCase('a different or unknown version of the build tools gets one sentence, a
   const began = await attempt(join(root, 'state-6'), { apps: await named() });
   assert(!began.output.includes(FOUND), 'the Forge began installing here, so this is not an owner\'s factory');
   assert(began.calls.some(c => c.startsWith('git clone')), 'the normal setup went on to download the factory');
+}
+
+testCase('a checkout the Forge\'s own installer was interrupted in is not adopted as the owner\'s factory when setup runs again with no records');
+{
+  await rm(checkout, { recursive: true, force: true });
+  const interrupted = await attempt(join(root, 'state-7'), {
+    apps: await named(),
+    onCall: async (command, args) => {
+      if (command === 'gh' && args[0] === 'repo') await mkdir(join(checkout, '.git'), { recursive: true });
+      if (args.some(a => /factory\.py$/.test(a))) {
+        await mkdir(join(checkout, '.factory'), { recursive: true });
+        await writeFile(join(checkout, ...FACTORY_SETTINGS), '{"source": "/half"}\n');
+        await mkdir(join(checkout, 'factory'), { recursive: true });
+        await writeFile(join(checkout, 'factory/consumer.py'), '# the installer\'s template\n');
+        await writeFile(join(checkout, 'MISSION.md'), '# Mission\n');
+        throw new Error('the installer was killed');
+      }
+    }
+  });
+  assert(interrupted.calls.some(c => /factory\.py/.test(c)), 'the installer ran: ' + interrupted.error?.message + interrupted.output.join(' | '));
+  const rerun = await attempt(join(root, 'state-8'), { apps: await named() });
+  assert(!rerun.output.includes(FOUND), 'a half-installed checkout is not an owner\'s factory');
 }
