@@ -2,7 +2,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 . test/cases.sh
-# test cases: 3
+# test cases: 5
 
 root=$(mktemp -d)
 trap 'test_cases_end; rm -rf "$root"' EXIT
@@ -12,6 +12,13 @@ cat >"$root/bin/docker" <<'EOF'
 set -eu
 if [ "$1" = build ]; then
   echo scenario-test-image
+  exit 0
+fi
+if [ "$1" = image ]; then
+  echo sha256:scenario-test-image
+  exit 0
+fi
+if [ "$1" = rmi ]; then
   exit 0
 fi
 [ "$1" = run ]
@@ -40,16 +47,16 @@ python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["remote"] == "
 [ "$(git --git-dir="$scenario_root/remote.git" symbolic-ref HEAD)" = refs/heads/main ]
 printf '%s\n' "$scenario_root" >>"$FAKE_DOCKER_LOG"
 case "$script" in
-  forge-setup.sh) echo "Forge setup command is missing" ;;
-  forge-one-release.sh) echo "Forge plan-release command is missing" ;;
-  forge-questions.sh) echo "Forge question relay is missing" ;;
+  forge-setup.sh) echo "Forge setup cannot finish offline yet: the stand-in GitHub lacks gh repo clone, gh auth and gh api, and setup downloads the factory and Archon from github.com (lib/setup.mjs)" ;;
+  forge-one-release.sh) echo "The owner's go did not publish the release" ;;
+  forge-questions.sh) echo "A build question reached the owner" >&2 ;;
   *) exit 64 ;;
 esac
 exit 1
 EOF
 chmod +x "$root/bin/docker"
 
-test_case "two scenario runs at once each fail closed, naming the missing step"
+test_case "two scenario runs at once each fail closed, naming the failing step"
 export PATH="$root/bin:$PATH"
 export FAKE_DOCKER_LOG="$root/docker.log"
 set +e
@@ -65,9 +72,9 @@ set -e
 [ "$one_status" -ne 0 ]
 [ "$two_status" -ne 0 ]
 test_case "each run reports the same three named failures and 0 of 3 pass"
-expected='FAIL forge-setup: Forge setup command is missing
-FAIL forge-one-release: Forge plan-release command is missing
-FAIL forge-questions: Forge question relay is missing
+expected='FAIL forge-setup: Forge setup cannot finish offline yet: the stand-in GitHub lacks gh repo clone, gh auth and gh api, and setup downloads the factory and Archon from github.com (lib/setup.mjs)
+FAIL forge-one-release: The owner'"'"'s go did not publish the release
+FAIL forge-questions: A build question reached the owner
 0 of 3 pass'
 [ "$(cat "$root/one.out")" = "$expected" ]
 [ "$(cat "$root/two.out")" = "$expected" ]
@@ -82,5 +89,28 @@ secret_status=$?
 set -e
 [ "$secret_status" -ne 0 ]
 grep -F "A key or token was written" "$root/secret.out" >/dev/null
+
+test_case "ordinary code that generates, passes or reads a token is not a secret"
+mkdir "$root/code"
+cat >"$root/code/ok.py" <<'EOF2'
+token = secrets.token_urlsafe(32)
+payload = {"token": token}
+headers = {"TOKEN": self.connection["token"]}
+value = {"token": os.environ["TOKEN"]}
+def check(token: str) -> None: pass
+EOF2
+( . scenarios/support/common.sh; assert_no_secrets "$root/code" ) >"$root/ok.out"
+
+test_case "real literal secrets of each kind are caught"
+for literal in '-----BEGIN RSA PRIVATE KEY-----' 'x = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"' \
+  '{"api_key": "9f8e7d6c5b4a3b2c"}' 'GITHUB_TOKEN=9f8e7d6c5b4a3b2c1d0e' "password = 's3cretValue99'"; do
+  rm -rf "$root/lit"; mkdir "$root/lit"
+  printf '%s\n' "$literal" >"$root/lit/f"
+  set +e
+  ( . scenarios/support/common.sh; assert_no_secrets "$root/lit" ) >"$root/lit.out"
+  lit_status=$?
+  set -e
+  [ "$lit_status" -ne 0 ] || { echo "not caught: $literal"; exit 1; }
+done
 
 echo "scenarios: pass"

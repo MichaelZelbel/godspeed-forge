@@ -3,9 +3,11 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 
 def die(message, status=64):
@@ -115,6 +117,10 @@ def issue(argv):
         item = find(state["issues"], parsed.number, "issue")
         item["comments"].append({"body": parsed.body})
         write_state(root, state)
+    elif operation == "close":
+        item = find(state["issues"], args[0] if args else "", "issue")
+        item["state"] = "CLOSED"
+        write_state(root, state)
     else:
         die("unsupported issue operation")
 
@@ -158,6 +164,13 @@ def pull_request(argv):
             run("git", "checkout", item["baseRefName"])
             run("git", "merge", "--no-ff", f"origin/{item['headRefName']}", "-m", f"Merge PR #{item['number']}")
             run("git", "push", "origin", item["baseRefName"])
+            item["mergeCommit"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=directory, check=True,
+                                                 capture_output=True, text=True).stdout.strip()
+        item["mergedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for number in re.findall(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", item["body"]):
+            for closed in state["issues"]:
+                if closed["number"] == int(number):
+                    closed["state"] = "CLOSED"
         item["merged"] = True
         item["state"] = "MERGED"
         write_state(root, state)
@@ -234,6 +247,38 @@ def release(argv):
         die("unsupported release operation")
 
 
+def repository_command(argv):
+    """`gh repo clone` and `gh repo view`, for the one repository the stand-in keeps."""
+    root, state = read_state()
+    if argv[:1] == ["clone"] and len(argv) >= 3:
+        repo, target = argv[1], argv[2]
+        subprocess.run(["git", "clone", "-q", state["remote"], target], check=True)
+        # The checkout names GitHub as its origin, as a real clone does; its pushes go to the stand-in's remote.
+        subprocess.run(["git", "-C", target, "remote", "set-url", "origin", f"https://github.com/{repo}"], check=True)
+        subprocess.run(["git", "-C", target, "config", "remote.origin.pushurl", state["remote"]], check=True)
+    elif argv[:1] == ["view"]:
+        print("main")
+    else:
+        die("unsupported repo operation")
+
+
+def api_command(argv):
+    """`gh api` for the few reads setup makes: the repository (with its headers), an App by slug, and the user."""
+    paths = [item for item in argv if not item.startswith("-") and item not in ("GET", "POST")]
+    root, state = read_state()
+    path = paths[0] if paths else ""
+    if path.startswith("repos/"):
+        if "-i" in argv:
+            print("HTTP/2.0 200 OK\nx-oauth-scopes: repo, workflow\n")
+        print(json.dumps({"full_name": path[6:], "default_branch": "main"}))
+    elif path.startswith("apps/"):
+        print(json.dumps({"slug": path[5:]}))
+    elif path == "user":
+        print("scenario-owner 1000" if "--jq" in argv else json.dumps({"login": "scenario-owner", "id": 1000}))
+    else:
+        die("unsupported command: api call", 1)
+
+
 def main():
     argv = sys.argv[1:]
     if argv[:2] == ["control", "init"]:
@@ -244,6 +289,15 @@ def main():
         pull_request(argv[1:])
     elif argv and argv[0] == "release":
         release(argv[1:])
+    elif argv and argv[0] == "repo":
+        repository_command(argv[1:])
+    elif argv and argv[0] == "api":
+        api_command(argv[1:])
+    elif argv[:2] == ["auth", "status"]:
+        print("Logged in to github.com as scenario-owner (stand-in)")
+    elif argv == ["serve"]:
+        import rest
+        rest.serve(state_root())
     else:
         die("unsupported command")
 
