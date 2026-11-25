@@ -68,14 +68,7 @@ assert_setup_result() {
   assert_contains /scenario/sample/MISSION.md "Keeps a sample result"
   assert_contains /scenario/sample/MISSION.md "Sample maintainers"
   assert_file /scenario/config.json
-  # The factory's own source (checked identical to its pinned download below) has code that handles tokens; what the
-  # pattern must find nothing in is every other file in the project, and the Forge's settings.
-  scan_files=$(find /scenario/sample -path /scenario/sample/.git -prune -o -path /scenario/sample/.factory -prune -o -type f -print |
-    while read -r file; do
-      cmp -s "$file" "/scenario/expected-template${file#/scenario/sample}" || printf '%s\n' "$file"
-    done)
-  # shellcheck disable=SC2086
-  assert_no_secrets $scan_files /scenario/config.json
+  assert_no_secrets /scenario/sample /scenario/config.json
   # And the Apps' keys, which setup holds in its private state, are in no file of the project at all.
   if grep -rl --exclude-dir=.factory "BEGIN RSA PRIVATE KEY\|BEGIN PRIVATE KEY" /scenario/sample >/dev/null; then
     scenario_fail "A key or token was written to scenario state"

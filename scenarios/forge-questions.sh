@@ -54,7 +54,7 @@ assert_owner_answer_landed_once() {
   gh issue view 1 --json comments > /scenario/artifacts/question.json
   assert_count /scenario/artifacts/question.json "Owner decision (question 1:" 1
   assert_contains /scenario/artifacts/question.json "Show it on the first screen, right away."
-  if gh issue view 2 --json comments | grep -F "Owner decision" >/dev/null; then
+  if gh issue view 2 --json comments | grep -iF "owner decision" >/dev/null; then
     scenario_fail "The owner answer landed on the wrong question"
   fi
 }
