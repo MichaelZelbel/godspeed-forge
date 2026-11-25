@@ -1,0 +1,164 @@
+name: drill
+# The standstill drill (scripts/drill-standstill.sh) on a throwaway machine: a GitHub-hosted Ubuntu runner is one, fresh for
+# every job, with systemd and root through sudo, and the drill shadows codex and gh, so it needs no key and no secret.
+#
+# Why here (2026-11-25): the Forge 0.3.3's acceptance (every recorded standstill reaches the repair program within 60 minutes,
+# and the fast drill passes on a throwaway machine and fails on 0.3.1 for the release-first case) could only be seen on such a
+# machine, and the builder had none, so the factory's loop reviewer parked #175 as "needs owner". Now every pull request shows it.
+#
+# Jobs, the last two each on its own fresh machine:
+#   commit       names the one commit under test: the pull request's head, or the `commit` input of a hand-started run (a sha
+#                or a branch, read once here, so a branch that moves cannot give the two jobs two different commits).
+#   drill        installs the Forge from the archive of that commit with the public install line, checks that what was
+#                installed is that commit, then runs the fast drill of both scenarios (beta31 and release-first): each must
+#                pass all five of its checks.
+#   drill-0-3-1  installs the Forge 0.3.1 (FORGE_VERSION=v0.3.1) and runs the release-first scenario with the same drill: all five
+#                checks must FAIL at the check (not a crash): the release clock of 0.3.1 starts only once every ticket is done.
+# Each job writes one line per result into its summary.
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'The commit to drill (a sha or branch of this repository); empty drills the commit this run is on'
+        required: false
+        default: ''
+concurrency:
+  group: drill-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  commit:
+    name: the commit under test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.which.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - id: which
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  drill:
+    name: drill (both scenarios pass)
+    needs: commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SHA: ${{ needs.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.commit.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - name: The archive of the commit under test, as GitHub would serve it
+        run: |
+          set -eu
+          [ "$(git rev-parse HEAD)" = "$SHA" ] || { echo "the checkout is not $SHA"; exit 1; }
+          git archive --format=tar.gz --prefix="godspeed-forge-$SHA/" -o "$RUNNER_TEMP/forge.tar.gz" HEAD
+      # `drill-standstill.sh run <archive>` is these two steps, install and fast; split, so that what was installed is checked
+      - name: Install with the public install line, from that archive
+        run: |
+          set -o pipefail
+          # CLAUDE_INSTALL_ALLOW_SUDO: Claude Code's own installer refuses to run under sudo without it (a server's root login has
+          # no sudo; the runner's root does), and the install line installs Claude Code as on any server
+          sudo env "PATH=$PATH" CLAUDE_INSTALL_ALLOW_SUDO=1 FORGE_DRILL_THROWAWAY=yes bash scripts/drill-standstill.sh install "file://$RUNNER_TEMP/forge.tar.gz" 2>&1 | tee "$RUNNER_TEMP/drill.log"
+      - name: The Forge installed is the commit under test
+        run: |
+          set -eu
+          # the whole add-on as the install copies it (bin, lib, skills, the driver without its tests, and VERSION): the driver
+          # the drill installs comes from this copy, and the drill's own scripts run from this checkout
+          addon=/usr/local/lib/godspeed-forge
+          for d in bin lib skills; do sudo diff -r "$d" "$addon/$d" || { echo "the installed $d is not the one of ${SHA:0:7}"; exit 1; }; done
+          sudo diff -r --exclude=test driver "$addon/driver" || { echo "the installed driver is not the one of ${SHA:0:7}"; exit 1; }
+          sudo cmp VERSION "$addon/VERSION"
+          echo "The installed Forge is the one of ${SHA:0:7} (its add-on and driver are the same files)." | tee -a "$RUNNER_TEMP/drill.log"
+      - name: The fast drill of both scenarios
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" bash scripts/drill-standstill.sh fast 2>&1 | tee -a "$RUNNER_TEMP/drill.log"
+          # passed only with the evidence: each scenario run once, each with its own five checks passed, none failed
+          log="$RUNNER_TEMP/drill.log"
+          for sc in beta31 release-first; do
+            [ "$(grep -c "^=== The fast drill, scenario $sc ===" "$log")" -eq 1 ] || { echo "the drill did not run the scenario $sc once"; exit 1; }
+          done
+          [ "$(grep -c '^=== The fast drill, scenario ' "$log")" -eq 2 ] || { echo "the drill ran other scenarios too"; exit 1; }
+          awk '/^=== The fast drill, scenario /{sc=$6} /^PASS: /{n[sc]++} END{exit !(n["beta31"]==5 && n["release-first"]==5)}' "$log" || { echo "the drill did not pass five checks in each scenario"; exit 1; }
+          ! grep -q '^FAIL: ' "$log" || { echo "a check of the drill failed"; exit 1; }
+          [ "$(grep -c '^THE DRILL PASSED' "$log")" -eq 2 ] && grep -q '^ALL FAST DRILLS PASSED' "$log" || { echo "the drill did not say it passed"; exit 1; }
+      - name: One line per result
+        if: always()
+        run: |
+          log="$RUNNER_TEMP/drill.log"
+          {
+            echo "### The fast standstill drill on ${SHA:0:7}"
+            if [ -f "$log" ]; then
+              grep -E "^The installed Forge is the one of" "$log" | sed 's/^/- /'
+              grep -q "^The installed Forge is the one of" "$log" || echo "- the Forge under test was not installed, or not shown to be"
+              awk '/^=== The fast drill, scenario /{sc=$6} /^(PASS|FAIL): /{print "- " sc ": " $0} /^THE DRILL (PASSED|FAILED)/{print "- **" sc ": " $0 "**"} /^(ALL FAST DRILLS PASSED|A FAST DRILL FAILED)/{print "- **" $0 "**"}' "$log"
+              grep -q '^ALL FAST DRILLS PASSED' "$log" || { echo "- the drill did not pass; its last lines:"; tail -n 15 "$log" | sed 's/^/    /'; }
+            else
+              echo "- the drill did not start"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  drill-0-3-1:
+    name: drill (release-first fails on 0.3.1)
+    needs: commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.commit.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - name: Install the Forge 0.3.1 with the public install line
+        run: |
+          set -eu
+          sudo env "PATH=$PATH" CLAUDE_INSTALL_ALLOW_SUDO=1 FORGE_DRILL_THROWAWAY=yes FORGE_VERSION=v0.3.1 bash scripts/drill-standstill.sh install
+          [ "$(sudo cat /usr/local/lib/godspeed-forge/VERSION)" = "0.3.1" ] || { echo "the Forge installed is not 0.3.1"; exit 1; }
+      - name: The release-first drill fails on 0.3.1, at the check
+        run: |
+          set +e
+          sudo env "PATH=$PATH" bash scripts/drill-standstill.sh fast release-first > "$RUNNER_TEMP/drill.log" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/drill.log"
+          log="$RUNNER_TEMP/drill.log"
+          # It must fail, at the check, for 0.3.1's reason: its release clock never starts while a ticket is open, so no acting
+          # run, no other AI, no repair and no notice come, and all five checks fail. A crash before the check would also exit
+          # non-zero, and that proves nothing about 0.3.1.
+          [ "$code" -ne 0 ] || { echo "the release-first drill passed on 0.3.1, so it does not tell 0.3.1 from 0.3.3"; exit 1; }
+          [ "$(grep -c '^=== The fast drill, scenario release-first ===' "$log")" -eq 1 ] && [ "$(grep -c '^=== The fast drill, scenario ' "$log")" -eq 1 ] || { echo "the drill did not run the release-first scenario, alone"; exit 1; }
+          grep -q '^minute 0 = ' "$log" || { echo "the drill stopped before its check (exit $code), so 0.3.1 was not judged"; exit 1; }
+          [ "$(grep -c '^FAIL: ' "$log")" -eq 5 ] && ! grep -q '^PASS: ' "$log" || { echo "not all five checks failed, so 0.3.1 failed for another reason than its release clock"; exit 1; }
+          grep -q '^THE DRILL FAILED' "$log" || { echo "the drill exited $code without its check saying it failed"; exit 1; }
+          echo "The release-first drill fails on 0.3.1 at its check, all five checks, as it should."
+      - name: One line per result
+        if: always()
+        run: |
+          log="$RUNNER_TEMP/drill.log"
+          {
+            echo "### The release-first drill on the Forge 0.3.1 (it must fail)"
+            echo "- installed: $(sudo cat /usr/local/lib/godspeed-forge/VERSION 2>/dev/null || echo nothing)"
+            if [ -f "$log" ]; then
+              grep -E '^(PASS|FAIL): ' "$log" | sed 's/^/- release-first on 0.3.1: /'
+              if [ "$(grep -c '^FAIL: ' "$log")" -eq 5 ] && ! grep -q '^PASS: ' "$log" && grep -q '^THE DRILL FAILED' "$log"; then
+                echo "- **release-first on 0.3.1: THE DRILL FAILED on all five checks, as it must**"
+              else
+                echo "- **release-first on 0.3.1 did not fail as it must**; its last lines:"; tail -n 15 "$log" | sed 's/^/    /'
+              fi
+            else
+              echo "- the drill did not start (the install of 0.3.1 failed)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -29,6 +29,7 @@ export const KEYS = {
   stagingDir: { key: "releases.staging_dir", dflt: "", meaning: "where candidates and the pin live on that machine; default <godspeed_dir>-staging" },
   healthUrl: { key: "releases.health_url", env: "FD_HEALTH_URL", dflt: "http://127.0.0.1:47831/health", meaning: "the product's health address as that machine reads it" },
   scenariosWorkflow: { key: "releases.scenarios_workflow", env: "FD_SCENARIOS_WORKFLOW", dflt: "scenarios.yml", meaning: "the product's proving workflow file" },
+  imageWorkflow: { key: "releases.image_workflow", env: "IMAGE_WORKFLOW", dflt: "", meaning: "the workflow that builds the server image; empty: the stage step's default (v2-integrated.yml)" },
   timezone: { key: "releases.timezone", dflt: "UTC", meaning: "the time zone the records' days are counted in" },
   gitEmail: { key: "releases.git_email", dflt: "release-step@users.noreply.github.com", meaning: "the e-mail the release step's record commits carry" },
   serverIsThisMachine: { key: "releases.server_is_this_machine", dflt: false, meaning: "true when the machine the product is installed on first is this one: its commands then run locally, not over ssh" },

@@ -3,8 +3,11 @@
 // (process.md, section 7, conditions 1 and 3; roles/release.md), and records what it found in
 // releases/<release>/staging.json.
 //
-//   node staging-check.mjs <owner/repo> <version> [--release <id>] [--tell] [--dry-run]
+//   node staging-check.mjs <owner/repo> <version> [--release <id>] [--tell [--later <n>]] [--dry-run]
 //   node staging-check.mjs --open [--tell] [<owner/repo>]
+//
+// --later <n>: the candidate's tests before the go left out n slow ones that run once after it is public (the stage step's
+// short run, 25 November 2026); the question says so, so "every scenario passed" is not read as "every test ran".
 //
 // All read now: the notebook on the server still runs <version> (its health and its version file),
 // healthy, as the same instance it was installed as, with a scheduler heartbeat less than 15 minutes
@@ -44,7 +47,7 @@ export const THIS_FILE = fileURLToPath(import.meta.url);
 export const MINUTE = 60 * 1000;
 
 export const USAGE = `usage:
-  node staging-check.mjs <owner/repo> <version> [--release <id>] [--tell] [--dry-run]
+  node staging-check.mjs <owner/repo> <version> [--release <id>] [--tell [--later <n>]] [--dry-run]
   node staging-check.mjs --open [--tell] [<owner/repo>]
   (the self-test is in the Forge's test folder)`;
 
@@ -89,7 +92,7 @@ export function scenarioWords(sc) {
   return `the scenarios could not be read (${sc.problem})`;
 }
 
-export async function stagingCheck({ ownerRepo, version, release, dryRun, env, log }) {
+export async function stagingCheck({ ownerRepo, version, release, dryRun, env, log, later = 0 }) {
   log(`Checking ${version} of ${ownerRepo} on your server (${G.SERVER}) and its scenarios${dryRun ? ". This is a dry run: it makes every read and records nothing." : "."}`);
   const records = new G.Records(env);
   const id = records.findRelease(ownerRepo, version, release);
@@ -154,6 +157,9 @@ export async function stagingCheck({ ownerRepo, version, release, dryRun, env, l
   const check = { at: G.isoOf(Date.now()), serverClock: server.now, result, checked: v.checked, failures: v.failures, scenarios: sc.result, ...(standing ? { nonBlocking: split.nonBlocking } : {}) };
   if (ai) check.addonAi = ai;
   const next = { ...staging, lastCheck: check };
+  // How many slow tests the candidate's run before the go left for after it (the stage step's --later): kept, so a later check
+  // that asks him (the morning one) says it too.
+  if (Number(later) > 0) next.later = Number(later);
   // What could not be read leaves the last known scenarios as they were.
   if (sc.result !== "unreadable") next.scenarios = { ...sc, seenAt: check.at };
   let said;
@@ -185,11 +191,11 @@ export async function stagingCheck({ ownerRepo, version, release, dryRun, env, l
 }
 
 // One candidate, then the one message if one is due.
-export async function checkAndTell({ ownerRepo, version, release, tell, dryRun, env, log }) {
+export async function checkAndTell({ ownerRepo, version, release, tell, dryRun, env, log, later = 0 }) {
   let code;
   let id = release;
   try {
-    const r = await stagingCheck({ ownerRepo, version, release, dryRun, env, log });
+    const r = await stagingCheck({ ownerRepo, version, release, dryRun, env, log, later });
     code = EXIT[r.result];
     id = r.release;
   } catch (e) {
@@ -200,7 +206,7 @@ export async function checkAndTell({ ownerRepo, version, release, tell, dryRun, 
   if (tell && !dryRun) {
     const records = new G.Records(env);
     id = id || records.findRelease(ownerRepo, version, null);
-    if (!(await tellOnce({ records, id, version, env, log })) && (code === 0 || code === 3)) code = 1;
+    if (!(await tellOnce({ records, id, version, env, log, later })) && (code === 0 || code === 3)) code = 1;
   }
   return code;
 }
@@ -236,7 +242,14 @@ export async function checkOpen({ ownerRepo, tell = false, env, log }) {
 // (told), and only a message that went out is marked, so one that could not be sent is tried again
 // by the next check. A version he already said go for is not asked about. Returns false only when a
 // message was due and could not be sent.
-export async function tellOnce({ records, id, version, env, log }) {
+// The sentence about the slow tests that run after the go (later: how many), or "".
+export const laterWords = (later) => {
+  const n = Number(later) || 0;
+  if (n <= 0) return "";
+  return ` ${n === 1 ? "One slow test runs" : `${n === 2 ? "Two" : n} slow tests run`} once right after it is public; a failure there is filed as a bug and holds nothing back.`;
+};
+
+export async function tellOnce({ records, id, version, env, log, later = 0 }) {
   const staging = records.json(G.stagingPath(id));
   if (!staging || staging.version !== version) return true;
   const told = staging.told || {};
@@ -261,7 +274,7 @@ export async function tellOnce({ records, id, version, env, log }) {
     const defaults = ((records.json(`releases/${id}/defaults-applied.json`) || {}).applied || [])
       .filter((a) => a && a.default).map((a) => `${String(a.heading || `#${a.issue}`).replace(/\s*\(#\d+\)\s*$/, "")}: ${a.default}`);
     message = {
-      summary: `${version} is on your server, healthy, and every scenario passed.${title ? ` What changed: ${title}.` : ""}${moved.length ? ` Moved to the next release: ${moved.join("; ")}.` : ""}${defaults.length ? ` Decided by default because no answer came in time: ${defaults.join("; ")}.` : ""} Shall I make it public?`,
+      summary: `${version} is on your server, healthy, and every scenario passed.${title ? ` What changed: ${title}.` : ""}${moved.length ? ` Moved to the next release: ${moved.join("; ")}.` : ""}${defaults.length ? ` Decided by default because no answer came in time: ${defaults.join("; ")}.` : ""}${laterWords(Number(later) || Number(staging.later) || 0)} Shall I make it public?`,
       status: "ready for your go",
       act: 'Answer "go", "go, and these later" or "stop, these first".',
     };
@@ -293,13 +306,13 @@ export async function tellOnce({ records, id, version, env, log }) {
 export async function main(argv, env = process.env) {
   let args;
   try {
-    args = parseArgs(argv, new Set(["release"]), new Set());
+    args = parseArgs(argv, new Set(["release", "later"]), new Set());
   } catch (e) {
     console.error(`${e.message}\n${USAGE}`);
     return 2;
   }
   const { pos, opt } = args;
-  const unknown = Object.keys(opt).filter((k) => !["release", "dry-run", "open", "tell"].includes(k));
+  const unknown = Object.keys(opt).filter((k) => !["release", "dry-run", "open", "tell", "later"].includes(k));
   if (unknown.length) {
     console.error(`staging-check does not know the option --${unknown[0]}.\n${USAGE}`);
     return 2;
@@ -323,7 +336,11 @@ export async function main(argv, env = process.env) {
       console.error(`${version} does not look like a version (2.0.0-beta.8).\n${USAGE}`);
       return 2;
     }
-    return await checkAndTell({ ownerRepo, version, release: typeof opt.release === "string" ? opt.release : null, tell: !!opt.tell, dryRun: !!opt["dry-run"], env, log });
+    if ("later" in opt && !/^\d+$/.test(String(opt.later))) {
+      console.error(`--later needs the number of slow tests that run after the go.\n${USAGE}`);
+      return 2;
+    }
+    return await checkAndTell({ ownerRepo, version, release: typeof opt.release === "string" ? opt.release : null, tell: !!opt.tell, dryRun: !!opt["dry-run"], env, log, later: Number(opt.later || 0) });
   } catch (e) {
     if (e instanceof R.Refused) {
       console.error(e.message);
