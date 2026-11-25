@@ -45,12 +45,26 @@ jobs:
           sha=$(git rev-parse HEAD)
           echo "SHA=$sha" >> "$GITHUB_ENV"
           git archive --format=tar.gz --prefix="godspeed-forge-$sha/" -o "$RUNNER_TEMP/forge.tar.gz" HEAD
-      - name: Install with the public install line, then the fast drill of both scenarios
+      # `drill-standstill.sh run <archive>` is these two steps, install and fast; split, so that what was installed is checked
+      - name: Install with the public install line, from that archive
         run: |
           set -o pipefail
           # CLAUDE_INSTALL_ALLOW_SUDO: Claude Code's own installer refuses to run under sudo without it (a server's root login has
           # no sudo; the runner's root does), and the install line installs Claude Code as on any server
-          sudo env "PATH=$PATH" CLAUDE_INSTALL_ALLOW_SUDO=1 FORGE_DRILL_THROWAWAY=yes bash scripts/drill-standstill.sh run "file://$RUNNER_TEMP/forge.tar.gz" 2>&1 | tee "$RUNNER_TEMP/drill.log"
+          sudo env "PATH=$PATH" CLAUDE_INSTALL_ALLOW_SUDO=1 FORGE_DRILL_THROWAWAY=yes bash scripts/drill-standstill.sh install "file://$RUNNER_TEMP/forge.tar.gz" 2>&1 | tee "$RUNNER_TEMP/drill.log"
+      - name: The Forge installed is the commit under test
+        run: |
+          set -eu
+          addon=/usr/local/lib/godspeed-forge
+          # the driver the drill installs comes from the add-on's copy (the drill's own scripts run from this checkout)
+          for f in VERSION driver/driver.mjs driver/standstill.mjs driver/deadman/deadman.mjs driver/steps/release/auto-stage.mjs; do
+            sudo cmp "$f" "$addon/$f" || { echo "the installed $f is not the one of ${SHA:0:7}"; exit 1; }
+          done
+          echo "The installed Forge's driver is the one of ${SHA:0:7}." | tee -a "$RUNNER_TEMP/drill.log"
+      - name: The fast drill of both scenarios
+        run: |
+          set -o pipefail
+          sudo env "PATH=$PATH" bash scripts/drill-standstill.sh fast 2>&1 | tee -a "$RUNNER_TEMP/drill.log"
       - name: One line per result
         if: always()
         run: |
@@ -58,6 +72,8 @@ jobs:
           {
             echo "### The fast standstill drill on ${SHA:0:7}"
             if [ -f "$log" ]; then
+              grep -E "^The installed Forge's driver is the one of" "$log" | sed 's/^/- /'
+              grep -q "^The installed Forge's driver is the one of" "$log" || echo "- the Forge under test was not installed, or not checked"
               awk '/^=== The fast drill, scenario /{sc=$6} /^(PASS|FAIL): /{print "- " sc ": " $0} /^THE DRILL (PASSED|FAILED)/{print "- **" sc ": " $0 "**"} /^(ALL FAST DRILLS PASSED|A FAST DRILL FAILED)/{print "- **" $0 "**"}' "$log"
               grep -q '^ALL FAST DRILLS PASSED' "$log" || { echo "- the drill did not pass; its last lines:"; tail -n 15 "$log" | sed 's/^/    /'; }
             else
@@ -78,7 +94,10 @@ jobs:
         with:
           node-version: '22.19.0'
       - name: Install the Forge 0.3.1 with the public install line
-        run: sudo env "PATH=$PATH" CLAUDE_INSTALL_ALLOW_SUDO=1 FORGE_DRILL_THROWAWAY=yes FORGE_VERSION=v0.3.1 bash scripts/drill-standstill.sh install
+        run: |
+          set -eu
+          sudo env "PATH=$PATH" CLAUDE_INSTALL_ALLOW_SUDO=1 FORGE_DRILL_THROWAWAY=yes FORGE_VERSION=v0.3.1 bash scripts/drill-standstill.sh install
+          [ "$(sudo cat /usr/local/lib/godspeed-forge/VERSION)" = "0.3.1" ] || { echo "the Forge installed is not 0.3.1"; exit 1; }
       - name: The release-first drill fails on 0.3.1, at the check
         run: |
           set +e
@@ -99,6 +118,7 @@ jobs:
           log="$RUNNER_TEMP/drill.log"
           {
             echo "### The release-first drill on the Forge 0.3.1 (it must fail)"
+            echo "- installed: $(sudo cat /usr/local/lib/godspeed-forge/VERSION 2>/dev/null || echo nothing)"
             if [ -f "$log" ]; then
               grep -E '^(PASS|FAIL): ' "$log" | sed 's/^/- release-first on 0.3.1: /'
               grep -q '^THE DRILL FAILED' "$log" && echo "- **release-first on 0.3.1: THE DRILL FAILED, as it must**" || { echo "- **release-first on 0.3.1 did not fail at its check**; its last lines:"; tail -n 15 "$log" | sed 's/^/    /'; }
