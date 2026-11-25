@@ -21,7 +21,7 @@ import { ARCHON_REVISION, ARCHON_SOURCE, FACTORY_REPOSITORY, FACTORY_REVISION } 
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import './home.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 199
+// test cases: 202
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');

@@ -2,7 +2,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 . test/cases.sh
-# test cases: 3
+# test cases: 5
 
 root=$(mktemp -d)
 trap 'test_cases_end; rm -rf "$root"' EXIT
@@ -89,5 +89,28 @@ secret_status=$?
 set -e
 [ "$secret_status" -ne 0 ]
 grep -F "A key or token was written" "$root/secret.out" >/dev/null
+
+test_case "ordinary code that generates, passes or reads a token is not a secret"
+mkdir "$root/code"
+cat >"$root/code/ok.py" <<'EOF2'
+token = secrets.token_urlsafe(32)
+payload = {"token": token}
+headers = {"TOKEN": self.connection["token"]}
+value = {"token": os.environ["TOKEN"]}
+def check(token: str) -> None: pass
+EOF2
+( . scenarios/support/common.sh; assert_no_secrets "$root/code" ) >"$root/ok.out"
+
+test_case "real literal secrets of each kind are caught"
+for literal in '-----BEGIN RSA PRIVATE KEY-----' 'x = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"' \
+  '{"api_key": "9f8e7d6c5b4a3b2c"}' 'GITHUB_TOKEN=9f8e7d6c5b4a3b2c1d0e' "password = 's3cretValue99'"; do
+  rm -rf "$root/lit"; mkdir "$root/lit"
+  printf '%s\n' "$literal" >"$root/lit/f"
+  set +e
+  ( . scenarios/support/common.sh; assert_no_secrets "$root/lit" ) >"$root/lit.out"
+  lit_status=$?
+  set -e
+  [ "$lit_status" -ne 0 ] || { echo "not caught: $literal"; exit 1; }
+done
 
 echo "scenarios: pass"

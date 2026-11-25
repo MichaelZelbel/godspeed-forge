@@ -19,8 +19,21 @@ assert_count() {
   [ "$actual" -eq "$3" ] || scenario_fail "Expected $3 occurrences in $1, found $actual"
 }
 
+# Fails when any file under the paths holds a secret VALUE: a private-key marker, a literal key or token in a
+# recognised format, or a literal (quoted, or unquoted in an env-style line) assigned to a secret-like field that
+# is not an obvious placeholder. Names alone do not count: code that generates, passes or reads a token holds no
+# token. Every file is scanned; nothing is excluded.
 assert_no_secrets() {
-  if grep -Eri '(api[_-]?key|token|secret)["'\''[:space:]]*[:=][[:space:]]*["'\'']?[^"'\''[:space:]}]+' "$@" >/dev/null; then
+  secret_hits=$(
+    {
+      grep -Er -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
+        -e '\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}' -e '\bgithub_pat_[A-Za-z0-9_]{30,}' \
+        -e '\bsk-[A-Za-z0-9_-]{20,}' -e '\bAKIA[0-9A-Z]{16}\b' -e '\bxox[abprs]-[A-Za-z0-9-]{10,}' "$@" || true
+      grep -Eri -e '(api[_-]?key|token|secret|password|passwd)[A-Za-z0-9_-]*["'\'']?[[:space:]]*[:=][[:space:]]*["'\''][^"'\''[:space:]$<{(]{6,}["'\'']' "$@" || true
+      grep -Eri -e '^[[:space:]]*(export[[:space:]]+)?[A-Za-z0-9_]*(api[_-]?key|token|secret|password|passwd)[A-Za-z0-9_]*=[A-Za-z0-9_+/=.-]{12,}[[:space:]]*$' "$@" || true
+    } | grep -Eiv 'example|placeholder|changeme|change-me|your[_-]|dummy|redacted|xxxx|<[a-z_ -]+>|\.\.\.|sentinel' || true
+  )
+  if [ -n "$secret_hits" ]; then
     scenario_fail "A key or token was written to scenario state"
   fi
 }
