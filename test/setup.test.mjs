@@ -21,7 +21,7 @@ import { ARCHON_REVISION, ARCHON_SOURCE, FACTORY_REPOSITORY, FACTORY_REVISION } 
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import './home.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 199
+// test cases: 202
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -248,6 +248,17 @@ for (const [answers, action, retries] of [
   assert.equal(queue.length, 0);
   assert.deepEqual(asked, Array(retries + 1).fill('Type yes if owner is a GitHub organization, or no if it is your personal account: '));
   assert.deepEqual(said, Array(retries).fill('Setup expects yes or no here, so it asks again.'));
+}
+
+for (const [env, base] of [[{}, 'https://api.github.com'], [{ FORGE_GITHUB_API_URL: '' }, 'https://api.github.com'], [{ FORGE_GITHUB_API_URL: 'http://127.0.0.1:9/' }, 'http://127.0.0.1:9']]) {
+  testCase(`the GitHub adapter asks ${base} when FORGE_GITHUB_API_URL is ${JSON.stringify(env.FORGE_GITHUB_API_URL)}`);
+  const asked = [];
+  const github = createGithubAdapter({
+    input: { question: async () => 'yes' }, env,
+    fetch: async url => { asked.push(url); return { status: 200, ok: true, json: async () => ({}) }; }
+  });
+  await github.exchange('a code');
+  assert.deepEqual(asked, [`${base}/app-manifests/a%20code/conversions`]);
 }
 
 testCase('a typed y then yes at the organization question opens the organization App page');

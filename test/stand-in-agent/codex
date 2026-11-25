@@ -6,7 +6,14 @@ if [ "${1-}" = "login" ] && [ "${2-}" = "status" ] && [ "$#" -eq 2 ]; then
   exit 0
 fi
 
-if [ "${1-}" != "exec" ] || [ "$#" -ne 2 ]; then
+# `exec <request file>`, or `exec --sandbox <mode> <request text>` as the Forge's setup asks.
+request_file=
+request_text=
+if [ "${1-}" = "exec" ] && [ "$#" -eq 2 ]; then
+  request_file=$2
+elif [ "${1-}" = "exec" ] && [ "${2-}" = "--sandbox" ] && [ "$#" -eq 4 ]; then
+  request_text=$4
+else
   echo "stand-in codex: unsupported command" >&2
   exit 64
 fi
@@ -17,17 +24,25 @@ if [ ! -d "$STANDIN_AGENT_FIXTURE" ]; then
   echo "stand-in codex: fixture directory does not exist" >&2
   exit 66
 fi
-if [ ! -f "$2" ]; then
+if [ -n "$request_file" ] && [ ! -f "$request_file" ]; then
   echo "stand-in codex: request file does not exist" >&2
   exit 66
 fi
 
 mkdir -p "$STANDIN_AGENT_TRANSCRIPT"
 printf '%s\n' "$@" >"$STANDIN_AGENT_TRANSCRIPT/argv"
-cp "$2" "$STANDIN_AGENT_TRANSCRIPT/request"
+if [ -n "$request_file" ]; then
+  cp "$request_file" "$STANDIN_AGENT_TRANSCRIPT/request"
+else
+  printf '%s\n' "$request_text" >"$STANDIN_AGENT_TRANSCRIPT/request"
+fi
 
 if [ -f "$STANDIN_AGENT_FIXTURE/change.patch" ]; then
   git apply "$STANDIN_AGENT_FIXTURE/change.patch"
+fi
+# A fixture's `run` script does what a coding agent would do in the project (writes files); it runs where the agent runs.
+if [ -f "$STANDIN_AGENT_FIXTURE/run" ]; then
+  bash "$STANDIN_AGENT_FIXTURE/run"
 fi
 if [ -f "$STANDIN_AGENT_FIXTURE/response" ]; then
   cat "$STANDIN_AGENT_FIXTURE/response"
