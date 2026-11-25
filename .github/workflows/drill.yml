@@ -84,10 +84,13 @@ jobs:
         run: |
           set -o pipefail
           sudo env "PATH=$PATH" bash scripts/drill-standstill.sh fast 2>&1 | tee -a "$RUNNER_TEMP/drill.log"
-          # passed only with the evidence: both scenarios run, each with its five checks passed, none failed
+          # passed only with the evidence: each scenario run once, each with its own five checks passed, none failed
           log="$RUNNER_TEMP/drill.log"
-          [ "$(grep -c '^=== The fast drill, scenario ' "$log")" -eq 2 ] || { echo "the drill did not run both scenarios"; exit 1; }
-          [ "$(grep -c '^PASS: ' "$log")" -eq 10 ] || { echo "the drill did not pass five checks in each scenario"; exit 1; }
+          for sc in beta31 release-first; do
+            [ "$(grep -c "^=== The fast drill, scenario $sc ===" "$log")" -eq 1 ] || { echo "the drill did not run the scenario $sc once"; exit 1; }
+          done
+          [ "$(grep -c '^=== The fast drill, scenario ' "$log")" -eq 2 ] || { echo "the drill ran other scenarios too"; exit 1; }
+          awk '/^=== The fast drill, scenario /{sc=$6} /^PASS: /{n[sc]++} END{exit !(n["beta31"]==5 && n["release-first"]==5)}' "$log" || { echo "the drill did not pass five checks in each scenario"; exit 1; }
           ! grep -q '^FAIL: ' "$log" || { echo "a check of the drill failed"; exit 1; }
           [ "$(grep -c '^THE DRILL PASSED' "$log")" -eq 2 ] && grep -q '^ALL FAST DRILLS PASSED' "$log" || { echo "the drill did not say it passed"; exit 1; }
       - name: One line per result
@@ -136,6 +139,7 @@ jobs:
           # run, no other AI, no repair and no notice come, and all five checks fail. A crash before the check would also exit
           # non-zero, and that proves nothing about 0.3.1.
           [ "$code" -ne 0 ] || { echo "the release-first drill passed on 0.3.1, so it does not tell 0.3.1 from 0.3.3"; exit 1; }
+          [ "$(grep -c '^=== The fast drill, scenario release-first ===' "$log")" -eq 1 ] && [ "$(grep -c '^=== The fast drill, scenario ' "$log")" -eq 1 ] || { echo "the drill did not run the release-first scenario, alone"; exit 1; }
           grep -q '^minute 0 = ' "$log" || { echo "the drill stopped before its check (exit $code), so 0.3.1 was not judged"; exit 1; }
           [ "$(grep -c '^FAIL: ' "$log")" -eq 5 ] && ! grep -q '^PASS: ' "$log" || { echo "not all five checks failed, so 0.3.1 failed for another reason than its release clock"; exit 1; }
           grep -q '^THE DRILL FAILED' "$log" || { echo "the drill exited $code without its check saying it failed"; exit 1; }
