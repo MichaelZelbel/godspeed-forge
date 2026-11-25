@@ -7,7 +7,7 @@
 // as on the server, and GitHub takes what it took that night or the times the task names: a server image 18 minutes, the
 // Windows setup 4, a required check 18 on a pull request and 8 on main, the freeze 1, the short tests 6 with two AI-judged
 // jobs failing and 4 more for their one rerun (10 in all), the install on the server 8 beside them. No network, no AI money.
-// test cases: 17
+// test cases: 18
 import "./settings-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -556,6 +556,20 @@ test("review fix: a check run once more never starts a paid scenario run or a sc
     { id: 6, status: "in_progress", conclusion: null, event: "push", path: ".github/workflows/windows-setup.yml", name: "windows setup" },
   ];
   assert.deepEqual(A.rerunnable(runs).map((r) => r.id), [1, 4]);
+});
+
+test("review fix (round 2): a check run once more that GitHub refuses is a refusal, so it is asked again and never counted", async () => {
+  const runs = [
+    { id: 11, status: "completed", conclusion: "failure", event: "pull_request", path: ".github/workflows/required.yml", name: "required" },
+    { id: 12, status: "completed", conclusion: "failure", event: "push", path: ".github/workflows/scenarios.yml", name: "scenarios" },
+    { id: 13, status: "completed", conclusion: "failure", event: "push", path: ".github/workflows/v2-integrated.yml", name: "Integrated Godspeed v2" },
+  ];
+  const asked = [];
+  const answer = (status) => async (method, p) => { asked.push(p); return { ok: status < 300, status, json: {} }; };
+  assert.equal(await A.rerunFailedRuns(answer(201), REPO, runs), 2);
+  assert.deepEqual(asked, [`/repos/${REPO}/actions/runs/11/rerun-failed-jobs`, `/repos/${REPO}/actions/runs/13/rerun-failed-jobs`], "never the paid scenarios");
+  await assert.rejects(A.rerunFailedRuns(answer(403), REPO, runs), /GitHub said 403 to running the failed jobs of run 11 again/);
+  assert.equal(await A.rerunFailedRuns(answer(403), REPO, [runs[1]]), 0, "nothing a check may run again: nothing asked, nothing refused");
 });
 
 test("near the end: every open ticket has a pull request of this repository open, named or closing", () => {

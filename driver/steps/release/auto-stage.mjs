@@ -1858,6 +1858,19 @@ export function rerunnable(runs) {
   return (runs || []).filter((x) => x && x.status === "completed" && !["success", "skipped", "neutral"].includes(x.conclusion) && x.event !== "schedule" && !String(x.path || "").endsWith(`/${G.SCENARIOS_WORKFLOW}`) && x.name !== "scenarios");
 }
 
+// Runs the failed jobs of each run a check run once more may start (rerunnable) once more. A request GitHub refuses is a refusal
+// of the whole: the caller writes the run once more down only when every request was taken, so a refused one is asked again by
+// the next read instead of being counted (the second round of the review, 2026-11-25). -> how many were started
+export async function rerunFailedRuns(api, repo, runs) {
+  let n = 0;
+  for (const r of rerunnable(runs)) {
+    const q = await api("POST", `/repos/${repo}/actions/runs/${r.id}/rerun-failed-jobs`, {});
+    if (!(q.ok || q.status === 201)) R.refuse(`GitHub said ${q.status} to running the failed jobs of run ${r.id} again, so the check is asked again by the next read.`);
+    n++;
+  }
+  return n;
+}
+
 // How far a run is from its jobs: {done, total} of the jobs that are not skipped.
 export function progressOf(jobs) {
   const real = (jobs || []).filter((j) => j && j.conclusion !== "skipped");
@@ -1906,15 +1919,7 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand, page })
     // The required check of one commit: passed, running, failed or none.
     checkState: async (sha) => requiredState((await J(`/repos/${cfg.repo}/commits/${sha}/check-runs?check_name=required&filter=latest`)).check_runs),
     // The failed workflow runs of one commit are run once more (their failed jobs only). -> how many
-    rerunChecks: async (sha) => {
-      const runs = (await J(`/repos/${cfg.repo}/actions/runs?head_sha=${sha}&per_page=50`)).workflow_runs || [];
-      let n = 0;
-      for (const r of rerunnable(runs)) {
-        const q = await api("POST", `/repos/${cfg.repo}/actions/runs/${r.id}/rerun-failed-jobs`, {});
-        if (q.ok || q.status === 201) n++;
-      }
-      return n;
-    },
+    rerunChecks: async (sha) => rerunFailedRuns(api, cfg.repo, (await J(`/repos/${cfg.repo}/actions/runs?head_sha=${sha}&per_page=50`)).workflow_runs || []),
     // Whether the server image of every edition (in the registry) or the Windows setup (GitHub's artifact) of a commit is there.
     buildReady: async (kind, sha) => {
       if (kind === "windows") {
