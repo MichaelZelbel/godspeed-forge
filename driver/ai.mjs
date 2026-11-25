@@ -391,7 +391,7 @@ export async function launchHelper(env, { unit, kind, provider, model, briefFile
   // and it may read (never change) its project's hidden scenarios, which the product side never sees
   const holdoutsDir = kind === "tests" && context && typeof context === "object" && /^\/home\/[\w.-]+\/holdouts\/[\w.-]+$/.test(String(context.HOLDOUTS_DIR || "")) ? String(context.HOLDOUTS_DIR) : undefined;
   // an ops helper working on a STOP or PAUSE may read and lift that one file, and none other (the audit holds it to this path)
-  const liftFile = kind === "ops" && context && typeof context === "object" && /^\/home\/[\w.-]+\/[\w.-]+\/\.factory\/(STOP|PAUSE)$/.test(String(context.STOP_FILE || "")) ? String(context.STOP_FILE) : undefined;
+  const liftFile = kind === "ops" && context && typeof context === "object" && /^\/[^\n\0]+\/\.factory\/(STOP|PAUSE)$/.test(String(context.STOP_FILE || "")) && !/(^|\/)\.\.(\/|$)/.test(String(context.STOP_FILE)) ? String(context.STOP_FILE) : undefined;
   const run = { unit, kind, provider, model, cwd: runCwd, work, guarded, marker, startedAt: iso(now), runtimeMaxSec: seconds, forceExhausted: force || undefined, toolsDir, holdoutsDir, liftFile,
     command: commandFor(env, { provider, model, cwd: runCwd }, dir) };
   fs.writeFileSync(path.join(dir, "run.json"), JSON.stringify(run, null, 2) + "\n", { mode: 0o644 });
