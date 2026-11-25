@@ -1469,7 +1469,9 @@ test("review fix: a check run once more that GitHub refused is asked again, neve
     (w.checkReruns ||= []).push(sha);
     return 1;
   };
-  await assert.rejects(A.autoStage(ctx), /502/);
+  const r1 = await A.autoStage(ctx);
+  assert.equal(r1.outcome, "waiting", "the look goes on: the refusal is asked again, not an error that ends it");
+  assert.ok(w.log.some((l) => /GitHub refused to run its failed jobs once more \(GitHub said 502 to the rerun\.\); it is asked again/.test(l)), w.log.join(" | "));
   assert.equal((A.loadState(ctx.stateFile).releases[w.id].reruns || {})[V], undefined, "a refused request is not the run once more");
   refuse = false;
   await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });

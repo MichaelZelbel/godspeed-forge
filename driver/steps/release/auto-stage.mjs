@@ -1060,20 +1060,29 @@ async function fixedCommitFrom({ ctx, version, plan, deferred, rs, save, sayOnce
   const now = () => ctx.now();
   const iso = () => new Date(now()).toISOString();
   const watching = (why) => ({ outcome: "waiting", why, poll: true });
+  // A check's failed jobs run once more: written down only once GitHub took every request. A refusal is said in the look and
+  // asked again by the next read (a refusal that lasts is a wait that becomes a halt), so the look goes on. -> whether it ran
+  const runOnceMore = async (sha, what) => {
+    if (dry) return true;
+    try {
+      await ctx.rerunChecks(sha);
+    } catch (e) {
+      if (!(e instanceof R.Refused)) throw e;
+      log(`${what} failed, and GitHub refused to run its failed jobs once more (${e.message}); it is asked again.`);
+      return false;
+    }
+    (rs.reruns ||= {})[sha] = iso();
+    save();
+    return true;
+  };
 
   // ---- 2. the pin's own required check: it runs beside the builds below, and only its failure changes anything
   let pinCheck = await ctx.checkState(pin);
   if (pinCheck === "failed") {
     const reruns = dry ? { ...(rs.reruns || {}) } : (rs.reruns ||= {});
     if (!reruns[pin]) {
-      // written down once GitHub took the request (a request that failed is made again by the next read, never counted)
-      if (!dry) {
-        await ctx.rerunChecks(pin);
-        reruns[pin] = iso();
-        save();
-      }
-      log(`main's required check failed at ${short7(pin)}, so its failed jobs were run once more.`);
-      pinCheck = "running";
+      if (await runOnceMore(pin, `main's required check at ${short7(pin)}`)) log(`main's required check failed at ${short7(pin)}, so its failed jobs were run once more.`);
+      pinCheck = "running"; // either way still a wait: run once more, or asked again
     } else if (now() - Date.parse(reruns[pin]) < 2 * MINUTE) {
       pinCheck = "running"; // the run once more does not show yet
     } else {
@@ -1104,13 +1113,10 @@ async function fixedCommitFrom({ ctx, version, plan, deferred, rs, save, sayOnce
     if (req.state === "failed") {
       const reruns = dry ? { ...(rs.reruns || {}) } : (rs.reruns ||= {});
       if (!reruns[commit]) {
-        if (!dry) {
-          await ctx.rerunChecks(commit);
-          reruns[commit] = iso();
-          save();
-        }
-        log(`The version pull request #${pr.number} did not pass its checks, so its failed jobs were run once more.`);
-        waits.push({ words: `the required check of the version pull request #${pr.number}, run once more`, until: now() + cfg.checkMinutes * MINUTE });
+        if (await runOnceMore(commit, `the required check of the version pull request #${pr.number}`)) {
+          log(`The version pull request #${pr.number} did not pass its checks, so its failed jobs were run once more.`);
+          waits.push({ words: `the required check of the version pull request #${pr.number}, run once more`, until: now() + cfg.checkMinutes * MINUTE });
+        } else waits.push({ words: `the required check of the version pull request #${pr.number} failed, and running it once more is asked again`, until: now() + MINUTE });
       } else if (now() - Date.parse(reruns[commit]) < 2 * MINUTE) {
         waits.push({ words: `the required check of the version pull request #${pr.number}, run once more`, until: Date.parse(reruns[commit]) + cfg.checkMinutes * MINUTE });
       } else {
