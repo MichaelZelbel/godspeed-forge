@@ -6,12 +6,14 @@ name: drill
 # and the fast drill passes on a throwaway machine and fails on 0.3.1 for the release-first case) could only be seen on such a
 # machine, and the builder had none, so the factory's loop reviewer parked #175 as "needs owner". Now every pull request shows it.
 #
-# Two jobs, each on its own fresh machine:
-#   drill        installs the Forge from the archive of the exact commit under test (the pull request's head, or the
-#                `commit` input of a hand-started run) with the public install line, then runs the fast drill of both
-#                scenarios (beta31 and release-first); both must pass.
-#   drill-0-3-1  installs the Forge 0.3.1 (FORGE_VERSION=v0.3.1) and runs the release-first scenario with the same drill; it must
-#                FAIL, and fail at the check, not by crashing: the release clock of 0.3.1 starts only once every ticket is done.
+# Jobs, the last two each on its own fresh machine:
+#   commit       names the one commit under test: the pull request's head, or the `commit` input of a hand-started run (a sha
+#                or a branch, read once here, so a branch that moves cannot give the two jobs two different commits).
+#   drill        installs the Forge from the archive of that commit with the public install line, checks that what was
+#                installed is that commit, then runs the fast drill of both scenarios (beta31 and release-first): each must
+#                pass all five of its checks.
+#   drill-0-3-1  installs the Forge 0.3.1 (FORGE_VERSION=v0.3.1) and runs the release-first scenario with the same drill: all five
+#                checks must FAIL at the check (not a crash): the release clock of 0.3.1 starts only once every ticket is done.
 # Each job writes one line per result into its summary.
 on:
   pull_request:
@@ -27,14 +29,31 @@ concurrency:
 permissions:
   contents: read
 jobs:
-  drill:
-    name: drill (both scenarios pass)
+  commit:
+    name: the commit under test
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.which.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.commit || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - id: which
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  drill:
+    name: drill (both scenarios pass)
+    needs: commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SHA: ${{ needs.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.commit.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -42,9 +61,8 @@ jobs:
       - name: The archive of the commit under test, as GitHub would serve it
         run: |
           set -eu
-          sha=$(git rev-parse HEAD)
-          echo "SHA=$sha" >> "$GITHUB_ENV"
-          git archive --format=tar.gz --prefix="godspeed-forge-$sha/" -o "$RUNNER_TEMP/forge.tar.gz" HEAD
+          [ "$(git rev-parse HEAD)" = "$SHA" ] || { echo "the checkout is not $SHA"; exit 1; }
+          git archive --format=tar.gz --prefix="godspeed-forge-$SHA/" -o "$RUNNER_TEMP/forge.tar.gz" HEAD
       # `drill-standstill.sh run <archive>` is these two steps, install and fast; split, so that what was installed is checked
       - name: Install with the public install line, from that archive
         run: |
@@ -55,16 +73,23 @@ jobs:
       - name: The Forge installed is the commit under test
         run: |
           set -eu
+          # the whole add-on as the install copies it (bin, lib, skills, the driver without its tests, and VERSION): the driver
+          # the drill installs comes from this copy, and the drill's own scripts run from this checkout
           addon=/usr/local/lib/godspeed-forge
-          # the driver the drill installs comes from the add-on's copy (the drill's own scripts run from this checkout)
-          for f in VERSION driver/driver.mjs driver/standstill.mjs driver/deadman/deadman.mjs driver/steps/release/auto-stage.mjs; do
-            sudo cmp "$f" "$addon/$f" || { echo "the installed $f is not the one of ${SHA:0:7}"; exit 1; }
-          done
-          echo "The installed Forge's driver is the one of ${SHA:0:7}." | tee -a "$RUNNER_TEMP/drill.log"
+          for d in bin lib skills; do sudo diff -r "$d" "$addon/$d" || { echo "the installed $d is not the one of ${SHA:0:7}"; exit 1; }; done
+          sudo diff -r --exclude=test driver "$addon/driver" || { echo "the installed driver is not the one of ${SHA:0:7}"; exit 1; }
+          sudo cmp VERSION "$addon/VERSION"
+          echo "The installed Forge is the one of ${SHA:0:7} (its add-on and driver are the same files)." | tee -a "$RUNNER_TEMP/drill.log"
       - name: The fast drill of both scenarios
         run: |
           set -o pipefail
           sudo env "PATH=$PATH" bash scripts/drill-standstill.sh fast 2>&1 | tee -a "$RUNNER_TEMP/drill.log"
+          # passed only with the evidence: both scenarios run, each with its five checks passed, none failed
+          log="$RUNNER_TEMP/drill.log"
+          [ "$(grep -c '^=== The fast drill, scenario ' "$log")" -eq 2 ] || { echo "the drill did not run both scenarios"; exit 1; }
+          [ "$(grep -c '^PASS: ' "$log")" -eq 10 ] || { echo "the drill did not pass five checks in each scenario"; exit 1; }
+          ! grep -q '^FAIL: ' "$log" || { echo "a check of the drill failed"; exit 1; }
+          [ "$(grep -c '^THE DRILL PASSED' "$log")" -eq 2 ] && grep -q '^ALL FAST DRILLS PASSED' "$log" || { echo "the drill did not say it passed"; exit 1; }
       - name: One line per result
         if: always()
         run: |
@@ -72,8 +97,8 @@ jobs:
           {
             echo "### The fast standstill drill on ${SHA:0:7}"
             if [ -f "$log" ]; then
-              grep -E "^The installed Forge's driver is the one of" "$log" | sed 's/^/- /'
-              grep -q "^The installed Forge's driver is the one of" "$log" || echo "- the Forge under test was not installed, or not checked"
+              grep -E "^The installed Forge is the one of" "$log" | sed 's/^/- /'
+              grep -q "^The installed Forge is the one of" "$log" || echo "- the Forge under test was not installed, or not shown to be"
               awk '/^=== The fast drill, scenario /{sc=$6} /^(PASS|FAIL): /{print "- " sc ": " $0} /^THE DRILL (PASSED|FAILED)/{print "- **" sc ": " $0 "**"} /^(ALL FAST DRILLS PASSED|A FAST DRILL FAILED)/{print "- **" $0 "**"}' "$log"
               grep -q '^ALL FAST DRILLS PASSED' "$log" || { echo "- the drill did not pass; its last lines:"; tail -n 15 "$log" | sed 's/^/    /'; }
             else
@@ -83,12 +108,13 @@ jobs:
 
   drill-0-3-1:
     name: drill (release-first fails on 0.3.1)
+    needs: commit
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.commit || github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ needs.commit.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -105,13 +131,15 @@ jobs:
           code=$?
           set -e
           cat "$RUNNER_TEMP/drill.log"
-          # It must fail, and at the check: the check ran (it names minute 0 and its five results) and said so. A crash before the
-          # check would also exit non-zero, and that proves nothing about 0.3.1.
+          log="$RUNNER_TEMP/drill.log"
+          # It must fail, at the check, for 0.3.1's reason: its release clock never starts while a ticket is open, so no acting
+          # run, no other AI, no repair and no notice come, and all five checks fail. A crash before the check would also exit
+          # non-zero, and that proves nothing about 0.3.1.
           [ "$code" -ne 0 ] || { echo "the release-first drill passed on 0.3.1, so it does not tell 0.3.1 from 0.3.3"; exit 1; }
-          grep -q '^minute 0 = ' "$RUNNER_TEMP/drill.log" || { echo "the drill stopped before its check (exit $code), so 0.3.1 was not judged"; exit 1; }
-          [ "$(grep -cE '^(PASS|FAIL): ' "$RUNNER_TEMP/drill.log")" -eq 5 ] || { echo "the check did not give its five results"; exit 1; }
-          grep -q '^THE DRILL FAILED' "$RUNNER_TEMP/drill.log" || { echo "the drill exited $code without its check saying it failed"; exit 1; }
-          echo "The release-first drill fails on 0.3.1 at its check, as it should."
+          grep -q '^minute 0 = ' "$log" || { echo "the drill stopped before its check (exit $code), so 0.3.1 was not judged"; exit 1; }
+          [ "$(grep -c '^FAIL: ' "$log")" -eq 5 ] && ! grep -q '^PASS: ' "$log" || { echo "not all five checks failed, so 0.3.1 failed for another reason than its release clock"; exit 1; }
+          grep -q '^THE DRILL FAILED' "$log" || { echo "the drill exited $code without its check saying it failed"; exit 1; }
+          echo "The release-first drill fails on 0.3.1 at its check, all five checks, as it should."
       - name: One line per result
         if: always()
         run: |
@@ -121,7 +149,11 @@ jobs:
             echo "- installed: $(sudo cat /usr/local/lib/godspeed-forge/VERSION 2>/dev/null || echo nothing)"
             if [ -f "$log" ]; then
               grep -E '^(PASS|FAIL): ' "$log" | sed 's/^/- release-first on 0.3.1: /'
-              grep -q '^THE DRILL FAILED' "$log" && echo "- **release-first on 0.3.1: THE DRILL FAILED, as it must**" || { echo "- **release-first on 0.3.1 did not fail at its check**; its last lines:"; tail -n 15 "$log" | sed 's/^/    /'; }
+              if [ "$(grep -c '^FAIL: ' "$log")" -eq 5 ] && ! grep -q '^PASS: ' "$log" && grep -q '^THE DRILL FAILED' "$log"; then
+                echo "- **release-first on 0.3.1: THE DRILL FAILED on all five checks, as it must**"
+              else
+                echo "- **release-first on 0.3.1 did not fail as it must**; its last lines:"; tail -n 15 "$log" | sed 's/^/    /'
+              fi
             else
               echo "- the drill did not start (the install of 0.3.1 failed)"
             fi
