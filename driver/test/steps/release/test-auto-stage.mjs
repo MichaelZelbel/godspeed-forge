@@ -287,7 +287,6 @@ function world({ issues, scenarioSeq, planText = planFor(), staging = null, stat
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(cfg.noticesFile, JSON.stringify({ notices: [] }));
   let clock = Date.parse("2026-11-14T10:00:00Z");
-  const exits = [];
   const records = {
     releases: () => [id],
     read: (p) => (files.has(p) ? files.get(p) : null),
@@ -306,8 +305,6 @@ function world({ issues, scenarioSeq, planText = planFor(), staging = null, stat
     stateFile: stateFile || path.join(dir, "state.json"),
     now: () => clock,
     sleep: async (ms) => { clock += Math.max(ms, 1000); },
-    onExit: (f) => exits.push(f),
-    runExits: () => exits.splice(0).forEach((f) => f()),
     publicVersion: async () => "2.0.0-beta.24",
     tagCommit: async () => w.tag,
     api: async (method, p, body) => {
@@ -338,6 +335,7 @@ function world({ issues, scenarioSeq, planText = planFor(), staging = null, stat
     },
     notify: (n) => { w.notices.push(n); A.queueNotice(cfg.noticesFile, { ...n, facts: [n.text] }); },
     scenarios: async () => {
+      w.stopSeenDuring.push(["scenarios", fs.existsSync(stop)]);
       const next = w.scenarioSeq.length > 1 ? w.scenarioSeq.shift() : w.scenarioSeq[0];
       return typeof next === "function" ? next(w) : next;
     },
@@ -1506,6 +1504,7 @@ test("item 7: a full release-step run with the scenarios running never creates t
     assert.equal(fs.existsSync(x.w.stop), false);
     assert.ok(!x.w.log.some((l) => /STOP file|factory is paused|factory.s STOP/.test(l)), x.w.log.join(" / "));
   }
+  for (const x of [a, b]) assert.ok(x.w.stopSeenDuring.some(([n]) => n === "scenarios"), "every read of the scenarios was observed");
   assert.ok(seen.length >= 2 && seen.some(([n]) => n === "sleep") && seen.some(([n]) => n === "rerun"), JSON.stringify(seen));
   assert.ok(seen.every(([, there]) => there === false), "nor while the step sleeps between two reads of the scenarios, nor when it reruns the failed jobs: " + JSON.stringify(seen));
 });

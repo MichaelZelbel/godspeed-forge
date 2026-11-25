@@ -20,6 +20,14 @@ test("machine kinds start with housekeeping, then ops after one failed housekeep
   }
 });
 
+test("item 7: a STOP file goes straight to the ops helper, since housekeeping removes none; a stopped timer still starts with housekeeping", () => {
+  const stop = { ...ob("factory-stopped"), stop: { file: "/x/.factory/STOP", line: "Operator stopped new factory launches.", writer: "Operator", pid: null } };
+  const s = nextStep(stop, [], ctx());
+  assert.equal(s.do, "ops");
+  assert.ok(s.provider && s.model);
+  assert.equal(nextStep({ ...ob("factory-stopped"), timer: "archonfactory-x.timer" }, [], ctx()).do, "housekeeping");
+});
+
 test("ticket kinds start with diagnose", () => {
   for (const k of ["parked", "check-failed", "no-progress", "factory-idle", "main-red"]) assert.equal(nextStep(ob(k), [], ctx()).do, "diagnose");
 });

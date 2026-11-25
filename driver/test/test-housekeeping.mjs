@@ -177,6 +177,20 @@ test("the Forge 0.3.3, item 7: no program makes a STOP, so housekeeping removes 
 });
 
 
+test("item 7: a real STOP file in a real checkout is still there, with its content, after a round of housekeeping", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hk-stop-"));
+  const file = path.join(dir, ".factory", "STOP");
+  fs.mkdirSync(path.dirname(file));
+  const text = "auto-stage 1424860 2026-11-18T13:47:26.709Z\nthe old release step's STOP\n";
+  fs.writeFileSync(file, text);
+  try {
+    const s = server();
+    const r = await housekeep({}, stopWorld({ file, line: text.split("\n")[0], at: "2026-11-18T13:47:26.709Z" }), { ...s.deps, now: () => Date.parse("2026-12-30T00:00:00Z") });
+    assert.equal(fs.readFileSync(file, "utf8"), text, JSON.stringify(r));
+    assert.deepEqual(fs.readdirSync(path.dirname(file)), ["STOP"], "nothing moved aside");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a stopped factory timer the round names is started again as the factory user, in its namespace; nothing else is started", async () => {
   const s = server();
   const r = await housekeep({}, { server: { failedUnits: [], staleProcs: [], logins: { gh: true } }, timersToStart: ["archonfactory-querino.timer", "evil.timer", "archonfactory-x.service"] }, s.deps);
