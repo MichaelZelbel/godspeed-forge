@@ -576,6 +576,9 @@ test("review fix (round 2): a check run once more that GitHub refuses is a refus
   asked.length = 0;
   assert.deepEqual(await A.rerunFailedRuns(answer(201), REPO, runs, [11]), { started: [13], refused: null });
   assert.deepEqual(asked, [`/repos/${REPO}/actions/runs/13/rerun-failed-jobs`], "run 11 is never asked twice");
+  // round 4: one taken, then no answer at all: the taken one is still reported
+  const gone = async (method, p) => { if (p.includes("/runs/13/")) throw new TypeError("fetch failed"); return { ok: true, status: 201, json: {} }; };
+  assert.deepEqual(await A.rerunFailedRuns(gone, REPO, runs), { started: [11], refused: "GitHub did not answer the request to run the failed jobs of run 13 again (fetch failed)" });
 });
 
 test("near the end: every open ticket has a pull request of this repository open, named or closing", () => {

@@ -1884,7 +1884,15 @@ export async function rerunFailedRuns(api, repo, runs, already = []) {
   const started = [];
   for (const r of rerunnable(runs)) {
     if (already.includes(r.id)) continue;
-    const q = await api("POST", `/repos/${repo}/actions/runs/${r.id}/rerun-failed-jobs`, {});
+    let q;
+    try {
+      q = await api("POST", `/repos/${repo}/actions/runs/${r.id}/rerun-failed-jobs`, {});
+    } catch (e) {
+      // no answer at all: the ones taken so far are still reported (round 4 of the review); this one is asked again, and should
+      // the request have arrived after all, GitHub refuses a second rerun while the first runs (only build and check runs, never
+      // the paid scenarios, are ever asked)
+      return { started, refused: `GitHub did not answer the request to run the failed jobs of run ${r.id} again (${e && e.message ? e.message : e})` };
+    }
     if (!(q.ok || q.status === 201)) return { started, refused: `GitHub said ${q.status} to running the failed jobs of run ${r.id} again` };
     started.push(r.id);
   }
