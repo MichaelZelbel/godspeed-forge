@@ -1,9 +1,10 @@
 // Setup from the chat (lib/owner/setup.mjs, lib/chat-setup.mjs): the owner's `setup` requests against a worker that runs the
 // real setup with stand-in commands and GitHub, in this process. No network, no AI.
-// test cases: 7
+// test cases: 10
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { testCase } from './cases.mjs';
 import { tmpDir } from './forge-owner-fakes.mjs';
 import { setup } from '../lib/owner/setup.mjs';
@@ -20,7 +21,7 @@ let nextPort = 44000 + Math.floor(Math.random() * 1000);
 const timing = { pollMs: 10, maxMs: 15000, quietMs: 150 };
 
 // One server: a state folder with the watch page's record, a projects folder, and the commands setup runs.
-function world({ claude = true, factory = null } = {}) {
+function world({ claude = true, factory = null, appStatus = async () => 'installed', appWaitMs = 5000, startWorker: replaceWorker = null } = {}) {
   const PORT = nextPort++;
   const root = tmpDir('forge-chat-setup-');
   const state = path.join(root, 'state');
@@ -51,7 +52,7 @@ function world({ claude = true, factory = null } = {}) {
   const base = {
     exists: async file => { try { fs.accessSync(file); return true; } catch { return false; } },
     exchange: async code => { S.exchanged = [...(S.exchanged ?? []), code]; return { id: 7, slug: `forge-${S.exchanged.length}`, pem: KEY, client_secret: 'CS', webhook_secret: 'WS' }; },
-    appStatus: async () => 'installed'
+    appStatus: (...args) => appStatus(...args)
   };
   const files = chatSetupFiles({ state }, REPO);
   const workers = [];
@@ -59,7 +60,7 @@ function world({ claude = true, factory = null } = {}) {
   // The worker, in this process; its session is what the handler talks to.
   const startWorker = async repository => {
     const session = openSession({ state }, repository, { pollMs: 10, answerWithinMs: 60000 });
-    const { options, close } = createChatSetup({ repository, paths: { state }, session, deps: { run, start: () => { throw new Error('no sign-in expected'); }, probe: async () => true, github: { base, sleepMs: 5, appWaitMs: 5000 } } });
+    const { options, close } = createChatSetup({ repository, paths: { state }, session, deps: { run, start: () => { throw new Error('no sign-in expected'); }, probe: async () => true, github: { base, sleepMs: 5, appWaitMs } } });
     const interrupted = new Promise(resolve => { S2.interrupt = resolve; });
     workers.push((async () => {
       await setupCommand(repository, { ...options, ...(factory && { factorySetup: context => factory(context, options.prompt, S) }), interrupted, config: { ...defaults(root), projectsRoot } });
@@ -68,7 +69,7 @@ function world({ claude = true, factory = null } = {}) {
     })());
   };
   const bridge = { workspacePath: rel => path.join(root, 'workspace', rel), writeWorkspaceFile: (rel, text) => { fs.mkdirSync(path.dirname(path.join(root, 'workspace', rel)), { recursive: true }); fs.writeFileSync(path.join(root, 'workspace', rel), text); } };
-  const ctx = { paths: { state }, gs: bridge, startWorker, timing };
+  const ctx = { paths: { state }, gs: bridge, startWorker: replaceWorker ?? startWorker, timing };
   const say = async (words, project = REPO) => (await setup({ kind: 'setup', project, words }, ctx)).say;
   const marker = () => { try { return JSON.parse(fs.readFileSync(path.join(root, 'workspace', '.godspeed/forge/setup.json'), 'utf8')); } catch { return null; } };
   return { interrupt: signal => S2.interrupt(signal), port: PORT, root, state, S, say, files, workers, marker, projectsRoot, ctx };
@@ -236,6 +237,43 @@ testCase('the strike list, the confirmation and the push run in the chat: number
     assert.match(last, /Setup is complete/);
     await Promise.all(w.workers);
   }
+}
+
+testCase('an App install check that keeps failing throws what GitHub said, one that recovers goes on, one that never installs says no');
+{
+  const install = appStatus => {
+    const session = { say: () => {} };
+    const { options } = createChatSetup({ repository: REPO, paths: { state: tmpDir('forge-chat-install-') }, session, deps: { github: { base: { appStatus }, sleepMs: 5, appWaitMs: 40 } } });
+    return options.github.install({ credentials: { slug: 'forge-1' }, repository: REPO, kind: 'builder' });
+  };
+  await assert.rejects(install(async () => { throw new Error('GitHub is down'); }), /could not say whether the builder App is installed: GitHub is down/);
+  let calls = 0;
+  assert.equal(await install(async () => { if (calls++ === 0) throw new Error('blip'); return 'installed'; }), true);
+  assert.equal(await install(async () => 'missing'), false);
+}
+
+testCase('a worker that cannot start, never opens a session, or dies after opening one is answered with the terminal command');
+{
+  const terminal = /godspeed-forge setup owner\/repository/;
+  const fast = { pollMs: 5, maxMs: 100, quietMs: 20 };
+  const throwing = world({ startWorker: async () => { throw new Error('no systemd'); } });
+  const a = await setup({ kind: 'setup', project: REPO, words: 'set up' }, throwing.ctx);
+  assert.equal(a.ok, false);
+  assert.match(a.say, terminal);
+
+  const silent = world({ startWorker: async () => {} });
+  const b = await setup({ kind: 'setup', project: REPO, words: 'set up' }, { ...silent.ctx, timing: fast });
+  assert.equal(b.ok, false);
+  assert.match(b.say, terminal);
+
+  const dying = world({ startWorker: async () => {} });
+  const dead = spawnSync(process.execPath, ['-e', '']).pid;
+  fs.mkdirSync(dying.files.dir, { recursive: true });
+  fs.writeFileSync(dying.files.session, JSON.stringify({ repository: REPO, workerPid: dead, status: 'running', log: [], ask: null }));
+  fs.writeFileSync(dying.files.reply, JSON.stringify({ delivered: 0, answer: null }));
+  const c = await setup({ kind: 'setup', project: REPO, words: 'how is it going' }, { ...dying.ctx, startWorker: async () => {}, timing: fast });
+  assert.equal(c.ok, false);
+  assert.match(c.say, terminal);
 }
 
 process.exit(0);
