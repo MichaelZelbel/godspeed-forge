@@ -113,7 +113,7 @@ test("ticket 01: driver.mjs --dry-run says, for each release, the clock's minute
   assert.equal(s.launched.length, 1, "the dry run launched nothing");
   const fresh = server({ look: () => `Release ${ID} (2.0.0-beta.31): x.\nNot complete yet: waiting on #783.\nResult: waiting.\n` });
   const out2 = await round({ ...fresh.env, DRY: true }, fresh.deps);
-  assert.match(describe(out2), new RegExp(`release ${ID}: no release clock \\(the factory is still building its tickets\\)`));
+  assert.match(describe(out2), new RegExp(`release ${ID}: the release clock: still for 0 minutes; next step: an acting run \\(rung 1\\) by minute 20.*where it is: `), "the Forge 0.3.3: no phase where the clock is off, not even while the stage step still says it waits on tickets");
 });
 
 test("ticket 01: in the chain too, an in-progress that names nothing checkable is unresolved and holds nothing; one naming an open pull request holds until it is closed", async () => {

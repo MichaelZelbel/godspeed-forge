@@ -126,7 +126,7 @@ test("a STOP file names its writer, its process and when it was made", () => {
   assert.equal(p.writer, "stopped"); assert.equal(p.pid, null); assert.equal(p.at, "2026-11-18T10:00:00.000Z");
 });
 
-function projectDeps({ stop = null, writerArgs = "", scenarios = [], restarts = "1" } = {}) {
+function projectDeps({ stop = null, writerArgs = "", scenarios = [], restarts = "1", ownerPause = "", unreadableStop = false, pause = null } = {}) {
   const calls = [];
   const base = deps();
   return {
@@ -154,11 +154,15 @@ function projectDeps({ stop = null, writerArgs = "", scenarios = [], restarts = 
     },
     readFile: p => {
       if (/consumer\.json$/.test(p)) return CONSUMER;
+      if (unreadableStop && /godspeed-mission-control\/\.factory\/STOP$/.test(p)) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
       if (/godspeed-mission-control\/\.factory\/STOP$/.test(p) && stop) return stop;
+      if (/godspeed-mission-control\/\.factory\/PAUSE$/.test(p) && pause) return pause;
+      if (/godspeed-mission-control\/\.factory\/owner-pause$/.test(p) && ownerPause) return ownerPause;
       if (/scope-amendment\.json$/.test(p)) return JSON.stringify({ release: "x", amendments: [{ decidedBy: "release-driver", deferredTickets: ["02-eleven.md"] }] });
       return base.readFile(p);
     },
     mtime: () => Date.parse("2026-11-18T10:00:00Z"),
+    exists: p => unreadableStop && /godspeed-mission-control\/\.factory\/STOP$/.test(p),
   };
 }
 
@@ -198,15 +202,15 @@ test("a board whose only needs-owner issues are found lists is empty", async () 
   assert.deepEqual(w.factories.map(f => f.board), [[], []]);
 });
 
-test("a STOP file: its writer's life and the candidate's scenarios run are read", async () => {
+test("a STOP file: its writer's life is read (and no scenario run is: nothing depends on it any more)", async () => {
   const stop = "auto-stage 1424860 2026-11-18T13:47:26.709Z\nThe release step pauses the factory while the scenarios run.\n";
   const live = await readWorld(TEST_ENV, projectDeps({ stop, writerArgs: "/usr/local/bin/node /usr/local/lib/godspeed-forge/godspeed-dev/scripts/release/auto-stage.mjs\n",
     scenarios: [{ status: "in_progress", head_branch: "candidate/2.0.0-beta.28", display_title: "scenarios candidate/2.0.0-beta.28" }] }));
   const s = live.factories[0].stop;
   assert.equal(s.file, "/home/godspeed-forge/godspeed-mission-control/.factory/STOP");
-  assert.deepEqual([s.writer, s.pid, s.writerAlive, s.scenariosRunning], ["auto-stage", 1424860, true, true]);
+  assert.deepEqual([s.writer, s.pid, s.writerAlive], ["auto-stage", 1424860, true]);
   const dead = await readWorld(TEST_ENV, projectDeps({ stop, writerArgs: "", scenarios: [{ status: "completed", head_branch: "candidate/2.0.0-beta.28" }, { status: "in_progress", head_branch: "main" }] }));
-  assert.deepEqual([dead.factories[0].stop.writerAlive, dead.factories[0].stop.scenariosRunning], [false, false]);
+  assert.deepEqual([dead.factories[0].stop.writerAlive], [false]);
   const other = await readWorld(TEST_ENV, projectDeps({ stop, writerArgs: "/usr/bin/sleep 100\n" }));
   assert.equal(other.factories[0].stop.writerAlive, false, "a reused process number is not the writer");
 });
@@ -304,60 +308,56 @@ test("when both a STOP and a PAUSE file exist, both are read: the PAUSE is never
   assert.ok(/if \(name === "PAUSE"\) f\.pause = s;/.test(src) && !/f\.stop = s;\s*break;/.test(src), "the loop no longer stops at the first file");
 });
 
-// ---------------------------------------------------------------- issue #155 (2026-11-24)
-// The stage step runs as `node .../driver.mjs --step stage`, while its STOP names "auto-stage": the writer of a STOP that
-// was holding a running step looked ended, a helper relabelled the STOP "stage", and nothing removed it afterwards.
+// ---------------------------------------------------------------- the Forge 0.3.3, item 7 (2026-11-25)
+// No program makes the factory's STOP any more (the release step used to, while the scenarios ran, and on 2026-11-24 and
+// 2026-11-25 that halted the factory). A STOP is read as what it is: a file with a writer's name, a number and a time.
 const STAGE_ARGS = "/usr/bin/node /usr/local/lib/godspeed-factory/driver/driver.mjs --step stage --scheduled --settings-dir /etc/godspeed-forge\n";
-const BETA31_STOP = label => `${label} 2639648 2026-11-24T12:47:44.892Z\nThe release step pauses the factory while the scenarios run (the driver's stage step).\n`;
+const OLD_STOP = label => `${label} 2639648 2026-11-24T12:47:44.892Z\nThe release step pauses the factory while the scenarios run (the driver's stage step).\n`;
 const BETA31_RUN = status => ({ id: 45396974921, status, conclusion: status === "completed" ? "failure" : null, head_branch: "candidate/2.0.0-beta.31", display_title: "scenarios candidate/2.0.0-beta.31" });
 
-test("issue #155: the stage step's STOP has a running writer while `driver.mjs --step stage` runs, under either label; another step or program is not its writer", async () => {
-  assert.equal(writerRuns("auto-stage", STAGE_ARGS), true);
-  assert.equal(writerRuns("stage", STAGE_ARGS), true);
-  assert.equal(writerRuns("auto-stage", "/usr/bin/node /usr/local/lib/godspeed-factory/driver/driver.mjs --step stage-server\n"), false);
-  assert.equal(writerRuns("auto-stage", "/usr/bin/node /usr/local/lib/godspeed-factory/driver/driver.mjs --step plan --scheduled\n"), false);
-  assert.equal(writerRuns("auto-stage", "/usr/bin/sleep 100\n"), false);
+test("item 7: a STOP's writer runs when its name is in the process's command line, and the stage step is no special case", async () => {
   assert.equal(writerRuns("freeze", "/usr/bin/node /x/release/freeze.mjs o/r 1.0.0\n"), true);
+  assert.equal(writerRuns("consumer.py", "python3 /x/consumer.py pause\n"), true);
+  assert.equal(writerRuns("auto-stage", "/usr/bin/sleep 100\n"), false);
+  assert.equal(writerRuns("auto-stage", STAGE_ARGS), false, "the stage step writes no STOP, so its name no longer matches its command");
   assert.equal(writerRuns("", STAGE_ARGS), false);
-  for (const label of ["auto-stage", "stage"]) {
-    const w = await readWorld(TEST_ENV, projectDeps({ stop: BETA31_STOP(label), writerArgs: STAGE_ARGS, scenarios: [BETA31_RUN("in_progress")] }));
-    const s = w.factories[0].stop;
-    assert.deepEqual([s.writer, s.pid, s.writerAlive, s.scenariosRunning], [label, 2639648, true, true], label);
-  }
 });
 
-test("issue #155, exactly today's case: the stage's STOP, its writer gone, its candidate run completed with failure and the run's jobs answering 502, is removed by housekeeping at the next round", async () => {
+test("item 7: a pause is the owner's own only while it is the PAUSE his chat request made: the file names that PAUSE, and a gone or other PAUSE makes it stale", async () => {
+  const text = "Operator paused scheduled launches; wakes continue.\n";
+  const MT = Date.parse("2026-11-18T10:00:00Z");
+  const world = async o => (await readWorld(TEST_ENV, projectDeps({ pause: text, writerArgs: "", ...o }))).factories[0];
+  const same = await world({ ownerPause: `Asked by the owner in the chat: r1.\npause-mtime: ${MT}\n` });
+  assert.deepEqual([same.ownerPause, same.staleOwnerMarker], [true, null], "the marker names this PAUSE");
+  const other = await world({ ownerPause: `Asked by the owner in the chat: r1.\npause-mtime: ${MT - 5000}\n` });
+  assert.deepEqual([other.ownerPause, !!other.staleOwnerMarker], [false, true], "it names another PAUSE: the pause now is a hand-made one, and the marker is stale");
+  const none = await world({ ownerPause: "" });
+  assert.deepEqual([none.ownerPause, none.staleOwnerMarker], [false, null], "no marker, no owner pause");
+  const gone = (await readWorld(TEST_ENV, projectDeps({ pause: null, writerArgs: "", ownerPause: `Asked by the owner in the chat: r1.\npause-mtime: ${MT}\n` }))).factories[0];
+  assert.deepEqual([gone.ownerPause, !!gone.staleOwnerMarker], [false, true], "no PAUSE at all: the marker is stale");
+  const pending = await world({ ownerPause: "Asked by the owner in the chat: r1.\n" });
+  assert.equal(pending.ownerPause, false, "made before its pause with no identity yet: the stand-in's clock says it is half an hour old, so it is stale");
+  assert.ok(pending.staleOwnerMarker);
+});
+
+test("item 7: a STOP or PAUSE that exists is the obstacle whether or not its content can be read, as in the factory's own consumer.py", async () => {
+  const f = (await readWorld(TEST_ENV, projectDeps({ stop: "x", unreadableStop: true }))).factories[0];
+  assert.ok(f.stop, "the unreadable STOP is seen");
+  assert.equal(f.stop.kind, "STOP");
+  assert.equal(f.stop.line, "");
+  const none = (await readWorld(TEST_ENV, projectDeps({}))).factories[0];
+  assert.equal(none.stop, null, "none there: none seen");
+});
+
+test("item 7: a leftover STOP of an older release step is read like any other STOP, and reading it asks GitHub nothing about scenarios", async () => {
   for (const label of ["auto-stage", "stage"]) {
-    const d = projectDeps({ stop: BETA31_STOP(label), writerArgs: "", scenarios: [BETA31_RUN("completed")] });
+    const d = projectDeps({ stop: OLD_STOP(label), writerArgs: "", scenarios: [BETA31_RUN("in_progress")] });
     const gh = d.gh, asked = [];
-    d.gh = args => { const a = args.join(" "); asked.push(a); if (/actions\/runs\/45396974921\/jobs/.test(a)) throw new Error("HTTP 502: Bad Gateway"); return gh(args); };
-    const world = await readWorld(TEST_ENV, d);
-    const s = world.factories[0].stop;
-    assert.deepEqual([s.writer, s.writerAlive, s.scenariosRunning, s.at], [label, false, false, "2026-11-24T12:47:44.892Z"], label);
-    const removed = [], ps = [];
-    const r = await housekeep({}, world, {
-      run: argv => { ps.push(argv.join(" ")); return argv[0] === "ps" ? { status: 1, stdout: "", stderr: "" } : { status: 0, stdout: "", stderr: "" }; },
-      sleep: async () => {},
-      now: () => Date.parse("2026-11-24T13:45:00Z"), // 58 minutes after the STOP was made, five after the step ended
-      readFile: f => { assert.equal(f, s.file); return BETA31_STOP(label); },
-      lstat: () => ({ isSymbolicLink: () => false }),
-      realpath: p => { if (/PAUSE$/.test(p)) { const e = new Error("no PAUSE"); e.code = "ENOENT"; throw e; } return p; },
-      remove: f => removed.push(f),
-    });
-    assert.deepEqual(removed, ["/home/godspeed-forge/godspeed-mission-control/.factory/STOP"], `${label}: ${JSON.stringify(r)}`);
-    assert.ok(r.done.includes(`removed ${s.file} ("${label} 2639648 2026-11-24T12:47:44.892Z"): its writer ${label} 2639648 has ended and no candidate's scenarios run, so the factory runs again`), r.done.join("\n"));
-    assert.ok(ps.some(c => c === "ps -o args= -p 2639648"), "the writer was looked for again");
-    assert.ok(!asked.some(a => /\/jobs/.test(a)), "nothing of it needs the run's jobs");
-  }
-});
-
-test("issue #155: the stage's STOP stays while its step runs, and while its candidate's scenarios run again", async () => {
-  const cases = [[STAGE_ARGS, "completed"], ["", "in_progress"], ["", "queued"]];
-  for (const [writerArgs, status] of cases) {
-    const world = await readWorld(TEST_ENV, projectDeps({ stop: BETA31_STOP("stage"), writerArgs, scenarios: [BETA31_RUN(status)] }));
-    const removed = [];
-    await housekeep({}, world, { run: argv => (argv[0] === "ps" ? { status: writerArgs ? 0 : 1, stdout: writerArgs, stderr: "" } : { status: 0, stdout: "", stderr: "" }), sleep: async () => {}, now: () => Date.parse("2026-11-24T13:45:00Z"),
-      readFile: () => BETA31_STOP("stage"), lstat: () => ({ isSymbolicLink: () => false }), realpath: p => { if (/PAUSE$/.test(p)) { const e = new Error("x"); e.code = "ENOENT"; throw e; } return p; }, remove: f => removed.push(f) });
-    assert.deepEqual(removed, [], `${writerArgs ? "the step runs" : "no step"}, the run is ${status}`);
+    d.gh = args => { asked.push(args.join(" ")); return gh(args); };
+    const w = await readWorld(TEST_ENV, d);
+    const s = w.factories[0].stop;
+    assert.deepEqual([s.writer, s.pid, s.writerAlive, s.at], [label, 2639648, false, "2026-11-24T12:47:44.892Z"], label);
+    assert.equal(s.scenariosRunning, undefined, "nothing says whether scenarios run: no STOP depends on it");
+    assert.ok(!asked.some(a => a.includes("actions/workflows")), `no scenario run is read: ${asked.join(" | ")}`);
   }
 });

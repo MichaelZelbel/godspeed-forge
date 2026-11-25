@@ -2,7 +2,7 @@ import { TEST_ENV } from "./env.mjs";
 // node --test scripts/factory-driver/test-housekeeping.mjs   (offline: every command goes to a stand-in)
 import { test } from "./harness.mjs";
 import assert from "node:assert/strict";
-import { housekeep, ALLOWED_RESTART, takeAwayStop } from "../housekeeping.mjs";
+import { housekeep, ALLOWED_RESTART } from "../housekeeping.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -157,81 +157,62 @@ test("switched on (LOWER_LAPS): under 15 % memory MAX_LAPS goes down one and the
 const STOPFILE = "/home/godspeed-forge/godspeed-mission-control/.factory/STOP";
 const LINE = "auto-stage 1424860 2026-11-18T13:47:26.709Z";
 const stopWorld = (o = {}) => ({ server: { failedUnits: [], staleProcs: [], logins: { gh: true } },
-  factories: [{ project: "godspeed-mission-control", stop: { file: STOPFILE, kind: "STOP", line: LINE, writer: "auto-stage", pid: 1424860, at: "2026-11-18T13:47:26.709Z", writerAlive: false, scenariosRunning: false, ...o } }] });
+  factories: [{ project: "godspeed-mission-control", stop: { file: STOPFILE, kind: "STOP", line: LINE, writer: "auto-stage", pid: 1424860, at: "2026-11-18T13:47:26.709Z", writerAlive: false, ...o } }] });
 
-test("a STOP whose writer ended while no scenarios run is removed, after reading it and the process again", async () => {
-  const s = server();
+test("the Forge 0.3.3, item 7: no program makes a STOP, so housekeeping removes none, whoever wrote it, however old, whether or not its writer or any scenarios run", async () => {
   const removed = [];
-  const r = await housekeep({}, stopWorld(), { ...s.deps, now: () => Date.parse("2026-11-18T16:00:00Z"), readFile: f => { assert.equal(f, STOPFILE); return `${LINE}\nThe release step pauses the factory.\n`; }, remove: f => removed.push(f) });
-  assert.deepEqual(removed, [STOPFILE]);
-  assert.match(r.done[0], /removed .*STOP.*auto-stage 1424860/);
-  assert.ok(s.calls.some(c => c[0] === "ps" && c.includes("1424860")), "the writer was looked for again");
-});
-
-test("a STOP is never removed while its writer lives, while scenarios run or are unknown, without a process, or once it changed", async () => {
-  const cases = [
-    [{ writerAlive: true }, {}],
-    [{ scenariosRunning: true }, {}],
-    [{ scenariosRunning: null }, {}],
-    [{ pid: null }, {}],
-    [{}, { text: "auto-stage 99 2026-11-18T15:00:00Z\n" }],
-    [{}, { psAlive: true }],
-  ];
-  for (const [o, { text, psAlive }] of cases) {
-    const s = server(psAlive ? { 1424860: { uid: 0, etimes: 60, cmd: "/usr/local/bin/node /usr/local/lib/godspeed-forge/godspeed-dev/scripts/release/auto-stage.mjs" } } : {});
-    const removed = [];
-    await housekeep({}, stopWorld(o), { ...s.deps, readFile: () => text || `${LINE}\nx\n`, remove: f => removed.push(f) });
-    assert.deepEqual(removed, [], JSON.stringify(o) + (text || "") + (psAlive || ""));
+  const stopped = [];
+  for (const writer of ["auto-stage", "stage", "freeze", "stage-server", "operator", "consumer.py"]) {
+    for (const o of [{ writerAlive: false, scenariosRunning: true }, { writerAlive: false }, { writerAlive: true }, { writerAlive: null }]) {
+      for (const nowIso of ["2026-11-18T14:30:00Z", "2026-11-18T16:00:00Z", "2026-11-20T00:00:00Z", "2026-12-30T00:00:00Z"]) {
+        const s = server();
+        const r = await housekeep({}, stopWorld({ writer, line: `${writer} 1424860 2026-11-18T13:47:26.709Z`, ...o }), { ...s.deps, now: () => Date.parse(nowIso), readFile: () => `${writer} 1424860 2026-11-18T13:47:26.709Z`, remove: f => removed.push(f), realpath: p => { throw new Error("no PAUSE"); }, lstat: () => ({ isSymbolicLink: () => false }) });
+        stopped.push(...r.done.filter(x => /STOP/.test(x)));
+        assert.ok(!flat(s.calls).some(c => /STOP/.test(c)), `${writer}: no command touches the STOP`);
+      }
+    }
   }
+  assert.deepEqual(removed, [], "nothing was removed");
+  assert.deepEqual(stopped, [], "and nothing was reported removed");
 });
 
-test("issue #155: the stage step's STOP goes as soon as its writer has ended and no candidate's scenarios run, under either label; another release program's still waits its two hours", async () => {
-  const at = Date.parse("2026-11-18T13:47:26.709Z") + 23 * 60000; // 23 minutes after it was made
-  const cases = [
-    [{ writer: "auto-stage" }, true],
-    [{ writer: "stage", line: "stage 1424860 2026-11-18T13:47:26.709Z" }, true],
-    [{ writer: "freeze", line: "freeze 1424860 2026-11-18T13:47:26.709Z" }, false],
-    [{ writer: "stage", line: "stage 1424860 2026-11-18T13:47:26.709Z", scenariosRunning: null }, false], // not known: never on a guess
-  ];
-  for (const [o, gone] of cases) {
-    const s = server();
-    const removed = [];
-    await housekeep({}, stopWorld(o), { ...s.deps, now: () => at, readFile: () => `${o.line || LINE}\nx\n`, remove: f => removed.push(f) });
-    assert.deepEqual(removed, gone ? [STOPFILE] : [], JSON.stringify(o));
-  }
-});
 
-test("issue #155: a stage STOP younger than the time a started run takes to show on GitHub stays, though no run shows yet", async () => {
-  const made = Date.parse("2026-11-18T13:47:26.709Z");
-  for (const [minutes, gone] of [[5, false], [14, false], [16, true]]) {
-    const s = server();
-    const removed = [];
-    await housekeep({}, stopWorld(), { ...s.deps, now: () => made + minutes * 60000, readFile: () => `${LINE}\nx\n`, remove: f => removed.push(f) });
-    assert.deepEqual(removed, gone ? [STOPFILE] : [], `${minutes} minutes`);
-  }
-});
-
-test("issue #155: the STOP is removed only as the very file the round read; one a new look took over meanwhile is put back", async () => {
+test("item 7: a real STOP file in a real checkout is still there, with its content, after a round of housekeeping", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hk-stop-"));
-  const file = path.join(dir, "STOP");
-  fs.writeFileSync(file, `${LINE}\nThe release step pauses the factory.\n`);
-  assert.equal(takeAwayStop(file, LINE), true);
-  assert.equal(fs.existsSync(file), false);
-  const newer = "auto-stage 777 2026-11-18T16:00:00.000Z\nThe release step pauses the factory.\n";
-  fs.writeFileSync(file, newer);
-  assert.equal(takeAwayStop(file, LINE), false);
-  assert.equal(fs.readFileSync(file, "utf8"), newer, "the new look's STOP stays as it wrote it");
-  assert.deepEqual(fs.readdirSync(dir), ["STOP"], "nothing is left aside");
-  assert.equal(takeAwayStop(path.join(dir, "gone"), LINE), true, "one that is gone is gone");
-  fs.rmSync(dir, { recursive: true, force: true });
+  const file = path.join(dir, ".factory", "STOP");
+  fs.mkdirSync(path.dirname(file));
+  const text = "auto-stage 1424860 2026-11-18T13:47:26.709Z\nthe old release step's STOP\n";
+  fs.writeFileSync(file, text);
+  try {
+    const s = server();
+    const r = await housekeep({}, stopWorld({ file, line: text.split("\n")[0], at: "2026-11-18T13:47:26.709Z" }), { ...s.deps, now: () => Date.parse("2026-12-30T00:00:00Z") });
+    assert.equal(fs.readFileSync(file, "utf8"), text, JSON.stringify(r));
+    assert.deepEqual(fs.readdirSync(path.dirname(file)), ["STOP"], "nothing moved aside");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("issue #155: a stage STOP whose step still runs as `driver.mjs --step stage` is never removed, though the round's read called its writer ended", async () => {
-  const s = server({ 1424860: { uid: 0, etimes: 600, cmd: "/usr/bin/node /usr/local/lib/godspeed-factory/driver/driver.mjs --step stage --scheduled --settings-dir /etc/godspeed-forge" } });
-  const removed = [];
-  const r = await housekeep({}, stopWorld(), { ...s.deps, now: () => Date.parse("2026-11-18T16:00:00Z"), readFile: () => `${LINE}\nx\n`, remove: f => removed.push(f) });
-  assert.deepEqual(removed, []);
-  assert.match(r.failed.join("\n"), /not removed: its writer auto-stage 1424860 runs again/);
+test("item 7: the owner-pause file of a PAUSE that is gone or another file is deleted, and only that file", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hk-marker-"));
+  const folder = path.join(dir, ".factory");
+  fs.mkdirSync(folder);
+  const marker = path.join(folder, "owner-pause"), stop = path.join(folder, "STOP");
+  fs.writeFileSync(marker, "Asked by the owner in the chat: r1.\npause-mtime: 1\n");
+  fs.writeFileSync(stop, "x\n");
+  try {
+    const s = server();
+    const w = stopWorld({ file: stop, line: "x" });
+    await housekeep({}, w, { ...s.deps });
+    assert.equal(fs.existsSync(marker), true, "a valid marker (the world says so) is not touched");
+    w.factories[0].staleOwnerMarker = marker;
+    const r = await housekeep({}, w, { ...s.deps });
+    assert.equal(fs.existsSync(marker), false, "a stale one goes");
+    assert.equal(fs.readFileSync(stop, "utf8"), "x\n", "the STOP beside it stays");
+    assert.match(r.done.join("\n"), /owner-pause/);
+    w.factories[0].staleOwnerMarker = path.join(dir, "elsewhere.txt");
+    fs.writeFileSync(path.join(dir, "elsewhere.txt"), "keep");
+    await housekeep({}, w, { ...s.deps });
+    assert.equal(fs.existsSync(path.join(dir, "elsewhere.txt")), true, "nothing else is ever deleted");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a stopped factory timer the round names is started again as the factory user, in its namespace; nothing else is started", async () => {
@@ -268,35 +249,6 @@ test("a PAUSE file is never removed by any program, whoever wrote it, however ma
     }
     assert.deepEqual(removed, [], `${writer}: still there after 3 rounds`);
   }
-});
-
-test("a STOP is removed only when a release program wrote it, it has ended, and only after that program's own maximum of 2 hours (the stage step's at once, issue #155); an operator's STOP is never removed", async () => {
-  const run = async (o, nowIso) => { const removed = []; const s = server(); await housekeep({}, stopWorld(o), { ...s.deps, now: () => Date.parse(nowIso), readFile: () => `${LINE}`, remove: f => removed.push(f) }); return removed; };
-  assert.deepEqual(await run({ writer: "freeze" }, "2026-11-18T14:30:00Z"), [], "the freeze's writer ended 43 minutes ago: not yet");
-  assert.deepEqual(await run({ writer: "freeze" }, "2026-11-18T16:00:00Z"), [STOPFILE], "past 2 hours: the forgotten STOP goes");
-  assert.deepEqual(await run({}, "2026-11-18T14:30:00Z"), [STOPFILE], "the stage step's, its writer ended 43 minutes ago and no candidate's scenarios run: it goes at once");
-  assert.deepEqual(await run({ scenariosRunning: true }, "2026-11-18T14:30:00Z"), [], "the stage step's while scenarios run: not yet");
-  assert.deepEqual(await run({ writer: "operator" }, "2026-11-20T00:00:00Z"), [], "a person's STOP stays");
-});
-
-test("a STOP that a PAUSE file points at stays; both files are read so a PAUSE is never hidden by a STOP; a STOP past twice its maximum goes though scenarios run", async () => {
-  const removed = [];
-  const s1 = server();
-  await housekeep({}, stopWorld(), { ...s1.deps, now: () => Date.parse("2026-11-18T20:00:00Z"), readFile: () => LINE, remove: f => removed.push(f), realpath: p => "/x/STOP", lstat: () => ({ isSymbolicLink: () => false }) });
-  assert.deepEqual(removed, [], "PAUSE resolves to the same file as STOP: it is the operator's pause, the STOP stays");
-  const s2 = server();
-  await housekeep({}, stopWorld({ scenariosRunning: true }), { ...s2.deps, now: () => Date.parse("2026-11-18T20:00:00Z"), readFile: () => LINE, remove: f => removed.push(f), realpath: p => { throw new Error("no PAUSE"); }, lstat: () => ({ isSymbolicLink: () => false }) });
-  assert.deepEqual(removed, [STOPFILE], "6 hours old, writer ended, scenarios still 'running': it goes (past twice the maximum)");
-  const s3 = server(); const r3 = [];
-  await housekeep({}, stopWorld({ scenariosRunning: true }), { ...s3.deps, now: () => Date.parse("2026-11-18T16:00:00Z"), readFile: () => LINE, remove: f => r3.push(f), realpath: p => { throw new Error("no PAUSE"); }, lstat: () => ({ isSymbolicLink: () => false }) });
-  assert.deepEqual(r3, [], "2 hours old with scenarios running: not yet");
-});
-
-test("fail closed: an unreadable process table or an unreadable PAUSE link never lets a STOP be removed", async () => {
-  const run = async (execOverride, extra = {}) => { const removed = []; const s = server(); await housekeep({}, stopWorld(), { ...s.deps, exec: execOverride || s.deps.exec, now: () => Date.parse("2026-11-19T00:00:00Z"), readFile: () => LINE, remove: f => removed.push(f), realpath: () => { throw Object.assign(new Error("none"), { code: "ENOENT" }); }, lstat: () => ({ isSymbolicLink: () => false }), ...extra }); return removed; };
-  assert.deepEqual(await run(null), [STOPFILE], "the baseline: the writer ended, a day old: it goes");
-  assert.deepEqual(await run(null, { realpath: () => { throw Object.assign(new Error("io"), { code: "EIO" }); } }), [], "a link that cannot be resolved: the STOP stays");
-  assert.deepEqual(await run(null, { lstat: () => { throw Object.assign(new Error("io"), { code: "EIO" }); } }), [], "an unreadable lstat: the STOP stays");
 });
 
 // the Forge 0.3.1, ticket 04 (#141): an acting run that could not sign in is repaired by housekeeping, with no AI run of its own

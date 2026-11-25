@@ -28,7 +28,6 @@ export const defaultsFor = (e = process.env) => ({
   // A fixed command for the runs (tests); unset, each project's own Archon CLI is asked, the way the
   // factory itself asks it (factory/consumer.py native_json: bun <source>/packages/cli/src/cli.ts).
   ARCHON_RUNS: e.FD_ARCHON_RUNS || "",
-  SCENARIOS_WORKFLOW: e.FD_SCENARIOS_WORKFLOW || "scenarios.yml",
   // long-running units of the factory that must run: one that is enabled but stopped counts as down
   // (a plain stop leaves it inactive, not failed, and its own Restart=on-failure does not bring it back)
   LEGACY_UNITS: String(e.FD_LEGACY_UNITS || "").split(",").map(x => x.trim()).filter(Boolean), // units this driver replaces: never a factory timer, never must-run, never an obstacle
@@ -48,6 +47,7 @@ export const defaultsFor = (e = process.env) => ({
 const realDeps = env => ({
   readFile: p => fs.readFileSync(p, "utf8"),
   mtime: p => fs.statSync(p).mtimeMs,
+  exists: p => { try { fs.lstatSync(p); return true; } catch { return false; } }, // a link counts, as in consumer.py
   readDir: p => fs.readdirSync(p),
   readReleases: (dir, autoStage) => readReleases(dir, autoStage, GODSPEED_RELEASE),
 });
@@ -111,16 +111,36 @@ function readPr(env, deps, n, unreadable) {
   } catch (e) { unreadable.push({ part, error: e.message }); return null; }
 }
 
+// The loop's claims on a work item (a comment starting "Loop claim: run <id>"; a run that ends edits it to "released" or
+// "withdrawn", so the ones that still start that way are the live ones). The first 50 comments and the newest 30 are read, and a
+// comment in both is counted once. -> [{run, at}], newest last
+export const CLAIM_PREFIX = /^Loop claim: run (\S+)/;
+// Only a claim written by one of the accounts that may decide (the owner and the two Apps, FD_TRUSTED_LOGINS; the loop's claims come from
+// the builder App) counts: anyone can write "Loop claim" on a public repository. With no list configured every claim counts.
+export function loopClaimsOf(comments, trusted = String(process.env.FD_TRUSTED_LOGINS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean)) {
+  const seen = new Set(), out = [];
+  for (const c of comments || []) {
+    const m = CLAIM_PREFIX.exec(String(c.body || ""));
+    if (!m || !c.at) continue;
+    if (trusted.length && !trusted.includes(String(c.author || "").toLowerCase())) continue;
+    const k = `${m[1]}@${c.at}`;
+    if (seen.has(k)) continue;
+    seen.add(k); out.push({ run: m[1], at: c.at });
+  }
+  return out.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
 function readItem(env, deps, n, unreadable) {
   let issue;
   try { issue = deps.gh([`repos/${env.REPO}/issues/${n}`]); } catch (e) { unreadable.push({ part: `issue#${n}`, error: e.message }); return null; }
   const item = { number: n, mergedRefs: [], state: String(issue.state || "").toLowerCase(), stateReason: issue.state_reason ? String(issue.state_reason).toLowerCase() : null, labels: labelNames(issue), closedAt: iso(issue.closed_at), prs: [], comments: [], partial: false };
   try { item.comments = comments(deps.gh([`repos/${env.REPO}/issues/${n}/comments?per_page=50`])); }
   catch (e) { unreadable.push({ part: `issue#${n}/comments`, error: e.message }); item.partial = true; }
+  item.loopClaims = loopClaimsOf(item.comments);
   let nums = [], appComments;
   try {
     // the issue's newest 30 comments with their authors' type: the same window and shape the release step reads (auto-stage.mjs)
-    const q = `query { repository(owner: ${JSON.stringify(env.REPO.split("/")[0])}, name: ${JSON.stringify(env.REPO.split("/")[1])}) { issue(number: ${n}) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number } } timelineItems(last: 40, itemTypes: [CONNECTED_EVENT]) { nodes { ... on ConnectedEvent { subject { __typename ... on PullRequest { number } } } } } refs: timelineItems(last: 60, itemTypes: [CROSS_REFERENCED_EVENT]) { nodes { ... on CrossReferencedEvent { source { __typename ... on PullRequest { number merged mergedAt baseRefName mergeCommit { oid } repository { nameWithOwner } } } } } } comments(last: 30) { nodes { body author { __typename login } } } } } }`;
+    const q = `query { repository(owner: ${JSON.stringify(env.REPO.split("/")[0])}, name: ${JSON.stringify(env.REPO.split("/")[1])}) { issue(number: ${n}) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number } } timelineItems(last: 40, itemTypes: [CONNECTED_EVENT]) { nodes { ... on ConnectedEvent { subject { __typename ... on PullRequest { number } } } } } refs: timelineItems(last: 60, itemTypes: [CROSS_REFERENCED_EVENT]) { nodes { ... on CrossReferencedEvent { source { __typename ... on PullRequest { number merged mergedAt baseRefName mergeCommit { oid } repository { nameWithOwner } } } } } } comments(last: 30) { nodes { body createdAt author { __typename login } } } } } }`;
     const d = deps.gh(["graphql", "-f", `query=${q}`]);
     const i = d.data.repository.issue;
     nums = [...new Set([...i.closedByPullRequestsReferences.nodes.map(x => x.number), ...i.timelineItems.nodes.filter(e => e && e.subject && e.subject.number).map(e => e.subject.number)])];
@@ -134,6 +154,7 @@ function readItem(env, deps, n, unreadable) {
     // their merges into main, newest first: rung 0 writes the ticket's done line from one, so the release step counts it done too
     item.mergedRefMerges = refs.filter(p => p.mergeCommit && p.mergeCommit.oid && p.baseRefName === "main" && p.repository).map(p => ({ number: p.number, commit: p.mergeCommit.oid, mergedAt: p.mergedAt })).sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt));
     appComments = i.comments && Array.isArray(i.comments.nodes) ? i.comments.nodes : undefined;
+    item.loopClaims = loopClaimsOf([...item.comments.map(c => ({ body: c.body, at: c.at, author: c.author })), ...(appComments || []).map(c => ({ body: c.body, at: iso(c.createdAt), author: c.author && c.author.login }))]);
   } catch (e) { unreadable.push({ part: `issue#${n}/prs`, error: e.message }); item.partial = true; }
   for (const pn of nums) { const p = readPr(env, deps, pn, unreadable); if (p) item.prs.push(p); else item.partial = true; }
   readDelivery(env, deps, item, appComments, unreadable);
@@ -188,18 +209,11 @@ export function parseProjects(text, main) {
   }
   return out;
 }
-// The stage step's STOP: its first line names "auto-stage" (the program the step grew out of), or "stage" once
-// somebody relabelled it (a helper did on 2026-11-24, which hid it from the step and from housekeeping both).
-export const STAGE_WRITER = /^(auto-stage|stage)$/;
-export const isStageStop = st => !!st && STAGE_WRITER.test(String(st.writer || ""));
-// Whether the process <args> (ps -o args=) is the writer the STOP names. The stage step runs as
-// `node .../driver.mjs --step stage ...`, so its STOP's "auto-stage" is never in its command line: reading
-// it that way called a running step's STOP abandoned and sent a helper to "repair" it (2026-11-24).
+// Whether the process <args> (ps -o args=) is the writer the STOP names. (The stage step used to write one; no program does
+// any more, the Forge 0.3.3, item 7, so a STOP's first line is whatever its maker wrote.)
 export function writerRuns(writer, args) {
   const a = String(args || ""), w = String(writer || "");
-  if (!w) return false;
-  if (STAGE_WRITER.test(w)) return a.includes("auto-stage") || (/\bdriver\.mjs\b/.test(a) && /(^|\s)--step\s+stage(\s|$)/.test(a));
-  return a.includes(w);
+  return !!w && a.includes(w);
 }
 // A STOP or PAUSE file's first line: "<writer> <pid> <iso time>" (auto-stage's), or anything else.
 export function parseStop(text, mtimeMs) {
@@ -306,7 +320,6 @@ function readMain(env, deps, unreadable) {
 }
 
 // ------------------------------------------------------------ the factory, every project
-const ACTIVE_RUN = /^(queued|in_progress|waiting|requested|pending)$/;
 function readFactory(env, deps, project, primary, world, unreadable) {
   const checkout = (env.PROJECT_CHECKOUTS || {})[project] || path.posix.join(env.FORGE_HOME, project);
   const part = `factory/${project}`;
@@ -339,26 +352,61 @@ function readFactory(env, deps, project, primary, world, unreadable) {
   }
   for (const name of ["STOP", "PAUSE"]) {
     const file = path.posix.join(checkout, ".factory", name);
-    let text; try { text = deps.readFile(file); } catch { continue; }
+    // the file existing decides, as in the factory's own consumer.py (stop.exists()): one whose content cannot be read is still the obstacle
+    let text = null; try { text = deps.readFile(file); } catch { /* unreadable, or not there */ }
+    if (text === null) { if (!(deps.exists && deps.exists(file))) continue; text = ""; }
     let mt = Date.now(); try { mt = deps.mtime(file); } catch {}
-    const s = { file, kind: name, ...parseStop(text, mt), writerAlive: null, scenariosRunning: null };
+    const s = { file, kind: name, ...parseStop(text, mt), writerAlive: null, mtimeMs: mt };
     if (s.pid && s.writer) {
       const args = tryRun(deps, `if command -v ps >/dev/null 2>&1; then ps -p ${s.pid} -o args= 2>/dev/null || true; else echo __unknown__; fi`, false, unreadable, `${part}/stop-writer`);
       if (args !== null) s.writerAlive = String(args).includes("__unknown__") ? null : writerRuns(s.writer, args); // unknown stays unknown: nothing is removed on a guess
     } else s.writerAlive = false;
-    if (f.repo) {
-      try {
-        const runs = (deps.gh([`repos/${f.repo}/actions/workflows/${env.SCENARIOS_WORKFLOW}/runs?per_page=20`]) || {}).workflow_runs || [];
-        s.scenariosRunning = runs.some(r => ACTIVE_RUN.test(String(r.status || "")) && (/^candidate\//.test(String(r.head_branch || "")) || /candidate\//.test(String(r.display_title || ""))));
-      } catch (e) { unreadable.push({ part: `${part}/scenarios`, error: e.message }); }
-    }
     if (name === "PAUSE") f.pause = s; // both files may exist: each is read, a PAUSE is never hidden by a STOP
     if (name === "STOP" || !f.stop) f.stop = s;
+  }
+  // the file the owner's own "pause the factory" makes before the pause (lib/factory-control.mjs)
+  // It holds the identity of the PAUSE it was made with (its mtime) and counts only while that same file is there: a PAUSE that is gone or
+  // is another file makes it stale, and the round deletes it (housekeeping), so a later hand-made PAUSE is nobody's but the obstacle's.
+  f.ownerPause = false; f.staleOwnerMarker = null;
+  const markerFile = path.posix.join(checkout, ".factory", "owner-pause");
+  let marker = null; try { marker = deps.readFile(markerFile); } catch { /* none */ }
+  if (marker !== null) {
+    const id = /^pause-mtime: (\d+)$/m.exec(String(marker));
+    let valid = false;
+    if (f.pause) {
+      if (id) valid = Number(id[1]) === Math.floor(f.pause.mtimeMs);
+      else { // made before its pause, the identity not written yet: good for two minutes
+        let at = NaN; try { at = deps.mtime(markerFile); } catch { /* unknown */ }
+        valid = Number.isFinite(at) ? ((deps.now ? deps.now() : Date.now()) - at) < 2 * 60000 : true;
+      }
+    }
+    if (valid) f.ownerPause = true; else f.staleOwnerMarker = markerFile;
   }
   return f;
 }
 
 // ------------------------------------------------------------ the world
+// The questions that reached the owner and still wait for his answer: an entry of a state file's `told` with a page that has a
+// receipt (Telegram, email or the urgent issue), not answered and not closed. Only money, publishing and deleting page him.
+// -> [{key, heading}]
+export function readDeliveredPages(env, deps, unreadable = []) {
+  let names = [];
+  try { names = (deps.readDir || (d => fs.readdirSync(d)))(env.QUESTIONS_DIR).filter(n => /^state(-[a-z0-9_.-]+)?\.json$/i.test(n)); } catch { return []; }
+  const out = [];
+  for (const n of names.sort()) {
+    let s;
+    try { s = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, n))); } catch (e) { if (e instanceof SyntaxError) unreadable.push({ part: `questions ${n}`, error: e.message }); continue; }
+    const m = /^state-(.+?)__(.+)\.json$/i.exec(n);
+    const repo = m ? `${m[1]}/${m[2]}` : env.REPO; // state.json is the main project's; state-<owner>__<repo>.json is that repository's
+    for (const [key, t] of Object.entries((s && s.told) || {})) {
+      const stages = (t && t.page && t.page.stages) || [];
+      const reached = stages.some(st => Object.values((st && st.channels) || {}).some(c => c && c.receipt));
+      if (t && !t.answered && t.page && !t.page.closed && reached) out.push({ key, heading: String(t.heading || ""), repo });
+    }
+  }
+  return out;
+}
+
 // The factory questions the questions step handed to the driver (2026-11-24): `routed` entries marked `mc` in its state
 // files (state.json and state-<owner>__<repo>.json), each a question with nothing to pick from that the decide helper
 // settles. The step takes an entry off once the decision is on GitHub. -> [{repo, key, heading, ...}]
@@ -430,6 +478,7 @@ export async function readWorld(env0 = {}, deps0 = {}) {
   try { world.answeredElsewhere = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, "answered-elsewhere.json"))) || {}; } catch (e) { if (e instanceof SyntaxError) unreadable.push({ part: "answered-elsewhere", error: e.message }); }
   try { world.toMichael = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, env.TO_OWNER_FILE || process.env.FD_TO_OWNER_FILE || "to-owner.json"))) || {}; } catch (e) { world.toMichael = {}; if (e instanceof SyntaxError) unreadable.push({ part: "to-michael", error: e.message }); }
   world.routedQuestions = readRoutedQuestions(env, deps, unreadable);
+  world.deliveredPages = readDeliveredPages(env, deps, unreadable);
   // every open pull request labelled needs-owner in the repositories whose factory runs (parked ones have no factory)
   world.openPrs = [];
   for (const repo of [...new Set([env.REPO, ...world.factories.map(f => f.repo).filter(Boolean)])]) {

@@ -37,7 +37,7 @@
 //      "Auto-stage: proceed" into the plan; a plan with a "## Release step" section was taken over by
 //      a person and is left alone.
 //      SINCE 17 NOVEMBER 2026 (Michael: every stall needed him or Mission Control) these resolve
-//      themselves: a wrong version is raised by the release step's own pull request (versionStep:
+//      themselves: a wrong version is raised by the release step's own pull request (versionOnPin since 25 November 2026:
 //      the builder App opens release/version-<version> with notebook/package.json and the README's
 //      "New in" section written from the plan's delivered items, the release App approves and merges
 //      it once `required` passed; a failed check is said once with its cause and it is merged when it
@@ -50,13 +50,8 @@
 //      them: freeze.mjs --no-staging (so the scenarios can start on the tag first, step 3 of the
 //      role, and run beside the install), the scenarios on candidate/<version>, stage-server.mjs,
 //      staging-check.mjs --tell.
-//   5. Pauses Cole Medin's factory while the scenarios run (the scenario AI key is small and a lap
-//      would spend it too) by creating <factory>/.factory/STOP, and removes it the moment the
-//      scenarios have ended (before the install is waited for and before anything is read to
-//      summarise them), and in every other case: when the step ends, fails, or the process is
-//      stopped. A STOP file this script made is also removed at the start of the next look when it
-//      is older than stopMaxAgeMinutes, and by a look that finds no scenarios running, because a
-//      stale STOP stops every lap silently. A STOP somebody else made is never touched.
+//   5. Never pauses the factory: no STOP file is made or removed here, however long the scenarios run (the Forge 0.3.3,
+//      item 7: the factory always runs, and the scenarios prove the release's own frozen commit while laps work on main).
 //   6. MONEY: at most one candidate run, plus one rerun of only the failed jobs. The dispatch is
 //      written to the state file before it happens, and a crash in between is resumed by looking at
 //      GitHub, never by dispatching again.
@@ -73,6 +68,25 @@
 //   8. Once only: the state file (stateDir/state.json) keeps what was done and said, so a release is
 //      staged and announced once. Messages go through Godspeed's notice queue with an id made from
 //      the release and the reason, so even a crash between sending and saving cannot send twice.
+//
+// SINCE 25 NOVEMBER 2026: A FINISHED RELEASE REACHES THE GO QUESTION IN ABOUT 30 MINUTES (Michael: "a deterministic script that
+// actually works"). Godspeed 2.0.0-beta.32's last ticket merged at 23:05 UTC and the go question came at 00:47, after four hand
+// steps: the freeze refused because the commit's server image was never built (the product builds it only for changes to some
+// paths), every merge of the factory restarted the wait for "main's newest change", the version pull request then needed its own
+// 18-minute cycle and main another one after it, and the candidate ran the slow Mac and Windows jobs (41 to 90 minutes). Now:
+//   - the moment every ticket is done, main's head is PINNED (rs.pin) and the version is ONE commit on top of it, on
+//     release/version-<version>: a branch GitHub builds the server image and the Windows setup for on the push itself, beside the
+//     pull request's own checks. Once those pass, the pull request is merged with a merge commit (so that commit stays on main)
+//     and exactly that commit is frozen, whatever the factory merged meanwhile. Nothing waits for main's newest change, and the
+//     factory is not held for it (fixedCommit, versionOnPin);
+//   - a build GitHub does not start is started by this step on the branch whose head is the commit, once per commit, and a
+//     failed one is run once more; a missing build is a wait, never a person's decision (ensureBuilds);
+//   - while anything it waits on is moving (the last tickets' open pull requests, the builds, the checks, the tests) one look
+//     keeps watching every fastPollSeconds instead of coming back 15 minutes later, and its "Waiting:" line names the wait and
+//     its expected end;
+//   - the candidate runs the release gate WITHOUT the slow jobs (afterGoJobs, read from the gate file on the tag) before the go;
+//     a failed job is run once more as always. Those slow jobs run once on the tag after the release went public, never
+//     holding anything: a failure there is filed as a bug and said in one notice (afterGo).
 //
 // MOVES INTO THE FORGE ADD-ON UNCHANGED (D-414): no secret is in here and nothing is hard-coded to
 // his server except the defaults in CONFIG_DEFAULTS, each overridable with an AUTO_STAGE_* variable.
@@ -110,8 +124,6 @@ const MINUTE = 60 * 1000;
 export const CONFIG_DEFAULTS = {
   repo: "", // AUTO_STAGE_REPO: the settings' main project repository
   stateDir: "", // AUTO_STAGE_STATE_DIR: steps.stage.state_dir
-  stopFile: "", // AUTO_STAGE_STOP_FILE: steps.stage.stop_file, else <the main project's checkout>/.factory/STOP
-  stopMaxAgeMinutes: 120, // AUTO_STAGE_STOP_MAX_AGE_MINUTES
   noticesFile: "", // AUTO_STAGE_NOTICES_FILE: notices.godspeed_notices_file
   scenarioMac: true, // AUTO_STAGE_MAC: the role's "-f mac=true once per candidate"
   scenarioWaitMinutes: 100, // AUTO_STAGE_SCENARIO_WAIT_MINUTES: how long one look waits for the scenarios, rerun included
@@ -119,6 +131,17 @@ export const CONFIG_DEFAULTS = {
   dispatchGraceMinutes: 10, // AUTO_STAGE_DISPATCH_GRACE_MINUTES: a started run may take this long to show
   blockedGraceMinutes: 60, // AUTO_STAGE_BLOCKED_GRACE_MINUTES: a refusal must last this long before it is a halt
   ghTokenCommand: "gh auth token", // AUTO_STAGE_GH_TOKEN_COMMAND
+  // the fast path (25 November 2026)
+  fastPollSeconds: 30, // AUTO_STAGE_FAST_POLL_SECONDS: how often one look reads again while what it waits on is moving
+  lookMinutes: 150, // AUTO_STAGE_LOOK_MINUTES: how long one look may keep watching (the step's unit allows 200)
+  imageWorkflow: "v2-integrated.yml", // AUTO_STAGE_IMAGE_WORKFLOW: releases.image_workflow, the workflow that builds the server image
+  windowsWorkflow: "windows-setup.yml", // AUTO_STAGE_WINDOWS_WORKFLOW: the workflow that builds the Windows setup
+  afterGoJobs: ["mac-install", "windows-old-names-move"], // AUTO_STAGE_AFTER_GO_JOBS: release-gate jobs that run once after the go
+  buildShowMinutes: 3, // AUTO_STAGE_BUILD_SHOW_MINUTES: how long a push may take to show its build before the step starts it
+  imageMinutes: 18, // typical minutes of a server image build, for the expected end the look names
+  windowsMinutes: 5, // the same for the Windows setup
+  checkMinutes: 18, // the same for a pull request's required check (it waits for the image job, so it ends with it)
+  testMinutes: 10, // the same for the short tests, the one rerun included
 };
 
 export function loadConfig(env = process.env) {
@@ -127,8 +150,6 @@ export function loadConfig(env = process.env) {
   return {
     repo: env.AUTO_STAGE_REPO || d.repo || RELEASE.productRepo,
     stateDir: env.AUTO_STAGE_STATE_DIR || d.stateDir,
-    stopFile: env.AUTO_STAGE_STOP_FILE || d.stopFile,
-    stopMaxAgeMinutes: num("AUTO_STAGE_STOP_MAX_AGE_MINUTES", d.stopMaxAgeMinutes),
     noticesFile: env.AUTO_STAGE_NOTICES_FILE || d.noticesFile || RELEASE.noticesFile || `${G.GODSPEED_ON_SERVER}/.godspeed/notices.json`,
     scenarioMac: env.AUTO_STAGE_MAC === undefined ? d.scenarioMac : !/^(0|false|no)$/i.test(env.AUTO_STAGE_MAC),
     scenarioWaitMinutes: num("AUTO_STAGE_SCENARIO_WAIT_MINUTES", d.scenarioWaitMinutes),
@@ -136,6 +157,16 @@ export function loadConfig(env = process.env) {
     dispatchGraceMinutes: num("AUTO_STAGE_DISPATCH_GRACE_MINUTES", d.dispatchGraceMinutes),
     blockedGraceMinutes: num("AUTO_STAGE_BLOCKED_GRACE_MINUTES", d.blockedGraceMinutes),
     ghTokenCommand: env.AUTO_STAGE_GH_TOKEN_COMMAND || d.ghTokenCommand,
+    fastPollSeconds: num("AUTO_STAGE_FAST_POLL_SECONDS", d.fastPollSeconds),
+    lookMinutes: num("AUTO_STAGE_LOOK_MINUTES", d.lookMinutes),
+    imageWorkflow: env.AUTO_STAGE_IMAGE_WORKFLOW || d.imageWorkflow,
+    windowsWorkflow: env.AUTO_STAGE_WINDOWS_WORKFLOW || d.windowsWorkflow,
+    afterGoJobs: env.AUTO_STAGE_AFTER_GO_JOBS !== undefined ? String(env.AUTO_STAGE_AFTER_GO_JOBS).split(",").map((s) => s.trim()).filter(Boolean) : [...d.afterGoJobs],
+    buildShowMinutes: num("AUTO_STAGE_BUILD_SHOW_MINUTES", d.buildShowMinutes),
+    imageMinutes: num("AUTO_STAGE_IMAGE_MINUTES", d.imageMinutes),
+    windowsMinutes: num("AUTO_STAGE_WINDOWS_MINUTES", d.windowsMinutes),
+    checkMinutes: num("AUTO_STAGE_CHECK_MINUTES", d.checkMinutes),
+    testMinutes: num("AUTO_STAGE_TEST_MINUTES", d.testMinutes),
   };
 }
 
@@ -230,6 +261,7 @@ export function judgeCompleteness({ tickets, plan, issues, extraOpen = [], defer
   const waitingOn = [];
   const reasons = [];
   const deadEnds = [];
+  const waitingIssues = []; // the open issues waited on, by number (an unreadable one is not among them)
   for (const t of tickets) {
     if (DONE_LINE.test(t.body)) continue; // the release step (or this script) already wrote it
     if (deferred.includes(path.basename(t.file))) continue;
@@ -252,6 +284,7 @@ export function judgeCompleteness({ tickets, plan, issues, extraOpen = [], defer
     }
     if (issue.state !== "CLOSED") {
       waitingOn.push(`#${number}`);
+      waitingIssues.push(number);
       continue;
     }
     if (issue.stateReason && issue.stateReason !== "COMPLETED") {
@@ -269,10 +302,22 @@ export function judgeCompleteness({ tickets, plan, issues, extraOpen = [], defer
     }
     marks.push({ file: t.file, merge: merged[0].commit, issue: number });
   }
-  for (const n of extraOpen) waitingOn.push(`#${n}`);
-  if (waitingOn.length) return { state: "waiting", marks, waitingOn, reasons, deadEnds };
-  if (reasons.length) return { state: "judgment", marks, waitingOn, reasons, deadEnds };
-  return { state: "complete", marks, waitingOn, reasons, deadEnds };
+  for (const n of extraOpen) {
+    waitingOn.push(`#${n}`);
+    waitingIssues.push(n);
+  }
+  const all = { marks, waitingOn, waitingIssues, reasons, deadEnds };
+  if (waitingOn.length) return { state: "waiting", ...all };
+  if (reasons.length) return { state: "judgment", ...all };
+  return { state: "complete", ...all };
+}
+
+// Near the end: every issue the release still waits on has a pull request open that will close it (and none could not be
+// read). Then the merge of the last one is minutes away, and the look keeps watching instead of coming back in 15 minutes,
+// so the version's builds start the moment it is merged (25 November 2026).
+export function nearTheEnd(verdict, issues) {
+  if (!verdict || verdict.state !== "waiting" || !verdict.waitingIssues || verdict.waitingIssues.length !== verdict.waitingOn.length) return false;
+  return verdict.waitingIssues.every((n) => issues[n] && Array.isArray(issues[n].openPulls) && issues[n].openPulls.length > 0);
 }
 
 // ---------- pure: what the plan says is done by hand ----------
@@ -310,7 +355,9 @@ export function freezeRefusalWords(sentence, version) {
   if (v) {
     return { waits: false, kind: "version", words: `the product still says it is version ${v[1]} instead of ${v[2]}, so its version number has to be raised first` };
   }
-  if (/GitHub holds no Windows setup built for commit/.test(s)) return { waits: true, words: "GitHub has not finished building the Windows setup for the newest change" };
+  // A build that is not there is a wait the step ends itself (ensureBuilds starts it), never a person's decision (25 November 2026).
+  if (/GitHub holds no Windows setup built for commit/.test(s)) return { waits: true, kind: "build", words: "GitHub has not finished building the Windows setup for the commit to freeze" };
+  if (/image \S+ is not in the registry/.test(s)) return { waits: true, kind: "build", words: "GitHub has not finished building the server image for the commit to freeze" };
   if (/open approved-plan tickets/.test(s)) return { waits: false, words: "some tickets of the plan are not marked as finished" };
   if (/already has the tag/.test(s)) return { waits: true, kind: "tagged", words: `${version} was frozen already, so the next look carries on from its tag` };
   return { waits: true, words: s.replace(/\b[0-9a-f]{40}\b/g, (x) => x.slice(0, 7)).replace(/\s+/g, " ").slice(0, 300) };
@@ -512,61 +559,6 @@ export const clearFailure = (state) => {
   delete state.failing;
 };
 
-// ---------- the factory's STOP file ----------
-
-const STOP_MARK = "auto-stage";
-const stopText = (now, pid) => `${STOP_MARK} ${pid} ${new Date(now).toISOString()}\nThe release step pauses the factory while the scenarios run (the driver's stage step).\n`;
-
-// Creates the STOP file unless one is there already. Returns true when this call made it.
-export function createStop(file, now, pid = process.pid) {
-  if (fs.existsSync(file)) return false;
-  if (!fs.existsSync(path.dirname(file))) return false; // no factory here: nothing to pause, and no folder made as root in someone's checkout
-  try {
-    fs.writeFileSync(file, stopText(now, pid), { flag: "wx" });
-  } catch (e) {
-    if (e.code === "EEXIST") return false; // somebody made it a moment ago
-    throw e;
-  }
-  return true;
-}
-
-// Ours: the first line is "auto-stage <pid> ...", or "stage <pid> ..." (on 2026-11-24 a helper relabelled the step's
-// STOP so, and the step then no longer knew it as its own and left the factory halted). Anything else is somebody else's.
-export const stopIsMine = (file) => {
-  try {
-    return /^(auto-stage|stage) \d+\b/.test(fs.readFileSync(file, "utf8"));
-  } catch {
-    return false;
-  }
-};
-
-// Makes the STOP, or takes over one of ours that an earlier look left (killed, or relabelled): it is written again
-// with this process's number, so that whoever reads it sees a writer that runs. -> whether the STOP is this look's now
-export function takeStop(file, now, pid = process.pid) {
-  if (createStop(file, now, pid)) return true;
-  if (!stopIsMine(file)) return false;
-  const tmp = `${file}.${pid}.tmp`;
-  fs.writeFileSync(tmp, stopText(now, pid));
-  fs.renameSync(tmp, file);
-  return true;
-}
-
-// Removes a STOP file this script made; never one somebody else made. Returns whether it removed.
-export function removeStop(file) {
-  if (!fs.existsSync(file) || !stopIsMine(file)) return false;
-  fs.rmSync(file, { force: true });
-  return true;
-}
-
-// At the start of a look: a STOP this script made that is older than the limit is removed.
-export function guardStaleStop(file, now, maxAgeMinutes) {
-  if (!fs.existsSync(file) || !stopIsMine(file)) return { removed: false };
-  const age = now - fs.statSync(file).mtimeMs;
-  if (age <= maxAgeMinutes * MINUTE) return { removed: false, ageMinutes: Math.round(age / MINUTE) };
-  fs.rmSync(file, { force: true });
-  return { removed: true, ageMinutes: Math.round(age / MINUTE) };
-}
-
 // ---------- the notice queue (notebook core/notices.mjs format) ----------
 
 export function queueNotice(file, { id, text, about, facts, at = new Date().toISOString() }) {
@@ -608,9 +600,24 @@ function runChild(cmdArgs, env) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const issueFragment = "number state stateReason comments(last: 30) { nodes { body author { __typename login } } } closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number mergedAt baseRefName repository { nameWithOwner } mergeCommit { oid } } }";
+const issueFragment = "number state stateReason comments(last: 30) { nodes { body author { __typename login } } } closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number state mergedAt baseRefName repository { nameWithOwner } mergeCommit { oid } } } timelineItems(last: 20, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT]) { nodes { __typename ... on CrossReferencedEvent { source { __typename ... on PullRequest { number state repository { nameWithOwner } } } } ... on ConnectedEvent { subject { __typename ... on PullRequest { number state repository { nameWithOwner } } } } } }";
 
-// What the issues of a release say: {issues: {n: {state, stateReason, merges}}, extraOpen: [n]}.
+// The pull requests of this repository still open that work on an issue: the ones that will close it, and the ones that name
+// it (the factory's builder names its issue in the pull request and closes it with a comment, so GitHub links them only by
+// that mention: Godspeed beta.32's last pull request #1117 and its issue #616). An issue with one is near its end, and the
+// look keeps watching it (nearTheEnd).
+export function openPullsOf(n, repo) {
+  const mine = (p) => p && p.state === "OPEN" && (!p.repository || !p.repository.nameWithOwner || p.repository.nameWithOwner.toLowerCase() === String(repo).toLowerCase());
+  const out = new Set();
+  for (const p of (n.closedByPullRequestsReferences && n.closedByPullRequestsReferences.nodes) || []) if (mine(p)) out.add(p.number);
+  for (const t of (n.timelineItems && n.timelineItems.nodes) || []) {
+    const p = t && (t.source || t.subject);
+    if (p && p.__typename === "PullRequest" && mine(p)) out.add(p.number);
+  }
+  return [...out];
+}
+
+// What the issues of a release say: {issues: {n: {state, stateReason, merges, openPulls}}, extraOpen: [n]}.
 export async function readIssues({ api, repo, label, numbers }) {
   const [owner, name] = repo.split("/");
   const aliases = [...new Set(numbers)].map((n) => `i${n}: issue(number: ${n}) { ${issueFragment} }`).join("\n");
@@ -627,6 +634,7 @@ export async function readIssues({ api, repo, label, numbers }) {
     state: n.state,
     stateReason: n.stateReason,
     merges: ((n.closedByPullRequestsReferences && n.closedByPullRequestsReferences.nodes) || []).map((p) => ({ number: p.number, mergedAt: p.mergedAt, commit: p.mergeCommit && p.mergeCommit.oid, repo: p.repository && p.repository.nameWithOwner, base: p.baseRefName })),
+    openPulls: openPullsOf(n, repo),
   });
   const issues = {};
   const comments = {};
@@ -692,9 +700,27 @@ async function addAlreadyDelivered({ api, repo, issues, already }) {
 
 // ctx: {cfg, env, log, now(), dry, records, api, state, stateFile, run(args)->{code,stdout,stderr},
 //       notify({id, text, about}), sleep(ms), scenarios(version), read..., }
+// One look. While what it waits on is moving (the last tickets' open pull requests, the builds, the checks: a result with
+// poll) it reads again every fastPollSeconds, up to lookMinutes, each time on a fresh page of the look for the driver, instead
+// of ending and coming back with the next scheduled look 15 minutes later (25 November 2026).
 export async function autoStage(ctx) {
-  ctx.lookHalt = null;
-  const result = await lookStage(ctx);
+  const pollMs = Math.max(0, Number(ctx.cfg.fastPollSeconds ?? ctx.cfg.pollSeconds) || 0) * 1000;
+  const lookMs = Math.max(0, Number(ctx.cfg.lookMinutes) || 0) * MINUTE;
+  ctx.lookEnds = lookMs > 0 ? ctx.now() + lookMs : null; // no look minutes: one read, as before
+  let result;
+  let fetchedAt = ctx.now();
+  for (;;) {
+    ctx.lookHalt = null;
+    result = await lookStage(ctx);
+    if (!result.poll || ctx.dry || ctx.lookHalt || !ctx.lookEnds || ctx.now() + Math.max(pollMs, 1000) >= ctx.lookEnds) break;
+    await ctx.sleep(pollMs);
+    if (ctx.page) ctx.page();
+    // the records (a scope amendment, a person's "Release step" section) are read again every five minutes of a long look
+    if (ctx.now() - fetchedAt >= 5 * MINUTE && ctx.records && "fetched" in ctx.records) {
+      ctx.records.fetched = false;
+      fetchedAt = ctx.now();
+    }
+  }
   const halt = ctx.lookHalt || persistedHalt(ctx);
   return halt ? { ...result, halt } : result;
 }
@@ -718,16 +744,13 @@ async function lookStage(ctx) {
     if (!dry) saveState(ctx.stateFile, ctx.state);
   };
 
-  const stale = dry
-    ? { removed: false }
-    : guardStaleStop(cfg.stopFile, now(), cfg.stopMaxAgeMinutes);
-  if (stale.removed) log(`A STOP file of this script was ${stale.ageMinutes} minutes old, so it was removed (the factory runs again).`);
-
   const pub = await ctx.publicVersion();
+  await afterGo(ctx, pub);
   const names = records.releases();
   const stagingOf = (text) => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
   const releases = names.map((id) => { const s = records.read(G.stagingPath(id)); return { id, plan: records.read(`releases/${id}/plan.md`) || "", hasStaging: !!s, staging: stagingOf(s) }; });
-  const unfinished = Object.entries(ctx.state.releases).filter(([, v]) => v && v.started && !v.finished && !v.halted).map(([k]) => k);
+  // a release whose commit is pinned is under way as much as one frozen: a newer approval does not take the step off it
+  const unfinished = Object.entries(ctx.state.releases).filter(([, v]) => v && (v.started || v.pin) && !v.finished && !v.halted).map(([k]) => k);
   const installed = installedVersion(releases);
   const { pick, why, superseded } = pickRelease({ releases, inProgress: ctx.only ? [ctx.only] : unfinished, publicVersion: pub, installedVersion: installed, repo: cfg.repo });
   if (!ctx.only) for (const r of superseded) log(`Superseded: ${r.version} is approved but older than ${installed}, which is installed on your server; it is skipped.`);
@@ -856,8 +879,21 @@ async function lookStage(ctx) {
     for (const p of amendProblems) log(`Not taken as a reason to leave a ticket out: ${p}.`);
     const verdict = judgeCompleteness({ tickets, plan, issues: read.issues, extraOpen: read.extraOpen, deferred, repo: cfg.repo });
     if (verdict.state === "waiting") {
-      log(`Not complete yet: waiting on ${verdict.waitingOn.join(", ")}.`);
-      return { outcome: "waiting", waitingOn: verdict.waitingOn };
+      // Near the end (every open ticket has its pull request open) the look keeps watching, so the version's builds start the
+      // minute the last one is merged instead of up to 15 minutes later.
+      const near = nearTheEnd(verdict, read.issues);
+      log(`Not complete yet: waiting on ${verdict.waitingOn.join(", ")}${near ? "; each has its pull request open, so this look keeps watching" : ""}.`);
+      // the look's line while it watches: the driver reads tickets still open as the factory working, never as a stall
+      if (near) log(`Waiting: the release's last tickets are still open (${verdict.waitingIssues.map((n) => `#${n} with its pull request ${read.issues[n].openPulls.map((p) => `#${p}`).join(", ")} open`).join("; ")}).`);
+      if (rs.pin && verdict.waitingIssues.length && !dry) {
+        // a ticket that is open again (reopened, or added by an amendment) after the commit was pinned: the pin no longer
+        // holds the whole release, so the commit is taken again once every ticket is done (an issue GitHub could not read
+        // keeps the pin: that is GitHub's hiccup, not the release's)
+        log(`The commit ${rs.pin.commit.slice(0, 7)} pinned for the freeze no longer holds every ticket, so it is let go.`);
+        delete rs.pin;
+        save();
+      }
+      return { outcome: "waiting", waitingOn: verdict.waitingOn, ...(near ? { poll: true, why: "the last tickets' pull requests" } : {}) };
     }
     if (verdict.state === "judgment" && verdict.deadEnds.length && verdict.deadEnds.length === verdict.reasons.length && D.planRuleWords(plan)) {
       // A ticket whose issue was closed with nothing of it on main reached a dead end. Under the plan's
@@ -881,24 +917,15 @@ async function lookStage(ctx) {
     }
     log(`Every ticket of ${version} is closed and merged${verdict.marks.length ? `; ${verdict.marks.length} ticket file(s) still lack their "Status: done (merge ...)" line` : ""}.`);
 
-    // ---- the commit to freeze: main's head, once its required check passed
-    const head = await ctx.mainHead();
-    if (head.none) {
-      blocked("main-check", head.none);
-      return { outcome: "waiting", why: "main's check" };
-    }
-    clearBlock("main-check");
-    log(`Main is at ${head.commit.slice(0, 7)} and its required check passed.`);
-
-    const base = [helper("freeze.mjs"), cfg.repo, version, "--commit", head.commit, "--no-staging"];
-    if (dry && verdict.marks.length) {
-      log(`Would write "Status: done (merge ...)" into ${verdict.marks.length} ticket file(s): ${verdict.marks.map((m) => `${path.basename(m.file)} -> ${m.merge.slice(0, 7)} (issue #${m.issue})`).join(", ")}.`);
-      log(`Would run: node ${base.join(" ")} --dry-run, and then the same without --dry-run, then start the scenarios on candidate/${version}.`);
-      return { outcome: "would-freeze", commit: head.commit };
-    }
     // The ticket lines go in first: the freeze reads them from godspeed-dev's main (its scope check),
     // so its own dry run below can only say yes once they are there. They are true whatever follows:
     // each says which merge closed which issue.
+    if (dry && verdict.marks.length) {
+      // the freeze's own dry run reads those lines from the records, which a dry look does not write: it ends here
+      log(`Would write "Status: done (merge ...)" into ${verdict.marks.length} ticket file(s): ${verdict.marks.map((m) => `${path.basename(m.file)} -> ${m.merge.slice(0, 7)} (issue #${m.issue})`).join(", ")}.`);
+      log(`Would then freeze ${version} from main as it is now, with its version as one commit on top, and start the short tests on candidate/${version}.`);
+      return { outcome: "would-freeze" };
+    }
     if (verdict.marks.length) {
       const files2 = {};
       for (const m of verdict.marks) files2[m.file] = markTicket(records.read(m.file) || "", m.merge);
@@ -906,8 +933,14 @@ async function lookStage(ctx) {
       log(`Wrote the ticket status lines into the records repository${commit ? ` (${commit.slice(0, 7)})` : " (already there)"}.`);
     }
 
-    // ---- a dry run of the freeze (it writes nothing, so a dry look runs it too): a refusal is a wait,
-    // the version change, or a cause said once while every look tries again
+    // ---- the commit to freeze: main's head pinned once, the version as one commit on top, its builds and checks
+    const fixed = await fixedCommit({ ctx, id, version, plan, deferred, rs, save, sayOnce, blocked, clearBlock });
+    if (fixed.outcome) return fixed; // a wait, a dry look's answer, or a person's decision
+    const commit = fixed.commit;
+
+    // ---- a dry run of the freeze (it writes nothing, so a dry look runs it too): a refusal is a wait, or a cause said
+    // once while every look tries again
+    const base = [helper("freeze.mjs"), cfg.repo, version, "--commit", commit, "--no-staging"];
     const check = await ctx.run([...base, "--dry-run"]);
     if (check.code !== 0) {
       const sentence = check.stderr.trim().split("\n").filter(Boolean).pop() || `freeze exited ${check.code}`;
@@ -917,23 +950,23 @@ async function lookStage(ctx) {
         log(`candidate/${version} exists already; the next look carries on from it.`);
         return { outcome: "waiting", why: "tag exists" };
       }
-      if (w.kind === "version" && !rs.candidate && ctx.versionPull) {
-        clearBlock("freeze");
-        return versionStep({ ctx, version, plan, deferred, rs, save, sayOnce, blocked, clearBlock });
+      if (w.kind === "build") {
+        // GitHub's store does not answer for a build the step saw finish: a wait that ends by itself (or a halt once it lasted)
+        blocked("build", w.words);
+        return { outcome: "waiting", why: "build", poll: true };
       }
       blocked("freeze", w.words, { immediate: !w.waits });
       return { outcome: "needs-judgment", why: sentence };
     }
     if (dry) {
-      log(`The freeze's own dry run says yes. Would run: node ${base.join(" ")}, then start the scenarios on candidate/${version}.`);
-      return { outcome: "would-freeze", commit: head.commit };
+      log(`The freeze's own dry run says yes. Would run: node ${base.join(" ")}, then start the short tests on candidate/${version}.`);
+      return { outcome: "would-freeze", commit };
     }
-    clearBlock("freeze");
-    for (const k of ["version", "version-check", "version-merged"]) clearBlock(k);
+    for (const k of ["freeze", "build", "version", "version-check", "version-merged", "pin-check"]) clearBlock(k);
     rs.started = new Date(now()).toISOString();
     rs.freezeStartedAt = rs.started;
     save();
-    log(`Freezing ${version} from ${head.commit.slice(0, 7)}.`);
+    log(`Freezing ${version} from ${commit.slice(0, 7)}.`);
     const frozen = await ctx.run(base);
     if (frozen.code !== 0) {
       const sentence = frozen.stderr.trim().split("\n").filter(Boolean).pop() || `freeze exited ${frozen.code}`;
@@ -961,91 +994,391 @@ async function lookStage(ctx) {
     log(`candidate/${version} exists; the next look would continue with its scenarios and the server.`);
     return { outcome: "would-continue" };
   }
-  return stageFrozen({ ctx, id, version, base: baseVersion, plan, rs, save, sayOnce, haltWith, tag });
+  return stageFrozen({ ctx, id, version, base: baseVersion, plan, rs, save, sayOnce, haltWith, tag, blocked, clearBlock });
 }
 
-// ---------- the version: a pull request of the release step ----------
+// ---------- the commit to freeze: main's head pinned once, the version on top, its builds and checks ----------
+//
+// WHY (25 November 2026, Godspeed 2.0.0-beta.32): the freeze used to take "main's newest change once its required check passed".
+// Every merge of the factory restarted that wait (a check of about 18 minutes, the server image included), the version pull
+// request then needed its own 18-minute cycle, and the merge of it one more on main; a commit whose server image the product does
+// not build by itself (a change to scenarios/ only) stopped everything as a person's decision. One hour and 42 minutes from the
+// last merge to the go question, four hand steps.
+// HOW: the moment every ticket is done, main's head is pinned (rs.pin) and never followed again. The version is ONE commit on top
+// of it on release/version-<version>, a branch the product's workflows build on every push (the server image and the Windows
+// setup), so those builds run beside the pull request's own required check: one cycle. Once all of it passed, the pull request
+// is merged with a merge commit, which keeps that very commit on main (freeze.mjs freezes only a commit on main or on the
+// release branch), and that commit is frozen. Whatever the factory merges meanwhile changes nothing, so the factory is not held.
+// The pin's own required check runs beside it all; only its failure changes anything (its failed jobs are run once more, then
+// the release is pinned to main's newest head instead).
 
-// The product's version is raised by one pull request (notebook/package.json and the README's "New in"
-// section), opened with the builder App on release/version-<version> and, once `required` passed,
-// approved and merged with the release App (roles/release.md step 1: GitHub refuses an approval from
-// the pull request's own author). It never touches .github/, so no person is needed. A crash is resumed
-// by looking at GitHub for that branch's pull request, never by opening a second one.
-// -> {outcome}; the next look (main at the new commit, its Windows setup built) freezes as always.
-async function versionStep({ ctx, version, plan, deferred, rs, save, sayOnce, blocked, clearBlock }) {
+const hhmm = (ms) => new Date(ms).toISOString().slice(11, 16);
+const short7 = (s) => String(s || "").slice(0, 7);
+// The branch a pinned commit gets when it is no branch's head and a build has to be started on it.
+export const buildBranch = (version) => `release/build-${version}`;
+const BUILDS = { image: { label: "the server image", minutes: "imageMinutes" }, windows: { label: "the Windows setup", minutes: "windowsMinutes" } };
+
+// The words of a look's waits, the one that ends last first:
+// "building the server image for 3928cfb, about 18 minutes (done about 23:24 UTC); the required check of ... (done about 23:25 UTC)"
+export function waitWords(waits) {
+  return [...waits]
+    .sort((a, b) => (b.until || 0) - (a.until || 0))
+    .map((w) => `${w.words}${w.until ? ` (done about ${hhmm(w.until)} UTC)` : ""}`)
+    .join("; ");
+}
+
+// -> {commit} when the freeze can go, else the look's result (a wait the look keeps watching, or a person's decision).
+async function fixedCommit({ ctx, version, plan, deferred, rs, save, sayOnce, blocked, clearBlock }) {
+  const { cfg, log } = ctx;
+  const dry = !!ctx.dry;
+  const now = () => ctx.now();
+  const iso = () => new Date(now()).toISOString();
+  const watching = (why) => ({ outcome: "waiting", why, poll: true });
+
+  // ---- 1. the pin: main's head, taken once
+  let pinAt = rs.pin && rs.pin.at;
+  if (!rs.pin) {
+    const tip = await ctx.mainTip();
+    if (dry) {
+      // a dry look takes main's head as a real one would, without writing it, and goes on reading
+      log(`Would freeze ${version} from main as it is now, ${short7(tip)}, with its version as one commit on top, whatever else is merged after it.`);
+      pinAt = iso();
+    } else {
+      rs.pin = { commit: tip, at: iso() };
+      save();
+      pinAt = rs.pin.at;
+      log(`Every ticket is in: ${version} is frozen from main as it is now, ${short7(tip)}, whatever else is merged after it.`);
+    }
+    if (dry) return fixedCommitFrom({ ctx, version, plan, deferred, rs, save, sayOnce, blocked, clearBlock, pin: tip, pinAt });
+  }
+  return fixedCommitFrom({ ctx, version, plan, deferred, rs, save, sayOnce, blocked, clearBlock, pin: rs.pin.commit, pinAt });
+}
+
+async function fixedCommitFrom({ ctx, version, plan, deferred, rs, save, sayOnce, blocked, clearBlock, pin, pinAt }) {
+  const { cfg, log } = ctx;
+  const dry = !!ctx.dry;
+  const now = () => ctx.now();
+  const iso = () => new Date(now()).toISOString();
+  const watching = (why) => ({ outcome: "waiting", why, poll: true });
+  // A check's failed jobs run once more, each failed run of the commit at most once: a run is written down as asked
+  // (rs.rerunRuns) BEFORE its request and taken off only when GitHub answered no, so neither a lost answer, nor a look that
+  // ended in between, nor a list of runs GitHub has not updated yet can ever ask it again; a run on its second attempt is never
+  // asked either (rerunnable). The check counts as run once more (rs.reruns) once no request was refused. A refusal is said in
+  // the look and asked again by the next read (a refusal that lasts is a wait that becomes a halt), so the look goes on.
+  // -> whether every run was run once more
+  const runOnceMore = async (sha, what) => {
+    if (dry) return true;
+    const asked = ((rs.rerunRuns ||= {})[sha] ||= []);
+    let out;
+    try {
+      out = await ctx.rerunChecks(sha, asked, save);
+    } catch (e) {
+      if (!(e instanceof R.Refused)) throw e;
+      out = { refused: e.message };
+    }
+    const refused = out && typeof out === "object" ? out.refused : null;
+    if (refused) {
+      log(`${what} failed, and GitHub refused to run its failed jobs once more (${refused}); it is asked again.`);
+      return false;
+    }
+    (rs.reruns ||= {})[sha] = iso();
+    save();
+    return true;
+  };
+
+  // ---- 2. the pin's own required check: it runs beside the builds below, and only its failure changes anything
+  let pinCheck = await ctx.checkState(pin);
+  if (pinCheck === "failed") {
+    const reruns = dry ? { ...(rs.reruns || {}) } : (rs.reruns ||= {});
+    if (!reruns[pin]) {
+      if (await runOnceMore(pin, `main's required check at ${short7(pin)}`)) log(`main's required check failed at ${short7(pin)}, so its failed jobs were run once more.`);
+      pinCheck = "running"; // either way still a wait: run once more, or asked again
+    } else if (now() - Date.parse(reruns[pin]) < 2 * MINUTE) {
+      pinCheck = "running"; // the run once more does not show yet
+    } else {
+      const tip = await ctx.mainTip();
+      if (tip !== pin && !dry) {
+        rs.pin = { commit: tip, at: iso(), after: pin };
+        save();
+        log(`main's required check failed twice at ${short7(pin)}, so ${version} is frozen from main's newest head, ${short7(tip)}, instead.`);
+        return watching("pin moved");
+      }
+      blocked("pin-check", `main's required check failed twice at ${short7(pin)} and nothing newer is on main yet, so main's repair comes first`);
+      return { outcome: "waiting", why: "main is red" };
+    }
+  }
+
+  // ---- 3. the version: one commit on top of the pin, or the pin itself when it carries the version already
+  const v = await versionOnPin({ ctx, version, plan, deferred, rs, pin, save, blocked });
+  if (v.result) return v.result;
+  const { commit, branch, pr } = v;
+
+  // ---- 4. its builds and the checks, all at once
+  const b = await ensureBuilds({ ctx, rs, commit, branch, version, save, blocked });
+  if (b.result) return b.result;
+  const waits = [...b.waits];
+  if (pinCheck !== "passed") waits.push({ words: `main's required check at ${short7(pin)}`, until: Date.parse(pinAt) + cfg.checkMinutes * MINUTE });
+  if (pr && !pr.merged) {
+    const req = await ctx.versionPull.required(commit);
+    if (req.state === "failed") {
+      const reruns = dry ? { ...(rs.reruns || {}) } : (rs.reruns ||= {});
+      if (!reruns[commit]) {
+        if (await runOnceMore(commit, `the required check of the version pull request #${pr.number}`)) {
+          log(`The version pull request #${pr.number} did not pass its checks, so its failed jobs were run once more.`);
+          waits.push({ words: `the required check of the version pull request #${pr.number}, run once more`, until: now() + cfg.checkMinutes * MINUTE });
+        } else waits.push({ words: `the required check of the version pull request #${pr.number} failed, and running it once more is asked again`, until: now() + MINUTE });
+      } else if (now() - Date.parse(reruns[commit]) < 2 * MINUTE) {
+        waits.push({ words: `the required check of the version pull request #${pr.number}, run once more`, until: Date.parse(reruns[commit]) + cfg.checkMinutes * MINUTE });
+      } else {
+        const cause = await ctx.versionPull.failures(commit);
+        if (dry) log(`#${pr.number}'s required check failed twice: ${cause}.`);
+        else sayOnce(`version-failed-${short7(commit)}`, `Godspeed ${version} is finished, but the pull request that raises its version number did not pass its checks: ${cause}. I keep watching it and merge it by myself as soon as it passes.`, `Godspeed ${version}: the version change failed its checks`);
+        blocked("version-check", `the version pull request #${pr.number} did not pass its checks, also when they were run once more (${cause})`);
+        return { outcome: "waiting", why: "version checks failed" };
+      }
+    } else if (req.state !== "passed") {
+      waits.push({ words: `the required check of the version pull request #${pr.number}`, until: Date.parse((rs.bump && rs.bump.openedAt) || iso()) + cfg.checkMinutes * MINUTE });
+    }
+  }
+  if (waits.length) {
+    blocked("build", waitWords(waits));
+    return watching("builds and checks");
+  }
+  for (const k of ["build", "version-check", "pin-check"]) clearBlock(k);
+
+  // ---- 5. the version is merged with a merge commit, so the commit frozen next is on main itself
+  if (pr && !pr.merged) {
+    if (dry) {
+      log(`Would merge #${pr.number} with a merge commit (its required check passed) and freeze ${short7(commit)}.`);
+      return { outcome: "would-merge-version" };
+    }
+    const m = await ctx.versionPull.merge({ pr: pr.number, head: commit, title: `${versionTitle(version)} (#${pr.number})`, message: `${GUIDE_TRAILER}\n`, method: "merge" });
+    if (!m.ok) {
+      const tries = (rs.bump.mergeRefused || 0) + 1;
+      rs.bump.mergeRefused = tries;
+      save();
+      log(`GitHub refused to merge #${pr.number} (${m.message}); it is tried again.`);
+      if (tries >= 3) {
+        blocked("version", `GitHub refused to merge the version change #${pr.number} ${tries} times (${m.message})`, { immediate: true });
+        return { outcome: "needs-judgment", why: "version merge refused" };
+      }
+      return watching("version merge refused");
+    }
+    rs.bump.merged = m.sha;
+    rs.bump.mergedAt = iso();
+    save();
+    log(`Merged #${pr.number} with a merge commit (${short7(m.sha)}): ${short7(commit)}, the version on ${short7(pin)}, is on main now and is what is frozen.`);
+  }
+  return { commit };
+}
+
+// The version as one commit on top of the pin, opened with the builder App on release/version-<version> (notebook/package.json and
+// the README's "New in" section), and later merged with the release App (roles/release.md step 1: GitHub refuses an approval from
+// the pull request's own author). It never touches .github/, so no person is needed. A crash is resumed by looking at GitHub for
+// that branch's pull request, never by opening a second one.
+// -> {commit, branch, pr} (branch: the branch whose head the commit is, null for the pin itself) or {result}
+async function versionOnPin({ ctx, version, plan, deferred, rs, pin, save, blocked }) {
   const { log } = ctx;
   const vp = ctx.versionPull;
   const dry = !!ctx.dry;
+  const iso = () => new Date(ctx.now()).toISOString();
+  if (!vp) return { commit: pin, branch: null, pr: null };
   const branch = versionBranch(version);
   const title = versionTitle(version);
-  const pr = await vp.find(branch);
   const keep = (over) => {
     if (dry) return;
     rs.bump = { ...(rs.bump || {}), branch, ...over };
     save();
   };
+  const judgment = (key, words, why) => {
+    blocked(key, words, { immediate: true });
+    return { result: { outcome: "needs-judgment", why } };
+  };
+  const message = `${title}\n\n${GUIDE_TRAILER}\n`;
+  const pr = await vp.find(branch);
+
+  const moveOnto = async () => {
+    if (dry) {
+      log(`Would move the version pull request #${pr.number} onto ${short7(pin)}.`);
+      return { result: { outcome: "would-raise-version" } };
+    }
+    keep({ moving: pin }); // the intent first: a crash after the push finds the step's own commit on the pin, not somebody else's
+    const r = await vp.update({ branch, version, section: versionNotes({ plan, version, deferred }), message, onto: pin });
+    if (r.cannot || r.unchanged) return judgment("version", `the version pull request #${pr.number} could not be moved onto ${short7(pin)} (${r.cannot || "there is nothing to change there"})`, "version move");
+    keep({ head: r.head, parent: pin, openedAt: iso(), moving: null });
+    log(`The version pull request #${pr.number} now stands on ${short7(pin)} (${short7(r.head)}).`);
+    return { commit: r.head, branch, pr: { number: pr.number, merged: false, head: r.head } };
+  };
+
   if (!pr) {
-    // main may already carry this version or a newer one (beta.28 merged, not yet installed, while the older
-    // beta.27 is still approved): opening the pull request would move the product back.
-    const onMain = vp.mainVersion ? await vp.mainVersion() : null;
-    if (onMain && G.compareVersions(version, onMain) <= 0) {
-      log(`Superseded: ${version} is approved but not newer than ${onMain}, which main already carries; no version pull request is opened.`);
-      return { outcome: "waiting", why: "superseded by main's version" };
+    if (rs.bump && rs.bump.unchanged === pin) return { commit: pin, branch: null, pr: null };
+    // the pin may carry a newer version already (beta.28 merged, not yet installed, while the older beta.27 is still approved):
+    // opening the pull request would move the product back
+    const atPin = vp.versionAt ? await vp.versionAt(pin) : null;
+    if (atPin && G.compareVersions(version, atPin) < 0) {
+      log(`Superseded: ${version} is approved but main already carries the newer ${atPin}; no version pull request is opened.`);
+      return { result: { outcome: "waiting", why: "superseded by main's version" } };
     }
     const section = versionNotes({ plan, version, deferred });
     const items = deliveredItems(plan, deferred);
     if (dry) {
-      log(`Would open the pull request "${title}" on ${branch} (builder App): notebook/package.json says ${version}, and the README gets this section:\n${section}`);
-      return { outcome: "would-raise-version" };
+      log(`Would open the pull request "${title}" on ${branch} (builder App) as one commit on ${short7(pin)}: notebook/package.json says ${version}, and the README gets this section:\n${section}`);
+      return { result: { outcome: "would-raise-version" } };
     }
-    keep({ openingAt: new Date(ctx.now()).toISOString() }); // the intent first: a crash after the open is found by its branch
+    keep({ openingAt: iso(), parent: pin }); // the intent first: a crash after the open is found by its branch
     const moved = deferred.length ? ` ${deferredWords(plan, deferred).join(", ")} moved to the next release and ${deferred.length === 1 ? "is" : "are"} not listed.` : "";
-    const body = `Sets the notebook's version to ${version} so the candidate can be frozen, and adds the README's "New in ${version}" section from the approved plan's "What it delivers" (${items.length ? `items ${items.map((i) => i.item).join(", ")}` : "no item a person notices"}).${moved}\n\nOpened by auto-stage (the release step) with the builder App; approved and merged with the release App once \`required\` passes. Only notebook/package.json and README.md change.\n\n${GUIDE_TRAILER}\n`;
-    const r = await vp.open({ branch, version, title, body, section, message: `${title}\n\n${GUIDE_TRAILER}\n` });
-    if (r.cannot) {
-      blocked("version", `the pull request that raises the version could not be opened (${r.cannot})`, { immediate: true });
-      return { outcome: "needs-judgment", why: r.cannot };
+    const body = `Sets the notebook's version to ${version} and adds the README's "New in ${version}" section from the approved plan's "What it delivers" (${items.length ? `items ${items.map((i) => i.item).join(", ")}` : "no item a person notices"}), as one commit on ${pin}, the commit the release is frozen from.${moved}\n\nOpened by auto-stage (the release step) with the builder App. The push of this branch builds the commit's server image and Windows setup beside these checks; once \`required\` passes, the release App merges it with a merge commit and this very commit is frozen. Only notebook/package.json and README.md change.\n\n${GUIDE_TRAILER}\n`;
+    const r = await vp.open({ branch, version, title, body, section, message, onto: pin });
+    if (r.unchanged) {
+      keep({ unchanged: pin });
+      log(`main at ${short7(pin)} already says ${version} and has its README section, so that commit itself is frozen.`);
+      return { commit: pin, branch: null, pr: null };
     }
-    keep({ pr: r.pr, head: r.head, openedAt: new Date(ctx.now()).toISOString() });
-    log(`Opened #${r.pr}, "${title}"; it is merged once its required check passes.`);
-    return { outcome: "waiting", why: "version pull request opened" };
+    if (r.cannot) return judgment("version", `the pull request that raises the version could not be opened (${r.cannot})`, r.cannot);
+    keep({ pr: r.pr, head: r.head, parent: pin, openedAt: iso() });
+    log(`Opened #${r.pr}, "${title}", as one commit on ${short7(pin)} (${short7(r.head)}): GitHub builds its server image and Windows setup from that push, beside its checks.`);
+    return { commit: r.head, branch, pr: { number: r.pr, merged: false, head: r.head } };
   }
   keep({ pr: pr.number });
-  if (pr.merged) {
-    blocked("version-merged", `the version change #${pr.number} is merged, and main's newest change does not carry it into a Windows setup yet`);
-    return { outcome: "waiting", why: "version merged" };
+  if (pr.state === "closed" && !pr.merged) return judgment("version", `the pull request that raises the version (#${pr.number}) was closed without being merged`, "version pull request closed");
+  const bump = rs.bump || {};
+  // merged by the release step before 25 November 2026 (a squash merge): the version is on main, and the pin, taken after it, carries it
+  if (pr.merged && !bump.parent) return { commit: pin, branch: null, pr: null };
+  if (!bump.head) {
+    // opened by a look that ended before it saved its commit: that commit must stand on the pin
+    const parent = vp.parentOf ? await vp.parentOf(pr.head) : null;
+    if (parent === pin) keep({ head: pr.head, parent: pin, openedAt: bump.openingAt || iso() });
+    else if (pr.merged) return judgment("version", `the version pull request #${pr.number} was merged from a commit that does not stand on ${short7(pin)}, the commit the release is frozen from`, "version pull request elsewhere");
+    else return moveOnto();
+  } else if (pr.head !== bump.head) {
+    // the step's own move onto the pin that a look did not see end: its commit stands on the pin it was moving to
+    const parent = bump.moving === pin && !pr.merged && vp.parentOf ? await vp.parentOf(pr.head) : null;
+    if (parent !== pin) return judgment("version", `somebody else pushed to the version pull request #${pr.number}, so it is not the release step's to merge`, "version pull request changed");
+    keep({ head: pr.head, parent: pin, openedAt: iso(), moving: null });
+    log(`The version pull request #${pr.number} was moved onto ${short7(pin)} by an earlier read (${short7(pr.head)}).`);
   }
-  if (pr.state === "closed") {
-    blocked("version", `the pull request that raises the version (#${pr.number}) was closed without being merged`, { immediate: true });
-    return { outcome: "needs-judgment", why: "version pull request closed" };
+  if (!pr.merged && rs.bump.parent !== pin) return moveOnto(); // the pin moved: the version goes on top of the new one
+  return { commit: rs.bump.head, branch, pr: { number: pr.number, merged: !!pr.merged, head: pr.head } };
+}
+
+// The server image and the Windows setup of the commit to freeze. Each is ready (in the registry, or kept as GitHub's artifact),
+// being built, or not started: then the push it comes from is given buildShowMinutes to show its run, and after that the step
+// starts it itself on the branch whose head is the commit (a branch of its own when the commit is nobody's head), once per commit
+// and kind, written down before the request. A failed build is run once more; a second failure, or a build the step started that
+// never shows, is a halt with its cause. -> {waits: [{words, until}]} or {result}
+async function ensureBuilds({ ctx, rs, commit, branch, version, save, blocked }) {
+  const { cfg, log } = ctx;
+  const dry = !!ctx.dry;
+  const now = () => ctx.now();
+  const iso = () => new Date(now()).toISOString();
+  const waits = [];
+  const all = dry ? { ...(rs.builds || {}) } : (rs.builds ||= {});
+  const mine = dry ? { ...(all[commit] || {}) } : (all[commit] ||= {});
+  if (!mine.since) {
+    mine.since = iso(); // when the step first looked for this commit's builds: its push is at most this old
+    if (!dry) save();
   }
-  const req = await vp.required(pr.head);
-  if (req.state === "failed") {
-    const cause = await vp.failures(pr.head);
-    if (dry) log(`#${pr.number}'s required check failed: ${cause}.`);
-    else sayOnce(`version-failed-${String(pr.head).slice(0, 7)}`, `Godspeed ${version} is finished, but the pull request that raises its version number did not pass its checks: ${cause}. I keep watching it and merge it by myself as soon as it passes.`, `Godspeed ${version}: the version change failed its checks`);
-    return { outcome: "waiting", why: "version checks failed" };
+  const since = Date.parse(mine.since);
+  for (const kind of ["image", "windows"]) {
+    if (await ctx.buildReady(kind, commit)) continue;
+    const k = dry ? { ...(mine[kind] || {}) } : (mine[kind] ||= {});
+    const label = `${BUILDS[kind].label} for ${short7(commit)}`;
+    const typical = cfg[BUILDS[kind].minutes];
+    const building = (start, again = "") => waits.push({ words: `building ${label}${again}, about ${typical} minutes`, until: start + typical * MINUTE });
+    const run = await ctx.buildRun(kind, commit);
+    if (run && run.status !== "completed") {
+      building(Date.parse(run.startedAt) || now(), k.rerunAt ? " once more" : "");
+      continue;
+    }
+    if (run && run.conclusion === "success") {
+      waits.push({ words: `${label} is built and on its way into GitHub's store`, until: now() + MINUTE });
+      continue;
+    }
+    if (run) {
+      // failed or cancelled: run once more, then it is a cause somebody looks at. GitHub's attempt count is the record: a run on
+      // its second attempt was run once more, whatever a look wrote down or lost
+      if ((run.attempt || 1) >= 2) {
+        blocked("build-failed", `GitHub could not build ${label}: its run failed, also when it was run once more (${run.url || `run ${run.id}`})`, { immediate: true });
+        return { result: { outcome: "needs-judgment", why: "build failed" } };
+      }
+      if (k.rerunAt) {
+        // asked once already: never asked again. GitHub may not show the new attempt yet; one that never shows is a halt
+        if (now() - Date.parse(k.rerunAt) < 5 * MINUTE) {
+          building(Date.parse(k.rerunAt), " once more");
+          continue;
+        }
+        blocked("build-failed", `GitHub could not build ${label}: its run failed, and its run once more never showed (${run.url || `run ${run.id}`})`, { immediate: true });
+        return { result: { outcome: "needs-judgment", why: "build failed" } };
+      }
+      // written down before the request, so it is never made twice; taken back only when GitHub answered no (then the next read
+      // asks again, and a refusal that lasts is a wait that becomes a halt)
+      if (!dry) {
+        k.rerunAt = iso();
+        save();
+        try {
+          await ctx.rerunFailed(run.id);
+        } catch (e) {
+          if (e instanceof R.Refused) {
+            delete k.rerunAt;
+            save();
+          }
+          log(`GitHub's build of ${label} failed, and running it once more ${e instanceof R.Refused ? "was refused" : "got no answer"} (${e.message}); ${e instanceof R.Refused ? "it is asked again" : "it is not asked a second time"}.`);
+          waits.push({ words: `${label} failed${e instanceof R.Refused ? " and GitHub refused to run it once more" : ", and its run once more got no answer"}`, until: now() + MINUTE });
+          continue;
+        }
+      }
+      log(`GitHub's build of ${label} failed, so its failed jobs were run once more.`);
+      building(now(), " once more");
+      continue;
+    }
+    if (k.dispatchedAt) {
+      if (now() - Date.parse(k.dispatchedAt) < cfg.dispatchGraceMinutes * MINUTE) {
+        building(Date.parse(k.dispatchedAt));
+        continue;
+      }
+      blocked("build-lost", `the release step started GitHub's build of ${label} on ${k.ref}, and GitHub shows none`, { immediate: true });
+      return { result: { outcome: "needs-judgment", why: "build lost" } };
+    }
+    // nothing on GitHub yet: the push it comes from may still be on its way
+    if (now() - since < cfg.buildShowMinutes * MINUTE) {
+      waits.push({ words: `waiting for GitHub to start building ${label}`, until: since + typical * MINUTE });
+      continue;
+    }
+    let ref = branch;
+    if (!ref) {
+      // main moved on, so the commit is nobody's head: a branch of its own is made at it (its push starts what runs on a push)
+      if (!mine.branch) {
+        if (dry) {
+          log(`Would make ${buildBranch(version)} at ${short7(commit)} and start GitHub's build of ${label} there.`);
+          continue;
+        }
+        const made = await ctx.versionPull.pointBranch(buildBranch(version), commit);
+        if (made.cannot) {
+          blocked("build", `${label} is not built, and the branch to build it on could not be made (${made.cannot})`, { immediate: true });
+          return { result: { outcome: "needs-judgment", why: "build branch" } };
+        }
+        mine.branch = { name: buildBranch(version), at: iso() };
+        save();
+        log(`${short7(commit)} is nobody's head any more, so ${mine.branch.name} was made at it for its builds.`);
+      }
+      ref = mine.branch.name;
+      if (now() - Date.parse(mine.branch.at) < cfg.buildShowMinutes * MINUTE) {
+        waits.push({ words: `waiting for GitHub to start building ${label}`, until: Date.parse(mine.branch.at) + typical * MINUTE });
+        continue;
+      }
+    }
+    if (dry) {
+      log(`Would start GitHub's build of ${label} on ${ref}.`);
+      continue;
+    }
+    k.dispatchedAt = iso(); // before the request: a crash in between never starts a second build
+    k.ref = ref;
+    save();
+    await ctx.dispatchBuild(kind, ref);
+    log(`GitHub had not built ${label}, so the release step started that build on ${ref}.`);
+    building(now());
   }
-  if (req.state !== "passed") {
-    blocked("version-check", `the pull request that raises the version (#${pr.number}) waits for its required check (${req.state})`);
-    return { outcome: "waiting", why: "version checks" };
-  }
-  clearBlock("version-check");
-  if (dry) {
-    log(`Would approve and merge #${pr.number} with the release App (its required check passed).`);
-    return { outcome: "would-merge-version" };
-  }
-  const m = await vp.merge({ pr: pr.number, head: pr.head, title: `${pr.title || title} (#${pr.number})`, message: `${GUIDE_TRAILER}\n` });
-  if (!m.ok) {
-    const tries = (rs.bump.mergeRefused || 0) + 1;
-    keep({ mergeRefused: tries });
-    log(`GitHub refused to merge #${pr.number} (${m.message}); the next look tries again.`);
-    if (tries >= 3) blocked("version", `GitHub refused to merge the version change #${pr.number} ${tries} times (${m.message})`, { immediate: true });
-    return { outcome: "waiting", why: "version merge refused" };
-  }
-  keep({ merged: m.sha, mergedAt: new Date(ctx.now()).toISOString() });
-  log(`Merged #${pr.number} (${String(m.sha).slice(0, 7)}): the product now says ${version}. The next look freezes once main's check and its Windows setup are there.`);
-  return { outcome: "waiting", why: "version merged" };
+  return { waits };
 }
 
 // ---------- a failed candidate: its jobs by name, filed for the factory ----------
@@ -1080,10 +1413,13 @@ export const namesJob = (issue, job) => {
   const whole = new RegExp(`(^|[^\\w-])${String(job).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\w-])`);
   return whole.test(String((issue && issue.title) || "")) || whole.test(String((issue && issue.body) || ""));
 };
-export function failureIssue({ version, job, cause = null, run = null, url = null, now = Date.now() }) {
+export function failureIssue({ version, job, cause = null, run = null, url = null, now = Date.now(), afterGo = false }) {
   const known = cause && !cause.unread && cause.plain;
+  const where = url ? ` (${url})` : run ? ` (run ${run})` : "";
   const body = [
-    `The everyday scenario "${job}" failed on the candidate of ${version}${url ? ` (${url})` : run ? ` (run ${run})` : ""}, and again when its failed jobs were run once more.`,
+    afterGo
+      ? `The scenario "${job}" failed on ${version} in its one run after the release went public${where}. It runs only then, so it held nothing back; a fix goes into the next release.`
+      : `The everyday scenario "${job}" failed on the candidate of ${version}${where}, and again when its failed jobs were run once more.`,
     cause && cause.line ? `    ${cause.line}` : "",
     known ? `What went wrong, as its log says: ${String(cause.plain).replace(/[.\s]+$/, "")}.` : cause && cause.unread ? "Its log could not be read when this was filed; the run's page has it." : "The run's page has its log.",
     cause && cause.environment
@@ -1097,7 +1433,7 @@ export function failureIssue({ version, job, cause = null, run = null, url = nul
 
 // failures: [{job, cause}]. Each is filed once per candidate (rs.filed, saved after each), or noted as open already.
 // GitHub refusing the list or the filing throws a refusal: the look ends unfinished and the next one carries on.
-async function fileFailures({ ctx, rs, version, staged, failures, save }) {
+async function fileFailures({ ctx, rs, version, staged, failures, save, afterGo = false }) {
   const key = (job) => `${version} ${job}`;
   const todo = failures.filter((f) => !(rs.filed && rs.filed[key(f.job)]));
   if (!todo.length) return;
@@ -1111,7 +1447,7 @@ async function fileFailures({ ctx, rs, version, staged, failures, save }) {
       ctx.log(`"${f.job}" is open already as #${hit.number}, so it is not filed a second time.`);
       continue;
     }
-    const issue = failureIssue({ version, job: f.job, cause: f.cause, run: staged.run, url: staged.url, now: ctx.now() });
+    const issue = failureIssue({ version, job: f.job, cause: f.cause, run: staged.run, url: staged.url, now: ctx.now(), afterGo });
     const made = await ctx.fileIssue(issue);
     (rs.filed ||= {})[key(f.job)] = { issue: made.number, at };
     save();
@@ -1120,15 +1456,116 @@ async function fileFailures({ ctx, rs, version, staged, failures, save }) {
   }
 }
 
+// ---------- after the go: the slow jobs run once on the tag, holding nothing ----------
+
+// The release gate's slow jobs (the Mac and the old Windows install, 27 to 90 minutes) are not run before the go since
+// 25 November 2026: once the candidate is what the public has, they run once on its tag. A failure is filed for the factory
+// as a bug (one issue per job, never beside an open one that names it) and said in one notice; nothing is held, taken back
+// or run again. Once per release, written down before the request. Never throws: the look goes on whatever GitHub says.
+async function afterGo(ctx, pub) {
+  const { cfg, log } = ctx;
+  if (ctx.dry) return; // a dry look starts and files nothing
+  for (const [id, rs] of Object.entries(ctx.state.releases || {})) {
+    if (!rs || !rs.finished || !rs.shortRun || !(rs.shortRun.later || []).length || (rs.longRun && rs.longRun.done)) continue;
+    const version = rs.candidate || releaseVersion(id);
+    if (!version || !pub) continue;
+    const save = () => saveState(ctx.stateFile, ctx.state);
+    const tagName = `candidate/${version}`;
+    const later = rs.shortRun.later;
+    try {
+      if (pub !== version) {
+        // not public (yet), or the public went past it without it: then there is nothing of it to test any more
+        if (G.compareVersions(pub, version) > 0) {
+          rs.longRun = { ...(rs.longRun || {}), done: new Date(ctx.now()).toISOString(), skipped: `the public went to ${pub} without it` };
+          save();
+        }
+        continue;
+      }
+      if (!rs.longRun || !rs.longRun.dispatchedAt) {
+        if (ctx.dry) {
+          log(`${version} is public: a real look would start its slow tests once on ${tagName} (${later.join(", ")}).`);
+          continue;
+        }
+        rs.longRun = { dispatchedAt: new Date(ctx.now()).toISOString(), jobs: later }; // before the request: never started twice
+        save();
+        try {
+          await ctx.dispatch(tagName, { only: later });
+        } catch (e) {
+          // GitHub said no, so nothing was started: the next look asks again
+          delete rs.longRun;
+          save();
+          log(`${version} is public, but GitHub refused to start its slow tests on ${tagName} (${e.message}); the next look asks again.`);
+          continue;
+        }
+        log(`${version} is public, so its slow tests run once on ${tagName} now (${later.join(", ")}); they hold nothing back.`);
+        continue;
+      }
+      const sc = await ctx.scenarios(version);
+      const ours = sc.run && sc.run !== rs.scenarioRun && Date.parse(sc.at || 0) >= Date.parse(rs.longRun.dispatchedAt) - 2 * MINUTE;
+      if (!ours || !["passed", "failed"].includes(sc.result)) {
+        if (!ours && ctx.now() - Date.parse(rs.longRun.dispatchedAt) > 3 * cfg.dispatchGraceMinutes * MINUTE) {
+          // started (or about to be when a look ended) and never shown: they did not run, and he is told so once, because a
+          // second run costs money from the test key and only he says yes to that
+          const text = `After ${version} went public, its slow tests were started but never showed on GitHub, so they did not run. They were not started a second time, because each run costs money from the test key: say if you want them run.`;
+          try {
+            ctx.notify({ id: `auto-stage-${version}-after-go-lost`, text, about: `Godspeed ${version}: the slow tests after the go did not run` });
+          } catch (e) {
+            log(`The note that the slow tests did not run could not be queued (${e.message}); the next look tries again.`);
+            continue;
+          }
+          rs.longRun.done = new Date(ctx.now()).toISOString();
+          rs.longRun.lost = true;
+          save();
+          log(`Told him once: ${text}`);
+        }
+        continue;
+      }
+      if (sc.result === "passed") {
+        rs.longRun = { ...rs.longRun, done: new Date(ctx.now()).toISOString(), result: "passed", run: sc.run };
+        save();
+        log(`The slow tests of ${version} after the go passed (${sc.url || `run ${sc.run}`}).`);
+        continue;
+      }
+      const named = await failedOf(ctx, sc);
+      if (!named) {
+        log(`The slow tests of ${version} after the go failed, and GitHub cannot say which yet; the next look asks again.`);
+        continue;
+      }
+      const jobs = named.jobs.length ? named.jobs : named.aggregate;
+      const failures = [];
+      for (const job of jobs) {
+        const text = await ctx.jobLog(sc.run, job);
+        failures.push({ job, cause: text === null ? UNREAD_CAUSE : classifyFailure(text, job) });
+      }
+      await fileFailures({ ctx, rs, version, staged: sc, failures, save, afterGo: true });
+      const filed = failures.map((f) => `"${f.job}": ${String(f.cause.plain).replace(/[.\s]+$/, "")}${rs.filed && rs.filed[`${version} ${f.job}`] ? ` (filed for the factory as #${rs.filed[`${version} ${f.job}`].issue})` : ""}.`);
+      const text = `After ${version} went public, its slow tests ran once and ${failures.length === 1 ? "one did" : `${failures.length} did`} not pass. ${filed.join(" ")} It is a bug for the next release; nothing was held back or taken back.`.replace(/—|–/g, ",");
+      rs.longRun = { ...rs.longRun, result: "failed", run: sc.run };
+      save();
+      try {
+        ctx.notify({ id: `auto-stage-${version}-after-go`, text, about: `Godspeed ${version}: a slow test failed after the go` });
+      } catch (e) {
+        log(`The note about the slow tests could not be queued (${e.message}); the next look tries again.`);
+        continue;
+      }
+      rs.longRun.done = new Date(ctx.now()).toISOString();
+      save();
+      log(`Told him once: ${text}`);
+    } catch (e) {
+      log(`The slow tests of ${version} after the go could not be looked after now (${e.message}); the next look tries again.`);
+    }
+  }
+}
+
 // ---------- the frozen candidate: scenarios, server, the one message ----------
 
-async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, haltWith, tag }) {
+async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, haltWith, tag, blocked, clearBlock }) {
   const { cfg, log, records } = ctx;
   const now = () => ctx.now();
   const tagName = `candidate/${version}`;
   // One deadline for the whole look, both waits included: the look ends well inside the unit's timeout,
-  // and the next look picks up whatever is still running.
-  const deadline = now() + cfg.scenarioWaitMinutes * MINUTE;
+  // and the next look picks up whatever is still running. A look that already watched the builds keeps to its own end.
+  const deadline = Math.min(now() + cfg.scenarioWaitMinutes * MINUTE, ctx.lookEnds || Infinity);
 
   // The scenarios as GitHub shows them, except that a rerun GitHub does not show yet is still running
   // (reading the old "failed" would be the old answer).
@@ -1140,10 +1577,27 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
     }
     return sc;
   };
+  // While they run, the look's page names them and their expected end: "short tests on candidate/2.0.0-beta.32, 6 of 12 done".
+  let shown = null;
+  const showProgress = async (sc) => {
+    if (!sc.run || !ctx.runProgress) return;
+    const p = await ctx.runProgress(sc.run);
+    if (!p || !p.total) return;
+    // testMinutes counts the one rerun in, so the end is reckoned from the start of the run; one already past it ends soon
+    const started = Date.parse(rs.dispatchedAt || "") || now();
+    const what = rs.shortRun && rs.shortRun.only ? "short tests" : "tests";
+    const line = `${what} on ${tagName}${rs.rerunAt ? ", the failed ones once more" : ""}, ${p.done} of ${p.total} done (done about ${hhmm(Math.max(started + cfg.testMinutes * MINUTE, now() + MINUTE))} UTC)`;
+    if (line === shown) return;
+    shown = line;
+    if (ctx.page) ctx.page();
+    log(`Release ${id} (${version}): frozen, its tests run.`);
+    log(`Waiting: ${line}.`);
+  };
   const waitDone = async () => {
     let sc = await readScenarios();
     while (!["passed", "failed"].includes(sc.result) && now() < deadline) {
-      await ctx.sleep(cfg.pollSeconds * 1000);
+      await showProgress(sc);
+      await ctx.sleep((cfg.fastPollSeconds || cfg.pollSeconds) * 1000);
       sc = await readScenarios();
     }
     return sc;
@@ -1160,43 +1614,43 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
     return { outcome: "halted", why: "scenarios ignored" };
   }
 
-  // The factory is paused only while something runs or may still be rerun: a look that merely tries the
-  // install again does not hold it up.
-  const needStop = sc.result === "none" || sc.result === "running" || (sc.result === "failed" && !rs.rerunAt);
-  const paused = needStop && takeStop(cfg.stopFile, now()); // a STOP of ours left by a killed look is taken back
-  // The STOP is held only while scenarios run: it goes the moment a run has ended, before the install is waited for and
-  // before anything is read to summarise it, and is taken again only for the one rerun of the failed jobs. On 2026-11-24
-  // a summary GitHub could not make kept the factory halted for two hours.
-  let held = paused;
-  const releaseStop = () => {
-    if (held && removeStop(cfg.stopFile)) log("The factory's STOP file was removed.");
-    held = false;
-  };
-  const holdStop = () => {
-    if (paused && !held && (held = takeStop(cfg.stopFile, now()))) log("The factory is paused again while the failed jobs run once more.");
-  };
-  ctx.onExit(releaseStop);
-  if (!needStop && removeStop(cfg.stopFile)) log("A STOP file an earlier look of this step left behind was removed: no scenarios run now.");
-  log(paused ? "The factory is paused while the scenarios run (STOP file made)." : needStop ? "A STOP file was there already, not made here; it is left as it is." : "Nothing is running, so the factory is not paused.");
   let decided = null;
   let named = null; // a failed run's jobs: {jobs, aggregate, from}
   const causes = {}; // job -> its cause, read from its log
-  try {
+  {
     // ---- the scenarios: one candidate run, never a second dispatch
     if (sc.result === "none") {
       if (rs.dispatchedAt) {
         const age = now() - Date.parse(rs.dispatchedAt);
         if (age < cfg.dispatchGraceMinutes * MINUTE) {
           log(`The scenarios were started ${Math.round(age / MINUTE)} minutes ago and GitHub does not show the run yet; waiting.`);
-          return { outcome: "waiting", why: "run not visible yet" };
+          return { outcome: "waiting", why: "run not visible yet", poll: true };
         }
         haltWith("scenarios-lost", `Godspeed ${version} is frozen, but the tests that were started do not show on GitHub, and they were not started a second time: another test run costs money from the test key, and only the owner gives that yes.`, "the scenarios were started but GitHub shows no run on the tag; not started a second time (money)");
         return { outcome: "halted", why: "dispatch lost" };
       }
+      // The short run: the release gate as the tag's own gate file lists it, without the slow jobs (afterGoJobs), which run once
+      // after the go (afterGo). A stage without the gate file runs the release gate as before.
+      const gate = await ctx.gateJobs(tagName);
+      if (gate === null) {
+        // a wait in the look's line, which becomes a halt once it has lasted
+        blocked("gate", `the list of the release's tests on ${tagName} cannot be read from GitHub now, so the short tests are not started yet`);
+        return { outcome: "waiting", why: "gate unreadable", poll: true };
+      }
+      clearBlock("gate");
+      const later = gate.jobs ? gate.jobs.filter((j) => cfg.afterGoJobs.includes(j)) : [];
+      const only = gate.jobs ? gate.jobs.filter((j) => !later.includes(j)) : null;
+      if (only && !only.length) {
+        haltWith("gate-empty", `Godspeed ${version} is frozen, but its list of release tests names only tests that run after the go, so there is nothing to test it with before. Nothing is public.`, "the gate file leaves no test before the go");
+        return { outcome: "halted", why: "gate empty" };
+      }
       rs.dispatchedAt = new Date(now()).toISOString(); // before the dispatch: a crash in between never starts a second run
+      rs.shortRun = { only, later };
       save();
-      await ctx.dispatch(tagName);
-      log(`The scenarios were started on ${tagName}${cfg.scenarioMac ? " (with the Mac job)" : ""}.`);
+      await ctx.dispatch(tagName, only ? { only } : { mac: cfg.scenarioMac });
+      log(only
+        ? `The short tests were started on ${tagName}: the ${only.length} release tests that do not wait for slow machines${later.length ? `; ${later.join(" and ")} run once after the go` : ""}.`
+        : `The scenarios were started on ${tagName}${cfg.scenarioMac ? " (with the Mac job)" : ""}.`);
     } else {
       log(`Scenarios on ${tagName}: ${sc.result}${sc.url ? ` (${sc.url})` : ""}; not started again.`);
     }
@@ -1218,8 +1672,6 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
           });
 
     sc = await waitDone();
-    const ended = (x) => x.result === "passed" || x.result === "failed"; // nothing of it runs now (a rerun pauses the factory again)
-    if (ended(sc)) releaseStop();
     await server;
     if (sc.result === "failed" && !rs.rerunAt) {
       const info = await ctx.runInfo(sc.run);
@@ -1230,18 +1682,17 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
       rs.rerunAt = new Date(now()).toISOString(); // once, and only the failed jobs
       rs.rerunFromAttempt = info.attempt;
       save();
-      holdStop();
       await ctx.rerunFailed(sc.run);
       log(`Scenario run ${sc.run} failed in ${(sc.failedJobs || []).length} job(s); those jobs only were run once more.`);
       await ctx.sleep(Math.min(cfg.pollSeconds, 30) * 1000);
       sc = await waitDone();
-      if (ended(sc)) releaseStop();
     }
     if (!["passed", "failed"].includes(sc.result)) {
       log(`The scenarios on ${tagName} have not finished (${sc.result}); the next look picks it up.`);
       return { outcome: "waiting", why: "scenarios running" };
     }
     rs.scenarioResult = sc.result;
+    rs.scenarioRun = sc.run; // the run that decided the go; the one after the go is another
     decided = sc;
 
     // ---- a failed candidate is named job by job and filed for the factory before anything else of the release step can
@@ -1276,14 +1727,13 @@ async function stageFrozen({ ctx, id, version, base, plan, rs, save, sayOnce, ha
       haltWith("not-staged", `Godspeed ${version} is frozen and its tests ran, but it could not be put on the server after three tries (${serverProblem || "no record was written"}). Nothing is public.`, "the install did not work three times");
       return { outcome: "halted", why: "not staged" };
     }
-  } finally {
-    releaseStop();
   }
   const staged = decided; // the answer the look itself saw; a read after the wait could be a GitHub hiccup
 
   // ---- the record and the message
   records.fetch();
-  const check = await ctx.run([helper("staging-check.mjs"), cfg.repo, version, "--release", id, "--tell"]);
+  const later = (rs.shortRun && rs.shortRun.later) || [];
+  const check = await ctx.run([helper("staging-check.mjs"), cfg.repo, version, "--release", id, "--tell", ...(later.length ? ["--later", String(later.length)] : [])]);
   log(`staging-check: exit ${check.code}${check.stderr.trim() ? ` (${check.stderr.trim().split("\n").pop()})` : ""}.`);
   records.fetch();
   const staging = records.json(G.stagingPath(id));
@@ -1388,11 +1838,82 @@ async function driveOn({ ctx, id, base, plan, rs, save, sayOnce, version }) {
     run: (args) => ctx.run(args),
     becameCandidate: (next) => {
       rs.candidate = next;
-      for (const k of ["rerunAt", "rerunFromAttempt", "dispatchedAt", "scenarioResult", "serverTries", "finished", "failedJobs"]) delete rs[k];
+      for (const k of ["rerunAt", "rerunFromAttempt", "dispatchedAt", "scenarioResult", "scenarioRun", "shortRun", "serverTries", "finished", "failedJobs"]) delete rs[k];
       save();
     },
   };
   return D.driveStep({ d, id, base, plan, rs, save, log, now: () => ctx.now(), repo: cfg.repo, stop });
+}
+
+// ---------- pure: what GitHub's answers say ----------
+
+// The required check of a commit from its check runs named "required": passed, running, failed or none (as keep-main-green
+// reads it: neutral passes, skipped is none).
+export function requiredState(checkRuns) {
+  const req = (checkRuns || []).filter((x) => x && x.name === "required").sort((a, b) => Date.parse(b.started_at || 0) - Date.parse(a.started_at || 0))[0];
+  if (!req) return "none";
+  if (req.status !== "completed") return "running";
+  if (req.conclusion === "success" || req.conclusion === "neutral") return "passed";
+  return req.conclusion === "skipped" ? "none" : "failed";
+}
+
+// The newest run that builds exactly <sha> and may publish: a push or a run started by hand (a pull request's run of the same
+// workflow tests a merge of it and publishes nothing). -> {id, status, conclusion, startedAt, attempt, url} or null
+export function newestBuildRun(runs, sha) {
+  const r = (runs || [])
+    .filter((x) => x && x.head_sha === sha && ["push", "workflow_dispatch"].includes(x.event))
+    .sort((a, b) => Date.parse(b.created_at || 0) - Date.parse(a.created_at || 0))[0];
+  return r ? { id: r.id, status: r.status, conclusion: r.conclusion, startedAt: r.run_started_at || r.created_at, attempt: r.run_attempt || 1, url: r.html_url || null } : null;
+}
+
+// The jobs of the release gate from scenarios/scenario-gate.tsv ("<job><TAB><group>" rows; # starts a comment), in its order.
+export function gateReleaseJobs(text) {
+  const out = [];
+  for (const line of String(text || "").split(/\r?\n/)) {
+    if (/^\s*#/.test(line)) continue;
+    const [job, group] = line.split("\t").map((x) => String(x || "").trim());
+    if (job && group === "release" && !out.includes(job)) out.push(job);
+  }
+  return out;
+}
+
+// The failed runs of a commit that a check run once more may start again: only a run on its first attempt (one already run once
+// more is never asked again: GitHub's count is the record, whatever a look wrote down or lost), never the proving scenarios (each
+// costs money from the test key, and their one rerun is the candidate's own), never a scheduled run.
+export function rerunnable(runs) {
+  return (runs || []).filter((x) => x && x.status === "completed" && !["success", "skipped", "neutral"].includes(x.conclusion) && (Number(x.run_attempt) || 1) === 1 && x.event !== "schedule" && !String(x.path || "").endsWith(`/${G.SCENARIOS_WORKFLOW}`) && x.name !== "scenarios");
+}
+
+// Runs the failed jobs of each run a check run once more may start (rerunnable) once more, at most once per run: each run id
+// goes into <asked> (and save() writes it down) before its request, and comes out again only when GitHub answered no; a request
+// with no answer at all keeps it (it may have arrived), so that run is not asked again. Stops at the first refusal.
+// -> {started: [run ids GitHub took], refused: the reason or null} (rounds 2 to 6 of the review, 2026-11-25)
+export async function rerunFailedRuns(api, repo, runs, asked = [], save = () => {}) {
+  const started = [];
+  for (const r of rerunnable(runs)) {
+    if (asked.includes(r.id)) continue;
+    asked.push(r.id);
+    save();
+    let q;
+    try {
+      q = await api("POST", `/repos/${repo}/actions/runs/${r.id}/rerun-failed-jobs`, {});
+    } catch (e) {
+      return { started, refused: `GitHub did not answer the request to run the failed jobs of run ${r.id} again (${e && e.message ? e.message : e}); that run is not asked a second time` };
+    }
+    if (!(q.ok || q.status === 201)) {
+      asked.splice(asked.indexOf(r.id), 1); // GitHub said no: nothing was started, so it is asked again
+      save();
+      return { started, refused: `GitHub said ${q.status} to running the failed jobs of run ${r.id} again` };
+    }
+    started.push(r.id);
+  }
+  return { started, refused: null };
+}
+
+// How far a run is from its jobs: {done, total} of the jobs that are not skipped.
+export function progressOf(jobs) {
+  const real = (jobs || []).filter((j) => j && j.conclusion !== "skipped");
+  return { done: real.filter((j) => j.status === "completed").length, total: real.length };
 }
 
 // ---------- the real context ----------
@@ -1400,7 +1921,7 @@ async function driveOn({ ctx, id, base, plan, rs, save, sayOnce, version }) {
 // There is no lock file here: the driver starts this step as a transient unit of its own (one unit name, so
 // systemd never runs two at once), which is what the old lock file and its "am I already running" check did.
 
-async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
+async function realContext({ cfg, env, dry, only, log, clearHaltCommand, page }) {
   const token = ghToken(cfg);
   // Every read GitHub answers with 5xx is asked again after a pause (release-api.mjs retrying); the scenario polls
   // have a budget of their own, so a long wait cannot use up the pauses the summary may need.
@@ -1408,8 +1929,8 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
   const pollApi = R.retrying(R.githubApi(token, env), { log });
   const childEnv = { ...env, FORGE_RELEASE_CONFIG: configText(), STAGING_READ_TOKEN: token, STAGING_NOTICES_FILE: cfg.noticesFile };
   const readEnv = { ...env, STAGING_READ_TOKEN: token };
-  const exits = [];
   const jobLists = new Map();
+  let pubCache = null;
   const records = new G.Records(env);
   const stateFile = path.join(cfg.stateDir, "state.json");
   const J = async (p) => {
@@ -1418,32 +1939,72 @@ async function realContext({ cfg, env, dry, only, log, clearHaltCommand }) {
     return r.json;
   };
   return {
-    cfg, env, log, dry, only, records, api, stateFile, clearHaltCommand,
+    cfg, env, log, dry, only, records, api, stateFile, clearHaltCommand, page,
     state: loadState(stateFile),
     now: () => Date.now(),
     sleep,
-    onExit: (fn) => exits.push(fn),
-    runExits: () => exits.splice(0).forEach((f) => f()),
     run: (args) => runChild(args, childEnv),
     // A real result for the owner (the install is on his server, tests failed): the same queue and ids as ever.
     notify: ({ id, text, about }) => {
       queueNotice(cfg.noticesFile, { id, text, about, facts: [text] });
     },
-    publicVersion: async () => (await G.publicState(readEnv, cfg.repo, api, (f) => R.retrying(f, { log }))).publicVersion,
+    // read again at most every ten minutes: a look that keeps watching asks it on every read
+    publicVersion: async () => {
+      if (!pubCache || Date.now() - pubCache.at > 10 * MINUTE) pubCache = { at: Date.now(), v: (await G.publicState(readEnv, cfg.repo, api, (f) => R.retrying(f, { log }))).publicVersion };
+      return pubCache.v;
+    },
     tagCommit: async (version) => R.refSha(api, cfg.repo, `tags/candidate/${version}`),
-    mainHead: async () => {
-      const list = await J(`/repos/${cfg.repo}/commits?sha=main&per_page=1`);
-      const sha = list[0].sha;
-      const cr = await J(`/repos/${cfg.repo}/commits/${sha}/check-runs?check_name=required&filter=latest`);
-      const required = (cr.check_runs || []).filter((x) => x.name === "required").sort((a, b) => Date.parse(b.started_at || 0) - Date.parse(a.started_at || 0))[0];
-      if (!required || required.status !== "completed" || required.conclusion !== "success") {
-        return { none: `main's newest change has not passed its required check yet (${required ? `${required.status} ${required.conclusion || ""}`.trim() : "no check yet"})` };
+    mainTip: async () => (await J(`/repos/${cfg.repo}/commits?sha=main&per_page=1`))[0].sha,
+    // The required check of one commit: passed, running, failed or none.
+    checkState: async (sha) => requiredState((await J(`/repos/${cfg.repo}/commits/${sha}/check-runs?check_name=required&filter=latest`)).check_runs),
+    // The failed workflow runs of one commit are run once more (their failed jobs only). -> how many
+    rerunChecks: async (sha, asked = [], save = () => {}) => rerunFailedRuns(api, cfg.repo, (await J(`/repos/${cfg.repo}/actions/runs?head_sha=${sha}&per_page=50`)).workflow_runs || [], asked, save),
+    // Whether the server image of every edition (in the registry) or the Windows setup (GitHub's artifact) of a commit is there.
+    buildReady: async (kind, sha) => {
+      if (kind === "windows") {
+        const r = await J(`/repos/${cfg.repo}/actions/artifacts?name=${encodeURIComponent(`windows-setup-${sha}`)}&per_page=20`);
+        return (r.artifacts || []).some((a) => a.name === `windows-setup-${sha}` && !a.expired && a.workflow_run && a.workflow_run.head_sha === sha);
       }
-      return { commit: sha };
+      const beta = await R.readStageAt(api, cfg.repo, R.PUBLIC_STAGE);
+      const editions = Object.values((beta && beta.stage && beta.stage.serverEditions) || {});
+      if (!editions.length) return false;
+      for (const e of editions) if (!(await R.imageDigest(env, String(e.image).split("@")[0], `v2-sha-${sha}`))) return false;
+      return true;
+    },
+    // The newest run of the workflow that builds it, on a push or started by hand, for exactly that commit, or null.
+    buildRun: async (kind, sha) => {
+      const wf = kind === "windows" ? cfg.windowsWorkflow : cfg.imageWorkflow;
+      const r = await J(`/repos/${cfg.repo}/actions/workflows/${wf}/runs?head_sha=${sha}&per_page=20`);
+      return newestBuildRun(r.workflow_runs || [], sha);
+    },
+    dispatchBuild: async (kind, ref) => {
+      const wf = kind === "windows" ? cfg.windowsWorkflow : cfg.imageWorkflow;
+      const r = await api("POST", `/repos/${cfg.repo}/actions/workflows/${wf}/dispatches`, { ref });
+      if (r.status !== 204) R.refuse(`GitHub said ${r.status} to starting ${wf} on ${ref}${r.json && r.json.message ? ` (${r.json.message})` : ""}.`);
+    },
+    // The release gate of the tag (scenarios/scenario-gate.tsv there): {jobs}, {missing: true} when the tag has no gate file,
+    // or null when it cannot be read now.
+    gateJobs: async (tagName) => {
+      try {
+        const f = await R.readFileAt(api, cfg.repo, "scenarios/scenario-gate.tsv", tagName);
+        return f ? { jobs: gateReleaseJobs(f.text) } : { missing: true };
+      } catch {
+        return null;
+      }
+    },
+    // How far a run is: {done, total} of its jobs that are not skipped, or null.
+    runProgress: async (runId) => {
+      try {
+        const r = await api("GET", `/repos/${cfg.repo}/actions/runs/${runId}/jobs?per_page=100`);
+        return r.ok && r.json ? progressOf(r.json.jobs) : null;
+      } catch {
+        return null;
+      }
     },
     scenarios: (version) => G.scenariosOrUnread(readEnv, cfg.repo, version, pollApi),
-    dispatch: async (tagName) => {
-      const inputs = { stage: tagName, ...(cfg.scenarioMac ? { mac: "true" } : {}) };
+    // {only}: those jobs and no others (the short run before the go, the slow jobs after it); {mac}: the release gate with the Mac job
+    dispatch: async (tagName, { only = null, mac = false } = {}) => {
+      const inputs = { stage: tagName, ...(only && only.length ? { only: only.join(",") } : {}), ...(mac && !(only && only.length) ? { mac: "true" } : {}) };
       const r = await api("POST", `/repos/${cfg.repo}/actions/workflows/${G.SCENARIOS_WORKFLOW}/dispatches`, { ref: tagName, inputs });
       if (r.status !== 204) R.refuse(`GitHub said ${r.status} to starting the scenarios on ${tagName}${r.json && r.json.message ? ` (${r.json.message})` : ""}.`);
     },
@@ -1515,19 +2076,13 @@ const USAGE = `usage:
 
 // One look: what the step runs. -> { result, halt, error }. A refusal (GitHub or the server said no) is an
 // error the driver's step health follows; it is never a message to the owner (the old "six hours" notice).
-export async function look({ env = process.env, dry = false, only = null, log = (s) => console.log(s), clearHaltCommand } = {}) {
+export async function look({ env = process.env, dry = false, only = null, log = (s) => console.log(s), clearHaltCommand, page } = {}) {
   const cfg = loadConfig(env);
   need("productRepo", "the main project's repository");
   if (!cfg.stateDir) return { error: "The setting steps.stage.state_dir is empty, so the stage step has nowhere to keep what it did." };
   let ctx;
   try {
-    ctx = await realContext({ cfg, env, dry, only, log, clearHaltCommand });
-    const onSignal = () => {
-      ctx.runExits();
-      process.exit(143);
-    };
-    process.on("SIGTERM", onSignal);
-    process.on("SIGINT", onSignal);
+    ctx = await realContext({ cfg, env, dry, only, log, clearHaltCommand, page });
     const result = await autoStage(ctx);
     log(`Result: ${result.outcome}.`);
     if (!dry && ctx.state.failing) {
@@ -1548,8 +2103,6 @@ export async function look({ env = process.env, dry = false, only = null, log = 
       return { error: e.message };
     }
     throw e;
-  } finally {
-    if (ctx) ctx.runExits();
   }
 }
 

@@ -1,9 +1,9 @@
 // The chat's "run one lap", "turn on automatic work" and "pause the factory" (lib/factory-control.mjs), with a
 // stand-in factory/consumer.py in the project's checkout that records how it was called: each handler runs Cole
 // Medin's own command for the project the request names and answers in plain words.
-// test cases: 14
+// test cases: 15
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CONTROL_MESSAGES, KEEP_RUNS_DROPIN, LAP_ARGS, findProject, lap, registeredProjects, scheduleFor, workOff, workOn } from '../lib/factory-control.mjs';
@@ -15,12 +15,18 @@ import { testCase } from './cases.mjs';
 const CONSUMER = `import json, os, sys
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with open(os.path.join(root, 'calls.jsonl'), 'a') as log:
-    log.write(json.dumps({'args': sys.argv[1:], 'cwd': os.getcwd(), 'home': os.environ.get('HOME'), 'sandbox': os.environ.get('IS_SANDBOX')}) + '\\n')
+    log.write(json.dumps({'args': sys.argv[1:], 'cwd': os.getcwd(), 'home': os.environ.get('HOME'), 'sandbox': os.environ.get('IS_SANDBOX'), 'ownerPause': os.path.exists(os.path.join(root, '.factory', 'owner-pause'))}) + '\\n')
 if os.path.exists(os.path.join(root, 'refuse')):
     print('Factory refused: Local STOP is set. Use unhalt to permit launch/continuation; cancel remains available', file=sys.stderr)
     sys.exit(1)
 if sys.argv[1:2] == ['run']:
     print(json.dumps({'runId': 'run-1', 'status': 'running'}))
+if sys.argv[1:2] == ['pause']:
+    os.makedirs(os.path.join(root, '.factory'), exist_ok=True)
+    open(os.path.join(root, '.factory', 'PAUSE'), 'w').write('Operator paused scheduled launches; wakes continue.\\n')
+if sys.argv[1:2] == ['unpause']:
+    try: os.remove(os.path.join(root, '.factory', 'PAUSE'))
+    except FileNotFoundError: pass
 `;
 
 async function server(repositories = ['owner/app']) {
@@ -139,6 +145,30 @@ testCase('pause the factory pauses scheduled laps and lets running ones finish')
   const s = await server();
   assert.deepEqual(await workOff(request('work-off'), s.ctx, plainServer), { ok: true, say: 'The factory is paused for owner/app: it starts no new work, and a change it is already making is finished. Say "turn on automatic work" to start it again.' });
   assert.deepEqual((await calls(s.checkouts['owner/app'])).map(c => c.args), [['pause']]);
+}
+
+testCase('the owner\'s own pause is announced by a file made before the pause, names the PAUSE it was made with, and is removed with it; a refused pause leaves none');
+{
+  const s = await server();
+  const checkout = s.checkouts['owner/app'];
+  const mark = join(checkout, '.factory', 'owner-pause');
+  const pauseFile = join(checkout, '.factory', 'PAUSE');
+  await workOff(request('work-off'), s.ctx, plainServer);
+  const sealed = `Asked by the owner in the chat: r1.\npause-mtime: ${Math.floor((await stat(pauseFile)).mtimeMs)}\n`;
+  assert.equal(await readFile(mark, 'utf8'), sealed, 'made, naming his request and the PAUSE it belongs to');
+  assert.deepEqual((await calls(checkout)).map(c => [c.args[0], c.ownerPause]), [['pause', true]], 'it was there when the factory was asked to pause: made before, never after');
+  await workOn(request('work-on'), s.ctx, plainServer);
+  await assert.rejects(readFile(mark, 'utf8'), /ENOENT/, 'turning on automatic work removes it with the pause');
+  await assert.rejects(readFile(pauseFile, 'utf8'), /ENOENT/);
+  await writeFile(join(checkout, 'refuse'), '');
+  await workOff(request('work-off'), s.ctx, plainServer);
+  await assert.rejects(readFile(mark, 'utf8'), /ENOENT/, 'a pause the factory refused leaves no mark behind');
+  await rm(join(checkout, 'refuse'));
+  await workOff(request('work-off'), s.ctx, plainServer);
+  const again = await readFile(mark, 'utf8');
+  await writeFile(join(checkout, 'refuse'), '');
+  await workOff(request('work-off'), s.ctx, plainServer);
+  assert.equal(await readFile(mark, 'utf8'), again, 'a refused repeat puts back the mark of his earlier pause');
 }
 
 testCase('a refusing factory is said plainly, its own words go only to the log');

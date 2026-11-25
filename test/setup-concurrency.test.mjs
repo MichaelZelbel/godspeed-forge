@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { ReportedSetupError, setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults } from '../lib/config.mjs';
+import './home.mjs';
 import { testCase } from './cases.mjs';
 // test cases: 4
 

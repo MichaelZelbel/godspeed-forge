@@ -330,6 +330,7 @@ test("the full look: it adopts the proposed beta.27, files it in place, and tell
   assert.match(posts[0].body.body, /^Owner decision \(2026-11-18\): this issue is item 1 of Godspeed 2\.0\.0-beta\.27, a bug-fix release started by the owner's standing decision/);
   assert.deepEqual(w.calls.labels, ["beta.27"]);
   assert.ok(w.calls.gh.some((c) => c.method === "POST" && c.p.endsWith("/issues/679/labels") && c.body.labels[0] === "beta.27"));
+  assert.ok(w.calls.gh.some((c) => c.method === "POST" && c.p.endsWith("/issues/679/labels") && c.body.labels[0] === "beta.27" && c.body.labels.includes("priority")), "every ticket of the approved release carries priority, so the factory builds it before everything else (the Forge 0.3.3)");
   assert.ok(w.calls.gh.some((c) => c.method === "DELETE" && c.p.endsWith("/issues/679/labels/needs-owner")));
   // everything else open stays parked, except priority work
   const parked = w.calls.gh.filter((c) => c.method === "POST" && /labels$/.test(c.p) && c.body.labels[0] === "needs-owner").map((c) => Number(c.p.match(/issues\/(\d+)/)[1]));

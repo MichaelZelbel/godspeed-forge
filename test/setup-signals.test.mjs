@@ -12,8 +12,9 @@ import { runSetupCommand } from '../lib/cli.mjs';
 import { answersFrom, setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults } from '../lib/config.mjs';
+import './home.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 30
+// test cases: 32
 
 const credentials = {
   id: 12345, slug: 'forge-app', pem: 'PRIVATE KEY', client_secret: 'CLIENT SECRET', webhook_secret: 'WEBHOOK SECRET'
@@ -78,9 +79,10 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = 
         // The builder App's details file is then written, and that write waits on its stand-in (see 'command').
         // The named pipe is made here, not when the command starts: a run sweeps left-behind temporaries
         // beside its saves before anything else (#100), and it would take this one away first.
-        if (waitAt === 'builder-details') {
-          await mkdir(join(builderDetails(root), '..'), { recursive: true, mode: 0o700 });
-          execFileSync('mkfifo', [`${builderDetails(root)}.${process.pid}.tmp`]);
+        if (waitAt === `${code.replace('-code', '')}-details`) {
+          const details = join(builderDetails(root), '..', `${waitAt.replace('-details', '')}-app.json`);
+          await mkdir(join(details, '..'), { recursive: true, mode: 0o700 });
+          execFileSync('mkfifo', [`${details}.${process.pid}.tmp`]);
           onWait();
         }
         return credentials;
@@ -319,6 +321,27 @@ if (process.argv[2] === 'command') {
     assert.deepEqual(JSON.parse(await readFile(builderDetails(root), 'utf8')), credentials);
   }
 
+  // The same for the release App, after the builder App is finished: its keys are in the pending record, the
+  // stopped run says both Apps are kept, and the next run finishes the release App without a second one.
+  for (const [signal, sentence] of [['SIGTERM', TERMINATED], ['SIGINT', INTERRUPTED]]) {
+    testCase(`${signal} while the release App details are being saved`);
+    const root = await mkdtemp(join(tmpdir(), 'forge-signal-release-details-'));
+    const credentialDirectory = join(builderDetails(root), '..');
+    const keysSaved = async () => {
+      try { return Boolean(JSON.parse(await readFile(join(credentialDirectory, 'release-app-pending.json'), 'utf8')).credentials); } catch { return false; }
+    };
+    const result = await interrupt(root, 'release-details', signal, { until: keysSaved, endsBySignal: true });
+    assert.equal(result.code, null);
+    assert.equal(result.lines.at(-1), sentence);
+    assert(/^Setup kept the details of your two GitHub Apps /.test(result.lines.at(-2)), result.lines.join('\n'));
+    assert.deepEqual((await readdir(credentialDirectory)).filter(name => name.endsWith('.tmp')), []);
+    const next = await nextSetup(root, undefined, { spentCodes: ['release-code'] });
+    assert.equal(next.error, undefined);
+    assert(!next.messages.some(line => line.includes('delete')), next.messages.join('\n'));
+    assert.deepEqual(next.manifests, []);
+    assert.deepEqual(JSON.parse(await readFile(join(credentialDirectory, 'release-app.json'), 'utf8')), credentials);
+  }
+
   // Stopped while GitHub turns the builder App's code into its credentials: the code is saved, so the next run
   // tries to finish that App, as the sentence says, and creates no second one.
   for (const [signal, code, why] of [['SIGINT', 130, 'it was interrupted'], ['SIGTERM', 143, 'this server told it to stop']]) {
@@ -429,6 +452,7 @@ if (process.argv[2] === 'command') {
       claude: 'echo signed in',
       gh: 'mkdir -p "${@: -1}/.git"',
       git: `case "$1" in remote) echo https://github.com/owner/repo.git;; clone) mkdir -p "\${@: -1}/.git";; rev-parse) echo ${FACTORY_REVISION};; esac`,
+      bun: 'true',
       python3: 'if [ "$2" = init ]; then mkdir -p factory; echo "# Mission" > MISSION.md; fi'
     };
     for (const [name, body] of Object.entries(tools)) {

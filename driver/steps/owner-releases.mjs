@@ -6,9 +6,9 @@
 //      for later, and what is being built, staged or public. The chat makes a plan from it and answers status.
 //   2. when every item of the newest approved release that is not staged yet (lib/owner/releases.mjs files them)
 //      is closed by a merged pull request on the default branch, it freezes `candidate/<version>` on the newest of
-//      those merges, pauses the factory's scheduled laps (`python factory/consumer.py pause` in the checkout) while
-//      the project's own checks (harness/harness.config.json: static and unit) run on the candidate in a temporary
-//      worktree, always unpauses (only a pause it made itself), makes a GitHub pre-release to try, moves the branch
+//      those merges, runs the project's own checks (harness/harness.config.json: static and unit) on the candidate in a
+//      temporary worktree while the factory's laps go on (no program of the Forge pauses or stops the factory: the Forge
+//      0.3.3, item 7), makes a GitHub pre-release to try, moves the branch
 //      `staging` to the candidate, and sends exactly one message: the link and "Shall I make it public? Reply go.",
 //      or the failed checks, one plain sentence each, and no go question. A failed check is run once more, alone.
 //      An item closed without a merged pull request gets one sentence and no freeze.
@@ -39,8 +39,7 @@ import { TITLE as QUESTIONS_TITLE } from "./owner/questions.mjs";
 export const STEP = { name: "owner-releases", everyMinutes: 15, maxMinutes: 120, inRound: false, forOwner: "the watch on your releases" };
 export const SETTINGS = [
   { key: "forge.state_dir", required: false, default: DEFAULT_STATE, meaning: "the Forge's private state: setup's records, the App details and the release records" },
-  { key: "forge.config", required: false, default: "/etc/godspeed-forge/config.json", meaning: "the Forge's own config, whose commands.python runs the factory's pause and unpause" },
-  { key: "steps.owner-releases.python", required: false, default: "the Forge config's commands.python, else python3", meaning: "the Python that runs the factory's pause and unpause" },
+  { key: "forge.config", required: false, default: "/etc/godspeed-forge/config.json", meaning: "the Forge's own config, whose commands.gh is the gh signed in as the owner" },
   { key: "steps.owner-releases.gh", required: false, default: "the Forge config's commands.gh, else gh", meaning: "the gh signed in as the owner, used only when GitHub refuses the release App a move of staging that brings in a change to the project's workflow files" },
   { key: "steps.owner-releases.check_minutes", required: false, default: 25, meaning: "how long one of the project's checks may run on a candidate" },
   { key: "steps.owner-releases.work_dir", required: false, default: "<server.work_root>/candidates", meaning: "where the temporary worktree of a candidate is made (the factory's account must be able to write there)" },
@@ -58,7 +57,6 @@ const DAY = 24 * 3600 * 1000;
 export const olderStepStages = (settings, project) => !!(project && project.releases && dig(settings, "steps.stage.enabled") !== false);
 const profileOf = project => ({ ...(project || {}), ...((project && project.profile) || {}) });
 
-export const forgePython = settings => forgeCommand(settings, "owner-releases", "python", "python3");
 export const forgeGh = settings => forgeCommand(settings, "owner-releases", "gh", "gh");
 
 function authorKind(item, repository, settings) {
@@ -89,27 +87,16 @@ const countOf = (text, pattern) => {
   return null;
 };
 
-// -> [{ name, ok, sentence? }]. Pauses the factory's scheduled laps for the run and always unpauses, also when a
-// check fails, throws or times out; a pause someone else made stays. record.pausedByUs is saved before the pause,
-// so a run that is killed has its pause lifted by the next one.
-export async function runChecks(ctx, project, record, save) {
+// -> [{ name, ok, sentence? }]. The factory is never paused for the checks (the Forge 0.3.3, item 7); a PAUSE or STOP someone
+// made stays as it is. (An older version saved record.pausedByUs and paused the laps: a saved one is read by nothing now.)
+export async function runChecks(ctx, project, record) {
   const settings = ctx.settings || {};
   const checkout = project.checkout;
   const minutes = Number(dig(settings, "steps.owner-releases.check_minutes") || 25);
-  const python = forgePython(settings);
-  const pauseFile = path.join(checkout, ".factory", "PAUSE");
   const results = [];
   const workRoot = dig(settings, "steps.owner-releases.work_dir") || path.join(dig(settings, "server.work_root") || path.join(dig(settings, "server.factory_home") || "/tmp", "factory-driver"), "candidates");
   const tree = path.join(workRoot, `${projectName(project.repository)}-${record.version}-${Date.now()}`);
-  let pausedByUs = false;
   try {
-    if (!fs.existsSync(pauseFile)) {
-      record.pausedByUs = true;
-      await save();
-      pausedByUs = true;
-      const p = runAs(settings, python, ["factory/consumer.py", "pause"], { cwd: checkout, timeoutMs: 120000 });
-      if (p.status !== 0 && ctx.log) ctx.log(`could not pause the factory of ${project.repository}; the checks run anyway`);
-    }
     runAs(settings, "git", ["-C", checkout, "fetch", "--quiet", "origin"], { timeoutMs: 300000 });
     runAs(settings, "mkdir", ["-p", workRoot]);
     const add = runAs(settings, "git", ["-C", checkout, "worktree", "add", "--detach", tree, record.candidate.commit], { timeoutMs: 300000 });
@@ -131,8 +118,6 @@ export async function runChecks(ctx, project, record, save) {
     if (ctx.log) ctx.log(`the checks of ${project.repository} ${record.version} stopped: ${e && e.message}`);
     return [...results, { name: "unfinished", ok: false, sentence: stageWords.check.unfinished }];
   } finally {
-    if (pausedByUs) runAs(settings, python, ["factory/consumer.py", "unpause"], { cwd: checkout, timeoutMs: 120000 });
-    record.pausedByUs = false;
     try { runAs(settings, "git", ["-C", checkout, "worktree", "remove", "--force", tree], { timeoutMs: 120000 }); } catch { /* the folder goes with the next prune */ }
   }
 }
@@ -173,13 +158,11 @@ async function lookAt(ctx, gs, state, project, now) {
   let record = activeRelease(releaseRecords(state, repository));
   if (record && !olderStepStages(settings, project)) {
     if (record.state === "checking") {
-      // a run that was stopped in the middle of the checks: lift its pause, and the release did not pass
-      const r = fresh(record.version);
-      if (r.pausedByUs && project.checkout) runAs(settings, forgePython(settings), ["factory/consumer.py", "unpause"], { cwd: project.checkout, timeoutMs: 120000 });
+      // a run that was stopped in the middle of the checks: the release did not pass
       await lock(async () => {
         const x = fresh(record.version);
         if (x.state !== "checking") return;
-        Object.assign(x, { state: "failed", pausedByUs: false, failed: { at: iso(now), sentences: [stageWords.check.unfinished] } });
+        Object.assign(x, { state: "failed", failed: { at: iso(now), sentences: [stageWords.check.unfinished] } });
         await saveRelease(state, x);
       });
       record = fresh(record.version);
@@ -302,7 +285,7 @@ async function advance(ctx, gs, state, project, record, { reader, rp, branch, cl
   });
   if (!r) return said;
   const save = () => saveRelease(state, r);
-  const checks = project.checkout ? await runChecks(ctx, project, r, save) : [{ name: "setup", ok: false, sentence: stageWords.check.setup }];
+  const checks = project.checkout ? await runChecks(ctx, project, r) : [{ name: "setup", ok: false, sentence: stageWords.check.setup }];
   r.checks = checks;
   const failed = checks.filter(c => !c.ok);
   if (failed.length) {

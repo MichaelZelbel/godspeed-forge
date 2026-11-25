@@ -17,7 +17,9 @@ import { ticketKeyOf, releaseKeyOf, isWorking } from "./progress.mjs";
 export const H = 3600000;
 const ts = v => (v ? Date.parse(v) : NaN);
 // perDay and reservedForRelease are the settings budget.act_runs_per_day and budget.reserved (8 and 4 unless set)
-export const CHAIN = { get reservedForRelease() { return Number(process.env.FD_ACT_RESERVED || 4); }, actHours: 1, actHours2: 1, restartHours: 24, get perDay() { return Number(process.env.FD_ACT_RUNS_PER_DAY || 8); }, sameItemHours: 6 };
+// haltRungMinutes: a step's halt is a standstill like any other (the Forge 0.3.3): an acting run at once, the other AI after 20 minutes,
+// and the owner told after 20 more, the release clock's own ladder, instead of an hour per rung
+export const CHAIN = { haltRungMinutes: 20, get reservedForRelease() { return Number(process.env.FD_ACT_RESERVED || 4); }, actHours: 1, actHours2: 1, restartHours: 24, get perDay() { return Number(process.env.FD_ACT_RUNS_PER_DAY || 8); }, sameItemHours: 6 };
 // rung 0 limits per kind of entry, in hours without a milestone
 export const LIMITS = { release: 2, stage: 2, ticket: null /* by size */, pr: 1, queue: 1, obstacle: 2 };
 export const SIZE_HOURS = { s: 4, m: 8, l: 16 };
@@ -46,10 +48,10 @@ export const queueKey = (repo, heading) => `${repo}\n${norm(heading)}`;
 
 // ---------------------------------------------------------------- 6. waiting is allowed only while it is visibly running
 // Activity that is visibly moving an entry's work: a GitHub Actions run in progress on the candidate or release branch (scenarios:
-// 3 hours) or on a ticket's pull request head (its own timeout, 6 hours), auto-stage's STOP file younger than 2 hours. While it
+// 3 hours) or on a ticket's pull request head (its own timeout, 6 hours). While it
 // lasts the entry shows as moving and does not escalate; its deadline is the activity's own maximum. Ceilings are paused by it
 // and never reset: when the activity ends they apply again.
-export const ACTIVITY = { scenariosHours: 3, runHours: 6, stopHours: 2, inProgressHold: 3, creditHours: 6 };
+export const ACTIVITY = { scenariosHours: 3, runHours: 6, inProgressHold: 3, creditHours: 6 };
 // A hard cap on moving credit (by construction): the time an entry may spend "moving" since its last milestone is at most
 // creditHours in total, summed over every window; a ceiling is paused by at most that much over the release's whole life.
 // The credit used is kept in the journal ({t:"credit"}), so a lost state cannot refill it. After the cap, activity holds
@@ -90,11 +92,10 @@ export function movingUntilFor(e, activity, world) {
     // (only when auto-stage's own reason names main's check, main's image or main's Windows setup, and only for the release it is waiting for: otherwise main's runs belong to other work and hide nothing)
     const forStage = activity.releaseId ? activity.releaseId === e.release : activity.onlyRelease === e.release;
     if (activity.waitingOnMain && forStage) for (const r of runs) if (r.headBranch === "main") out.push(Date.parse(r.createdAt) + ACTIVITY.runHours * H);
-    // auto-stage's STOP and its programs belong to the release it is staging (activity.releaseId); with none known, to the only open release
+    // its programs belong to the release it is staging (activity.releaseId); with none known, to the only open release
     const mine = activity.releaseId ? activity.releaseId === e.release : activity.onlyRelease === e.release; // ambiguous (several open releases, none named): it hides nothing
     if (mine) {
       for (const p of activity.procs || []) if (Number.isFinite(p.startedAt)) out.push(p.startedAt + ACTIVITY.scenariosHours * H); // bounded by its own start: a hung program does not hold forever
-      if (activity.stop && Number.isFinite(Date.parse(activity.stop.at))) out.push(Date.parse(activity.stop.at) + ACTIVITY.stopHours * H);
     }
   }
   // a step's child that is alive right now is visibly running: its own entry, and the release the stage step works on, are held until its time limit
@@ -147,7 +148,7 @@ export function buildInventory(world, ledger, obstacles, ctx) {
     if (!Number.isFinite(m)) continue;
     const h = heldUntil(e, activity, world, ctx.credits, ctx.now);
     if (Number.isFinite(h)) e.movingUntil = h;
-    else e.evidence = [...(e.evidence || []), `visible activity is still present on it (a run, a STOP file or a program), but its ${ACTIVITY.creditHours} hours of moving credit are used up: it no longer holds escalation. Look at what is running and decide whether it really moves this.`];
+    else e.evidence = [...(e.evidence || []), `visible activity is still present on it (a run or a program), but its ${ACTIVITY.creditHours} hours of moving credit are used up: it no longer holds escalation. Look at what is running and decide whether it really moves this.`];
   }
   return entries;
 }
@@ -252,7 +253,7 @@ function buildEntries(world, ledger, obstacles, ctx) {
     } else { // any other pause is a program's: no acting run ever undoes a pause (Michael may have parked it on purpose); he is told
       add({ id: `pause:${p.id}`, kind: "pause-program", owner: `${ownerName()}'s decision`, remindOnly: true, title: `${p.what} since ${when} UTC (no record of who asked)`, milestoneAt: since, limitH: 24,
         reminder: `${p.what} is still paused since ${when} UTC and nothing records who asked; say continue or it stays paused.`,
-        evidence: [`${p.what}: ${p.line || ""}`, `there is no pause record with a reference to ${ownerName()}'s own words; a program's stale STOP file is removed by housekeeping, anything else waits for his word, and he is reminded daily`] });
+        evidence: [`${p.what}: ${p.line || ""}`, `there is no pause record with a reference to ${ownerName()}'s own words; it waits for his word, and he is reminded daily`] });
     }
   });
   // every obstacle the driver already has (its helpers are the rung 0 owner); a kind this code has never
@@ -331,11 +332,13 @@ export function advance(entries, chain0, now, opts = {}) {
     if (e.remindOnly) { // a pause: Michael is reminded when its time is up, and again every 24 hours; nobody acts for him
       if ((c.rung < 3 && now >= base + limit) || (c.rung === 3 && now >= c.rungSince + CHAIN.restartHours * H)) { c.rung = 3; c.rungSince = now; c.told = false; moved = true; }
     } else if (c.rung === 0 && (e.owner === null || force.has(e.id) || now >= base + limit)) { c.rung = 1; c.rungSince = now; c.launched = false; moved = true; }
-    else if ((c.rung === 1 || c.rung === 2) && now >= c.rungSince + (c.rung === 1 ? CHAIN.actHours : CHAIN.actHours2) * H && ranOrLost(c.rung)) {
+    else if ((c.rung === 1 || c.rung === 2) && now >= c.rungSince + (e.kind === "halt" ? CHAIN.haltRungMinutes * 60000 : (c.rung === 1 ? CHAIN.actHours : CHAIN.actHours2) * H) && (e.kind === "halt" || ranOrLost(c.rung))) {
+      // a halt's rung ends on its 20 minutes whether or not its acting run has answered (a run may use 55 minutes); the rung counts as tried
+      if (e.kind === "halt" && !tried(c.rung)) (c.tries ||= []).push({ rung: c.rung, at: new Date(now).toISOString(), provider: c.launchedProvider || "unknown", result: "unresolved", summary: "the 20 minutes of a halt's rung ended" });
       c.rung += 1; c.rungSince = now; c.launched = false; c.told = false; moved = true;
     } else if (c.rung === 3 && now >= c.rungSince + CHAIN.restartHours * H) { c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; moved = true; }
     if (e.backlog && c.rung === 3) { c.rung = 1; c.rungSince = now; c.launched = false; c.told = false; c.tries = []; c.cooldownUntil = now + 24 * H; moved = true; } // whichever path led here: backlog never reaches the owner
-    const deadline = c.rung === 0 ? base + limit : (c.rung === 1 || c.rung === 2) && !c.launched ? Math.max(now + 1, c.rungSince + CHAIN.actHours * H) : c.rungSince + (c.rung === 1 ? CHAIN.actHours : c.rung === 2 ? CHAIN.actHours2 : CHAIN.restartHours) * H;
+    const deadline = c.rung === 0 ? base + limit : (c.rung === 1 || c.rung === 2) && !c.launched ? Math.max(now + 1, c.rungSince + (e.kind === "halt" ? CHAIN.haltRungMinutes * 60000 : CHAIN.actHours * H)) : c.rungSince + (e.kind === "halt" && c.rung < 3 ? CHAIN.haltRungMinutes * 60000 : (c.rung === 1 ? CHAIN.actHours : c.rung === 2 ? CHAIN.actHours2 : CHAIN.restartHours) * H);
     rows.push({ entry: e, rung: c.rung, deadline, moved, c });
     chain[e.id] = c;
    } catch (err) { // an entry that breaks the chain is itself stuck: rung 1 now, the round goes on
@@ -352,6 +355,9 @@ export function advance(entries, chain0, now, opts = {}) {
   const wanting = awaitingCapacity.filter(r => !(r.entry.backlog && !backlogAllowed)).sort((a, b) => (a.entry.backlog ? 1 : 0) - (b.entry.backlog ? 1 : 0) || ageKey(a) - ageKey(b)); // releases and machinery first, then the backlog oldest first
   if (budget <= 0) for (const r of awaitingCapacity) { r.c.budgetRetryAt = budgetRetryAt; r.deadline = budgetRetryAt; }
   else if (wanting.length && opts.slotFree !== false) { actions.launch = wanting[0]; }
+  // a halt's ladder is the release clock's (20 minutes a rung), which never waits for the one-at-a-time slot either: a long run on its first
+  // rung must not keep the other AI off its second
+  else if (wanting.some(r => r.entry.kind === "halt")) { actions.launch = wanting.find(r => r.entry.kind === "halt"); }
   for (const r of rows) if (r.rung === 3 && !r.c.told && !r.entry.told && !r.moving && !owned.has(r.entry.id)) actions.tell.push(r);
   // the invariant, checked here and not trusted: every entry has an owner and a future deadline, or moved this round
   const violations = [];

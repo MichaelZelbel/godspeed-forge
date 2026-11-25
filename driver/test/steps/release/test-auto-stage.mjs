@@ -187,36 +187,15 @@ test("the notice queue says each id once and keeps what was queued", () => {
   assert.throws(() => A.queueNotice(path.join(dir, "nowhere", "n.json"), { id: "d", text: "x", about: "y" }), /no Godspeed here/);
 });
 
-// ---------- the factory's STOP file ----------
+// ---------- the factory's STOP file: none is made or removed here (the Forge 0.3.3, item 7) ----------
 
-test("STOP: made once, removed by the one that made it, never someone else's", () => {
-  const dir = tmp();
-  const stop = path.join(dir, ".factory", "STOP");
-  assert.equal(A.createStop(stop, Date.now()), false, "no factory folder here: nothing to pause, and no folder is made");
-  assert.equal(fs.existsSync(path.dirname(stop)), false);
-  fs.mkdirSync(path.dirname(stop));
-  assert.equal(A.createStop(stop, Date.now()), true);
-  assert.equal(A.createStop(stop, Date.now()), false, "an existing STOP is not taken over");
-  assert.equal(A.stopIsMine(stop), true);
-  assert.equal(A.removeStop(stop), true);
-  assert.equal(fs.existsSync(stop), false);
-  fs.writeFileSync(stop, "the owner paused the factory\n");
-  assert.equal(A.removeStop(stop), false);
-  assert.equal(fs.existsSync(stop), true, "someone else's STOP stays");
-  assert.deepEqual(A.guardStaleStop(stop, Date.now() + 10 * 3600 * 1000, 120), { removed: false });
-  assert.equal(fs.existsSync(stop), true);
-});
-
-test("STOP: one of ours older than the limit is removed at the next look, a young one stays", () => {
-  const dir = tmp();
-  const stop = path.join(dir, "STOP");
-  A.createStop(stop, Date.now());
-  const young = A.guardStaleStop(stop, Date.now() + 30 * 60 * 1000, 120);
-  assert.equal(young.removed, false);
-  assert.equal(fs.existsSync(stop), true);
-  const old = A.guardStaleStop(stop, Date.now() + 3 * 3600 * 1000, 120);
-  assert.equal(old.removed, true);
-  assert.equal(fs.existsSync(stop), false);
+test("item 7: the step has nothing that makes or removes a STOP, and no setting or environment variable for one", () => {
+  for (const name of ["createStop", "takeStop", "removeStop", "guardStaleStop", "stopIsMine"]) assert.equal(A[name], undefined, name);
+  assert.equal("stopFile" in A.CONFIG_DEFAULTS, false);
+  assert.equal("stopMaxAgeMinutes" in A.CONFIG_DEFAULTS, false);
+  const c = A.loadConfig({ AUTO_STAGE_STOP_FILE: "/x/STOP", AUTO_STAGE_STOP_MAX_AGE_MINUTES: "30" });
+  assert.equal(c.stopFile, undefined, "a leftover variable is ignored");
+  assert.equal(c.stopMaxAgeMinutes, undefined);
 });
 
 // ---------- why a test failed, in everyday words ----------
@@ -302,11 +281,13 @@ function world({ issues, scenarioSeq, planText = planFor(), staging = null, stat
   const stop = path.join(dir, "factory", "STOP");
   fs.mkdirSync(path.dirname(stop), { recursive: true });
   w.stop = stop;
-  const cfg = { ...A.loadConfig({}), repo: REPO, stateDir: dir, stopFile: stop, noticesFile: path.join(dir, "notices.json"), pollSeconds: 0, scenarioWaitMinutes: 5, blockedGraceMinutes: 60, dispatchGraceMinutes: 10, stopMaxAgeMinutes: 120 };
+  // stopFile and stopMaxAgeMinutes are the settings of the release step before 0.3.3: ignored now, and set here so that a step which
+  // still made a STOP would make it where these tests watch (the Forge 0.3.3, item 7). lookMinutes 0: one read per look, as the step
+  // did before it kept watching (the fast path's own tests set it)
+  const cfg = { ...A.loadConfig({}), repo: REPO, stateDir: dir, stopFile: stop, stopMaxAgeMinutes: 120, noticesFile: path.join(dir, "notices.json"), pollSeconds: 0, fastPollSeconds: 0, lookMinutes: 0, scenarioWaitMinutes: 5, blockedGraceMinutes: 60, dispatchGraceMinutes: 10 };
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(cfg.noticesFile, JSON.stringify({ notices: [] }));
   let clock = Date.parse("2026-11-14T10:00:00Z");
-  const exits = [];
   const records = {
     releases: () => [id],
     read: (p) => (files.has(p) ? files.get(p) : null),
@@ -325,8 +306,6 @@ function world({ issues, scenarioSeq, planText = planFor(), staging = null, stat
     stateFile: stateFile || path.join(dir, "state.json"),
     now: () => clock,
     sleep: async (ms) => { clock += Math.max(ms, 1000); },
-    onExit: (f) => exits.push(f),
-    runExits: () => exits.splice(0).forEach((f) => f()),
     publicVersion: async () => "2.0.0-beta.24",
     tagCommit: async () => w.tag,
     api: async (method, p, body) => {
@@ -336,12 +315,20 @@ function world({ issues, scenarioSeq, planText = planFor(), staging = null, stat
       }
       throw new Error(`unexpected api call ${method} ${p}`);
     },
-    mainHead: async () => w.extra.mainHead || { commit: "9".repeat(40) },
+    // main's head, its required check, the builds of a commit: by default all there (the fast path's own tests change them)
+    mainTip: async () => w.extra.mainTip || "9".repeat(40),
+    checkState: async (sha) => (typeof w.extra.checkState === "function" ? w.extra.checkState(sha) : w.extra.checkState || "passed"),
+    rerunChecks: async (sha) => { (w.checkReruns ||= []).push(sha); return { started: [1], refused: null }; },
+    buildReady: async (kind, sha) => (w.extra.buildReady ? w.extra.buildReady(kind, sha) : true),
+    buildRun: async (kind, sha) => (w.extra.buildRun ? w.extra.buildRun(kind, sha) : null),
+    dispatchBuild: async (kind, ref) => { (w.buildDispatches ||= []).push([kind, ref]); },
+    gateJobs: async () => (w.extra.gate === undefined ? { missing: true } : w.extra.gate),
     run: async (args) => {
       const name = path.basename(args[0]);
       w.calls.push(`${name}${args.includes("--dry-run") ? " --dry-run" : ""}`);
       w.stopSeenDuring.push([name, fs.existsSync(stop)]);
       if (name === "freeze.mjs") {
+        (w.freezeCommits ||= []).push(args[args.indexOf("--commit") + 1]);
         if (w.extra.freezeCheckRefuses && args.includes("--dry-run")) return { code: 1, stdout: "", stderr: `${w.extra.freezeCheckRefuses}\n` };
         if (!args.includes("--dry-run")) w.tag = "1".repeat(40);
         return { code: 0, stdout: "", stderr: "" };
@@ -357,10 +344,11 @@ function world({ issues, scenarioSeq, planText = planFor(), staging = null, stat
     },
     notify: (n) => { w.notices.push(n); A.queueNotice(cfg.noticesFile, { ...n, facts: [n.text] }); },
     scenarios: async () => {
+      w.stopSeenDuring.push(["scenarios", fs.existsSync(stop)]);
       const next = w.scenarioSeq.length > 1 ? w.scenarioSeq.shift() : w.scenarioSeq[0];
       return typeof next === "function" ? next(w) : next;
     },
-    dispatch: async () => { w.dispatches++; w.stopSeenDuring.push(["dispatch", fs.existsSync(stop)]); },
+    dispatch: async (tag, opts) => { w.dispatches++; (w.dispatchArgs ||= []).push([tag, opts || {}]); w.stopSeenDuring.push(["dispatch", fs.existsSync(stop)]); },
     rerunFailed: async () => { w.reruns++; },
     runInfo: async () => {
       if (w.extra.runInfoNull) return null;
@@ -415,7 +403,7 @@ test("a look skips an approved release older than the installed one with one log
   assert.deepEqual([w.written, w.calls, w.notices, w.dispatches], [[], [], [], 0]);
 });
 
-test("a finished release is marked, frozen, run on the tag once, put on the server, and announced by staging-check; the STOP file exists only while it runs", async () => {
+test("a finished release is marked, frozen, run on the tag once, put on the server, and announced by staging-check; the factory is never paused while it runs", async () => {
   const { w, ctx, cfg } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, { result: "running", run: 7 }, passed] });
   const r = await A.autoStage(ctx);
   assert.equal(r.outcome, "ready");
@@ -423,8 +411,8 @@ test("a finished release is marked, frozen, run on the tag once, put on the serv
   assert.equal(w.files.get(`releases/${w.id}/tickets/02-b.md`).split("\n")[0], `Status: done (merge ${"b".repeat(40)})`);
   assert.deepEqual(w.calls, ["freeze.mjs --dry-run", "freeze.mjs", "stage-server.mjs", "staging-check.mjs"], "the existing steps, in the role's order, nothing re-implemented");
   assert.equal(w.dispatches, 1);
-  assert.deepEqual(w.stopSeenDuring.filter(([n]) => n === "dispatch" || n === "stage-server.mjs").map(([, s]) => s), [true, true], "the factory is paused while the scenarios run and the server is staged");
-  assert.equal(fs.existsSync(w.stop), false, "STOP is removed afterwards");
+  assert.deepEqual(w.stopSeenDuring.filter(([n]) => n === "dispatch" || n === "stage-server.mjs").map(([, s]) => s), [false, false], "the factory is not paused while the scenarios run and the server is staged");
+  assert.equal(fs.existsSync(w.stop), false, "no STOP was made");
   assert.equal(w.reruns, 0);
   assert.deepEqual(w.notices, [], "staging-check --tell sends the ready message, not this script");
   assert.ok(ctx.state.releases[w.id].finished);
@@ -435,7 +423,7 @@ test("a finished release is marked, frozen, run on the tag once, put on the serv
   assert.equal(again.w.dispatches, 0);
 });
 
-test("failed tests: the failed jobs run once more, then he is told once, and the STOP file is gone", async () => {
+test("failed tests: the failed jobs run once more, then he is told once, and no STOP file was ever made", async () => {
   const { w, ctx } = world({
     issues: closedBoth,
     scenarioSeq: [{ result: "none" }, failed, failed, failed],
@@ -463,19 +451,21 @@ test("failed tests: the failed jobs run once more, then he is told once, and the
   assert.equal(w.reruns, 1);
 });
 
-test("a crash while waiting still removes the STOP file", async () => {
+test("a crash while waiting leaves no STOP file", async () => {
   const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, () => { throw new Error("boom"); }] });
   await assert.rejects(() => A.autoStage(ctx), /boom/);
   assert.equal(fs.existsSync(w.stop), false);
   assert.equal(w.dispatches, 1);
 });
 
-test("a STOP of ours left by a killed look is taken back and removed, not left for two hours", async () => {
+test("item 7: a STOP an older release step left behind is not the step's to touch: it is left as it is, taken over by nobody", async () => {
   const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, passed] });
-  A.createStop(w.stop, ctx.now() - 10 * 60 * 1000);
+  const text = "auto-stage 2639648 2026-11-24T12:47:44.892Z\nThe release step pauses the factory while the scenarios run.\n";
+  fs.writeFileSync(w.stop, text);
   const r = await A.autoStage(ctx);
   assert.equal(r.outcome, "ready");
-  assert.equal(fs.existsSync(w.stop), false);
+  assert.equal(fs.readFileSync(w.stop, "utf8"), text, "not rewritten with this process's number, not removed");
+  assert.ok(!w.log.some((l) => /STOP file|factory is paused|factory.s STOP/.test(l)), w.log.join(" / "));
 });
 
 test("a rerun GitHub does not show yet is not read as the old failure", async () => {
@@ -579,9 +569,10 @@ test("a plan that says a step is done by hand is a halt for the driver and does 
 });
 
 test("a refusal of the freeze that is only a wait is not a halt until it has lasted, and then it is a halt, never a message", async () => {
+  // since 25 November 2026 a missing build is a wait the step ends itself, never a person's decision (needs-judgment)
   const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { freezeCheckRefuses: "GitHub holds no Windows setup built for commit 9999999 (no artifact)." } });
   const r1 = await A.autoStage(ctx);
-  assert.equal(r1.outcome, "needs-judgment");
+  assert.equal(r1.outcome, "waiting");
   assert.equal(r1.halt, undefined, "a build still running is not a halt");
   assert.equal(w.notices.length, 0, "a build still running is not worth a message");
   assert.deepEqual(w.calls, ["freeze.mjs --dry-run"], "nothing was frozen");
@@ -589,7 +580,7 @@ test("a refusal of the freeze that is only a wait is not a halt until it has las
   const later = { ...ctx, now: () => (t += 2 * 3600 * 1000), state: A.loadState(ctx.stateFile) };
   const rl = await A.autoStage(later);
   assert.equal(w.notices.length, 0);
-  assert.equal(rl.halt.key, "blocked-freeze");
+  assert.equal(rl.halt.key, "blocked-build");
   assert.match(rl.halt.words, /has not finished building the Windows setup/);
 });
 
@@ -602,17 +593,20 @@ test("a refusal only a person could lift is a halt at once, never a message", as
 });
 
 test("a wait that cleared starts counting again, and a different reason is said again", async () => {
-  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { mainHead: { none: "main's newest change has not passed its required check yet" } } });
+  // the pinned commit's own required check still running is the wait now (main's newest change is never waited for)
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { checkState: "running" } });
   await A.autoStage(ctx); // starts counting
-  assert.ok(A.loadState(ctx.stateFile).releases[w.id].blocked["main-check"]);
-  w.extra.mainHead = { commit: "9".repeat(40) };
-  w.extra.freezeCheckRefuses = "GitHub holds no Windows setup built for commit 9999999.";
+  assert.ok(A.loadState(ctx.stateFile).releases[w.id].blocked.build);
+  w.extra.checkState = "passed";
+  w.extra.freezeCheckRefuses = "There are open approved-plan tickets: 01-a.md.";
   await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
-  assert.equal(A.loadState(ctx.stateFile).releases[w.id].blocked["main-check"], undefined, "main's check passed: its clock is cleared");
-  w.extra.mainHead = { none: "main's newest change has not passed its required check yet" };
+  assert.equal(A.loadState(ctx.stateFile).releases[w.id].blocked.build, undefined, "the check passed: its clock is cleared");
+  w.extra.checkState = "running";
+  w.extra.freezeCheckRefuses = null;
   const t0 = ctx.now() + 3 * 3600 * 1000;
-  await A.autoStage({ ...ctx, now: () => t0, state: A.loadState(ctx.stateFile) });
-  assert.equal(w.notices.length, 0, "a short wait after a long break is not a long wait");
+  const r = await A.autoStage({ ...ctx, now: () => t0, state: A.loadState(ctx.stateFile) });
+  assert.notEqual(r.halt && r.halt.key, "blocked-build", "a short wait after a long break is not a long wait");
+  assert.equal(w.notices.length, 0);
 });
 
 test("a scope amendment lets a deferred ticket go", async () => {
@@ -683,11 +677,10 @@ test("a release staged by hand is not touched (beta.24's case)", async () => {
 });
 
 test("the config has defaults in one place and takes overrides", () => {
-  assert.equal(A.loadConfig({}).stopFile, A.CONFIG_DEFAULTS.stopFile);
-  const c = A.loadConfig({ AUTO_STAGE_STOP_FILE: "/x/STOP", AUTO_STAGE_MAC: "false", AUTO_STAGE_STOP_MAX_AGE_MINUTES: "30" });
-  assert.equal(c.stopFile, "/x/STOP");
+  assert.equal(A.loadConfig({}).scenarioWaitMinutes, A.CONFIG_DEFAULTS.scenarioWaitMinutes);
+  const c = A.loadConfig({ AUTO_STAGE_MAC: "false", AUTO_STAGE_SCENARIO_WAIT_MINUTES: "30" });
   assert.equal(c.scenarioMac, false);
-  assert.equal(c.stopMaxAgeMinutes, 30);
+  assert.equal(c.scenarioWaitMinutes, 30);
 });
 
 test("the server's message path: without mc-notify, tellScript queues a notice once (beta.24 would never have reached him otherwise)", async () => {
@@ -807,19 +800,21 @@ test("scenarios on the tag that do not count are a halt and never answered with 
 });
 
 test("a wait that lasts is one halt per spell, not a new one for every new commit on main, and never a message", async () => {
-  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { mainHead: { none: "main's newest change has not passed its required check yet (completed failure)" } } });
+  // since 25 November 2026 the wait is on the pinned commit, which never follows main: the factory merging on changes nothing
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { checkState: "running" } });
   let t = ctx.now();
   const keys = [];
   let last = null;
   for (let i = 0; i < 6; i++) {
     t += 30 * 60 * 1000;
-    w.extra.mainHead = { none: `main's newest change has not passed its required check yet (completed failure ${i})` };
+    if (i > 0) w.extra.mainTip = String(i).repeat(40); // a new commit on main every half hour
     last = await A.autoStage({ ...ctx, now: () => t, state: A.loadState(ctx.stateFile) });
     if (last.halt) keys.push(last.halt.key);
   }
   assert.equal(w.notices.length, 0);
-  assert.ok(keys.length > 0 && keys.every((k) => k === "blocked-main-check"), "one key for the whole spell");
+  assert.ok(keys.length > 0 && keys.every((k) => k === "blocked-build"), "one key for the whole spell");
   assert.match(last.halt.words, /has been waiting for over an hour/);
+  assert.equal(A.loadState(ctx.stateFile).releases[w.id].pin.commit, "9".repeat(40), "the pin never follows main");
 });
 
 test("a hand step still ahead is found even when the sentence has a word of history in it", () => {
@@ -1351,78 +1346,89 @@ test("the version line and the README section are written once, above the newest
   assert.equal(A.withReadmeSection(once, "2.0.0-beta.26", section), once, "a section that is there already is not added again");
 });
 
-const VERSION_REFUSAL = "/x/windows-manifest.json says version 2.0.0-beta.24, not 2.0.0-beta.25.";
+const PIN = "9".repeat(40); // main's head when every ticket was done (world's mainTip)
+const V = "7".repeat(40); // the version commit on top of it
 function versioned({ pr = null, required = "running", mergeOk = true, extra = {}, issues = closedBoth } = {}) {
-  const made = world({ issues, scenarioSeq: [{ result: "none" }], extra: { freezeCheckRefuses: VERSION_REFUSAL, ...extra } });
+  const made = world({ issues, scenarioSeq: [{ result: "none" }], extra });
   const { w, ctx } = made;
   w.pr = pr;
   w.vcalls = [];
   w.required = required;
   ctx.versionPull = {
     find: async (branch) => { w.vcalls.push(["find", branch]); return w.pr; },
-    open: async (x) => { w.vcalls.push(["open", x.branch, x.title]); w.opened = x; w.pr = { number: 701, state: "open", merged: false, head: "7".repeat(40), title: x.title }; return { pr: 701, head: "7".repeat(40) }; },
+    versionAt: async () => w.extra.versionAtPin || "2.0.0-beta.24",
+    parentOf: async () => w.extra.parentOf || PIN,
+    open: async (x) => { w.vcalls.push(["open", x.branch, x.title, x.onto]); w.opened = x; w.pr = { number: 701, state: "open", merged: false, head: V, title: x.title }; return { pr: 701, head: V }; },
+    update: async (x) => { w.vcalls.push(["update", x.branch, x.onto]); w.pr = { ...w.pr, head: "5".repeat(40) }; return { head: "5".repeat(40) }; },
+    pointBranch: async (b, sha) => { w.vcalls.push(["point", b, sha]); return { branch: b }; },
     required: async () => ({ state: w.required }),
     failures: async () => '"suite" failed; the checks failed: suite',
-    merge: async (x) => { w.vcalls.push(["merge", x.pr, x.head]); if (!mergeOk) return { ok: false, message: "status 405" }; w.pr = { ...w.pr, state: "closed", merged: true }; return { ok: true, sha: "6".repeat(40) }; },
+    merge: async (x) => { w.vcalls.push(["merge", x.pr, x.head, x.method]); if (!mergeOk) return { ok: false, message: "status 405" }; w.pr = { ...w.pr, state: "closed", merged: true }; return { ok: true, sha: "6".repeat(40) }; },
   };
   return made;
 }
 
-test("a wrong version opens the release step's own pull request once; a crash after opening finds it, never a second one", async () => {
+test("a finished release opens the release step's own version pull request once, on the pinned commit; a crash after opening finds it, never a second one", async () => {
   const { w, ctx } = versioned();
   const r = await A.autoStage(ctx);
   assert.equal(r.outcome, "waiting");
-  assert.deepEqual(w.vcalls.filter((c) => c[0] === "open"), [["open", "release/version-2.0.0-beta.25", "Release step of 2.0.0-beta.25: the version"]]);
+  assert.deepEqual(w.vcalls.filter((c) => c[0] === "open"), [["open", "release/version-2.0.0-beta.25", "Release step of 2.0.0-beta.25: the version", PIN]], "one commit on the pin, not on whatever main is later");
   assert.match(w.opened.section, /^## New in 2\.0\.0-beta\.25\n/);
   assert.match(w.opened.body, /Guide-Reviewed: none-needed \(/, "the guide check is cleared in the pull request");
   assert.match(w.opened.message, /^Release step of 2\.0\.0-beta\.25: the version\n\nGuide-Reviewed: none-needed/);
-  assert.equal(A.loadState(ctx.stateFile).releases[w.id].bump.pr, 701);
+  const st = A.loadState(ctx.stateFile).releases[w.id];
+  assert.deepEqual([st.bump.pr, st.bump.head, st.bump.parent, st.pin.commit], [701, V, PIN, PIN]);
   assert.equal(w.notices.length, 0, "opening it is no news for him");
-  // a look that crashed before saving: GitHub has it, so nothing is opened again
+  // a look that crashed before saving: GitHub has it, and its commit stands on the pin, so nothing is opened again
   const fresh = { ...ctx, state: { version: 1, releases: {} } };
   await A.autoStage(fresh);
   assert.equal(w.vcalls.filter((c) => c[0] === "open").length, 1);
+  assert.equal(fresh.state.releases[w.id].bump.head, V, "the pull request found is taken as the step's own");
 });
 
 test("main already at a newer version than the approved release: no version pull request is opened", async () => {
-  const { w, ctx } = versioned();
-  ctx.versionPull.mainVersion = async () => "2.0.0-beta.28";
+  const { w, ctx } = versioned({ extra: { versionAtPin: "2.0.0-beta.28" } });
   const lines = [];
   ctx.log = (x) => lines.push(x);
   const r = await A.autoStage(ctx);
   assert.equal(r.outcome, "waiting");
   assert.equal(w.vcalls.filter((c) => c[0] === "open").length, 0, "nothing is opened");
-  assert.ok(lines.some((l) => /Superseded: .* not newer than 2\.0\.0-beta\.28/.test(l)));
+  assert.ok(lines.some((l) => /Superseded: .* main already carries the newer 2\.0\.0-beta\.28/.test(l)));
   assert.equal(w.notices.length, 0);
 });
 
-test("the version pull request is approved and merged once its required check passes, then the freeze goes on as always", async () => {
-  const { w, ctx } = versioned({ pr: { number: 701, state: "open", merged: false, head: "7".repeat(40), title: "Release step of 2.0.0-beta.25: the version" }, required: "running" });
+test("the version pull request is merged with a merge commit once its own required check passes, and that very commit is frozen in the same look", async () => {
+  const { w, ctx } = versioned({ pr: { number: 701, state: "open", merged: false, head: V, title: "Release step of 2.0.0-beta.25: the version" }, required: "running" });
   assert.equal((await A.autoStage(ctx)).outcome, "waiting");
   assert.equal(w.vcalls.filter((c) => c[0] === "merge").length, 0, "not merged while its check runs");
   w.required = "passed";
-  await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
-  assert.deepEqual(w.vcalls.filter((c) => c[0] === "merge"), [["merge", 701, "7".repeat(40)]], "merged at the head its check passed on");
-  assert.equal(A.loadState(ctx.stateFile).releases[w.id].bump.merged, "6".repeat(40));
-  // main now carries the version: the freeze's own dry run says yes and the release goes on
-  w.extra.freezeCheckRefuses = null;
   w.scenarioSeq = [{ result: "none" }, passed];
   const r = await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
-  assert.equal(r.outcome, "ready");
+  assert.deepEqual(w.vcalls.filter((c) => c[0] === "merge"), [["merge", 701, V, "merge"]], "merged at the head its check passed on, with a merge commit");
+  assert.equal(A.loadState(ctx.stateFile).releases[w.id].bump.merged, "6".repeat(40));
+  assert.equal(r.outcome, "ready", "frozen and asked in the same look: no second build cycle for the merge");
   assert.deepEqual(w.calls.slice(-4), ["freeze.mjs --dry-run", "freeze.mjs", "stage-server.mjs", "staging-check.mjs"]);
+  assert.deepEqual([...new Set(w.freezeCommits)], [V], "the version commit is frozen, not the merge commit and not main's newest head");
   assert.equal(w.notices.length, 0);
 });
 
-test("a version pull request whose check failed is said once with its cause, and merged by itself once it passes", async () => {
-  const { w, ctx } = versioned({ pr: { number: 701, state: "open", merged: false, head: "7".repeat(40), title: "t" }, required: "failed" });
+test("a version pull request whose check failed is run once more, then said once with its cause, and merged by itself once it passes", async () => {
+  const { w, ctx } = versioned({ pr: { number: 701, state: "open", merged: false, head: V, title: "t" }, required: "failed" });
   await A.autoStage(ctx);
-  await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  assert.deepEqual(w.checkReruns, [V], "its failed jobs are run once more first");
+  assert.equal(w.notices.length, 0, "nothing said before that");
+  let t = ctx.now() + 3 * 60 * 1000;
+  await A.autoStage({ ...ctx, now: () => t, state: A.loadState(ctx.stateFile) });
+  t += 60 * 1000;
+  await A.autoStage({ ...ctx, now: () => t, state: A.loadState(ctx.stateFile) });
+  assert.deepEqual(w.checkReruns, [V], "once, never twice");
   assert.equal(w.notices.length, 1);
   assert.match(w.notices[0].text, /raises its version number did not pass its checks: "suite" failed/);
   assert.match(w.notices[0].text, /merge it by myself as soon as it passes/);
   assert.equal(w.vcalls.filter((c) => c[0] === "merge").length, 0);
   w.required = "passed";
-  await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  w.scenarioSeq = [{ result: "none" }, passed];
+  await A.autoStage({ ...ctx, now: () => t, state: A.loadState(ctx.stateFile) });
   assert.equal(w.vcalls.filter((c) => c[0] === "merge").length, 1);
 });
 
@@ -1434,6 +1440,107 @@ test("a dry look says what the version step would do and does it not", async () 
   assert.equal(r.outcome, "would-raise-version");
   assert.equal(w.vcalls.filter((c) => c[0] !== "find").length, 0);
   assert.ok(w.log.some((l) => /## New in 2\.0\.0-beta\.25/.test(l)));
+  assert.equal(fs.existsSync(ctx.stateFile), false, "nothing written");
+});
+
+test("review fix: a move of the version pull request onto a new pin that a look did not see end is the step's own; somebody else's push is not", async () => {
+  const moved = "5".repeat(40);
+  const setup = (moving) => {
+    const made = versioned({ pr: { number: 701, state: "open", merged: false, head: moved, title: "t" } });
+    Object.assign(A.releaseState(made.ctx.state, made.w.id), { pin: { commit: PIN, at: "2026-11-14T09:00:00Z" }, bump: { branch: "release/version-2.0.0-beta.25", pr: 701, head: V, parent: "1".repeat(40), ...(moving ? { moving: PIN } : {}) } });
+    return made;
+  };
+  const ours = setup(true);
+  const r1 = await A.autoStage(ours.ctx);
+  assert.equal(r1.outcome, "waiting");
+  assert.equal(A.loadState(ours.ctx.stateFile).releases[ours.w.id].bump.head, moved, "taken as the step's own commit");
+  assert.equal(ours.w.vcalls.filter((c) => c[0] === "update").length, 0, "not moved a second time");
+  const theirs = setup(false);
+  const r2 = await A.autoStage(theirs.ctx);
+  assert.equal(r2.outcome, "needs-judgment");
+  assert.match(r2.halt.words, /somebody else pushed to the version pull request #701/);
+});
+
+test("review fix: a check run once more that GitHub refused is asked again, never counted as the one", async () => {
+  const { w, ctx } = versioned({ pr: { number: 701, state: "open", merged: false, head: V, title: "t" }, required: "failed" });
+  let refuse = true;
+  ctx.rerunChecks = async (sha) => {
+    if (refuse) throw new R.Refused("GitHub said 502 to the rerun.");
+    (w.checkReruns ||= []).push(sha);
+    return 1;
+  };
+  const r1 = await A.autoStage(ctx);
+  assert.equal(r1.outcome, "waiting", "the look goes on: the refusal is asked again, not an error that ends it");
+  assert.ok(w.log.some((l) => /GitHub refused to run its failed jobs once more \(GitHub said 502 to the rerun\.\); it is asked again/.test(l)), w.log.join(" | "));
+  assert.equal((A.loadState(ctx.stateFile).releases[w.id].reruns || {})[V], undefined, "a refused request is not the run once more");
+  refuse = false;
+  await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  assert.deepEqual(w.checkReruns, [V]);
+  assert.ok(A.loadState(ctx.stateFile).releases[w.id].reruns[V]);
+  assert.equal(w.notices.length, 0, "nothing said: it was run once more only now");
+});
+
+test("review fix (round 3): a check whose runs GitHub took only partly is not counted as run once more until every one was taken", async () => {
+  const { w, ctx } = versioned({ pr: { number: 701, state: "open", merged: false, head: V, title: "t" }, required: "failed" });
+  let calls = 0;
+  ctx.rerunChecks = async () => (++calls === 1 ? { started: [11], refused: "GitHub said 403 to running the failed jobs of run 13 again" } : { started: [13], refused: null });
+  await A.autoStage(ctx);
+  assert.equal((A.loadState(ctx.stateFile).releases[w.id].reruns || {})[V], undefined, "not counted while one was refused");
+  assert.ok(w.log.some((l) => /refused to run its failed jobs once more \(GitHub said 403 to running the failed jobs of run 13 again\); it is asked again/.test(l)), w.log.join(" | "));
+  await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  assert.equal(calls, 2);
+  assert.ok(A.loadState(ctx.stateFile).releases[w.id].reruns[V], "now it is run once more");
+  assert.equal(w.notices.length, 0);
+});
+
+test("review fix: a failed build whose run once more GitHub refused is asked again; only its real second failure halts, with its cause", async () => {
+  const box = { attempt: 1, refuse: true };
+  const pin = "9".repeat(40);
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { buildReady: (kind) => kind !== "image", buildRun: (kind) => (kind === "image" ? { id: 9, status: "completed", conclusion: "failure", startedAt: "2026-11-14T09:40:00Z", attempt: box.attempt, url: "https://x/runs/9" } : null) } });
+  ctx.rerunFailed = async () => {
+    if (box.refuse) throw new R.Refused("GitHub said 403 to running the failed jobs of run 9 again.");
+    box.attempt = 2;
+  };
+  const r1 = await A.autoStage(ctx);
+  assert.equal(r1.outcome, "waiting");
+  assert.equal(r1.halt, undefined);
+  assert.equal((((A.loadState(ctx.stateFile).releases[w.id].builds || {})[pin] || {}).image || {}).rerunAt, undefined, "not counted");
+  box.refuse = false;
+  await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  assert.ok(A.loadState(ctx.stateFile).releases[w.id].builds[pin].image.rerunAt, "written down once GitHub took it");
+  const r3 = await A.autoStage({ ...ctx, state: A.loadState(ctx.stateFile) });
+  assert.equal(r3.halt.key, "blocked-build-failed");
+  assert.match(r3.halt.words, /could not build the server image for 9999999: its run failed, also when it was run once more \(https:\/\/x\/runs\/9\)/);
+  assert.deepEqual(w.calls, [], "nothing frozen");
+});
+
+test("review fix (round 6): a failed build is asked to run once more at most once: a run once more GitHub never shows is a halt, never a second request", async () => {
+  const pin = "9".repeat(40);
+  let asked = 0;
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { buildReady: (kind) => kind !== "image", buildRun: (kind) => (kind === "image" ? { id: 9, status: "completed", conclusion: "failure", startedAt: "2026-11-14T09:40:00Z", attempt: 1, url: "https://x/runs/9" } : null) } });
+  ctx.rerunFailed = async () => { asked++; throw new TypeError("fetch failed"); }; // the request may have arrived; no answer
+  const r1 = await A.autoStage(ctx);
+  assert.equal(r1.outcome, "waiting");
+  assert.ok(A.loadState(ctx.stateFile).releases[w.id].builds[pin].image.rerunAt, "written down before the request, kept after no answer");
+  let t = ctx.now() + 2 * 60000;
+  await A.autoStage({ ...ctx, now: () => t, state: A.loadState(ctx.stateFile) });
+  t += 10 * 60000; // GitHub's list still shows attempt 1, long after
+  const r3 = await A.autoStage({ ...ctx, now: () => t, state: A.loadState(ctx.stateFile) });
+  assert.equal(asked, 1, "never asked a second time");
+  assert.equal(r3.halt.key, "blocked-build-failed");
+  assert.match(r3.halt.words, /its run once more never showed \(https:\/\/x\/runs\/9\)/);
+});
+
+test("review fix: a gate file GitHub cannot give now is a wait in the look's line, never a run of every test, and a halt once it lasted", async () => {
+  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }], extra: { gate: null } });
+  w.tag = "1".repeat(40);
+  const r = await A.autoStage(ctx);
+  assert.equal(r.outcome, "waiting");
+  assert.equal(w.dispatches, 0, "nothing started without the list");
+  assert.ok(w.log.some((l) => /^Waiting: the list of the release's tests on candidate\/2\.0\.0-beta\.25 cannot be read from GitHub now/.test(l)), w.log.join("\n"));
+  let t = ctx.now() + 2 * 3600 * 1000;
+  const later = await A.autoStage({ ...ctx, now: () => t, state: A.loadState(ctx.stateFile) });
+  assert.equal(later.halt.key, "blocked-gate");
 });
 
 test("a freeze that says the tag exists is carried on from the tag, not said to him", async () => {
@@ -1494,36 +1601,50 @@ test("a failed run's failed jobs leave out the jobs that were skipped on purpose
   assert.deepEqual(await G.failedJobNames(api, REPO, 1), ["a", "b"]);
 });
 
-// ---------- issue #155 (2026-11-24): the STOP never outlives the scenarios, and a failed candidate is always filed ----------
-// Beta.31's candidate run failed at 13:40 UTC; GitHub answered 502 to the run's jobs, every look ended there, and the
-// step's STOP (relabelled "stage" by a helper) halted the factory until a person removed it at 14:00.
+// ---------- issue #155 (2026-11-24): a failed candidate is always filed ----------
+// Beta.31's candidate run failed at 13:40 UTC and GitHub answered 502 to the run's jobs, so every look ended there and
+// nothing was said or filed. (The step's STOP, which halted the factory that afternoon, is gone: the Forge 0.3.3, item 7.)
 
 const JOB = "two computers move reminders";
 const FIRST_DAY = "a fresh Docker server turns a first goal into useful work and a matching Telegram brief";
 const jobsUnread = { result: "failed", run: 7, url: "u", tag: "candidate/2.0.0-beta.25" }; // the scenarios' own read of the jobs got no answer
 const ISSUE_1105 = { number: 1105, title: "The first morning brief on a fresh server does not name the person's first goal (beta.31 candidate scenario)", body: `The 2.0.0-beta.31 candidate's everyday scenario "${FIRST_DAY}" failed (run https://github.com/MichaelZelbel/godspeed-mission-control/actions/runs/45396974921).` };
 
-test("issue #155: the STOP goes the moment the scenarios have ended, before the install is waited for and before anything is read to summarise them", async () => {
-  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, passed], extra: { serverDelayMs: 30 } });
-  const r = await A.autoStage(ctx);
-  assert.equal(r.outcome, "ready");
-  const removed = w.log.indexOf("The factory's STOP file was removed.");
-  const onServer = w.log.findIndex((l) => /is on the server\.$/.test(l));
-  assert.ok(removed >= 0 && onServer > removed, `the STOP was removed before the install ended:\n${w.log.join("\n")}`);
-  assert.deepEqual(w.stopSeenDuring.filter(([n]) => n === "staging-check.mjs").map(([, s]) => s), [false]);
+test("item 7: a full release-step run with the scenarios running never creates the factory's STOP, at any step of it", async () => {
+  const seen = [];
+  const watch = (w, ctx) => {
+    const sleep = ctx.sleep;
+    ctx.sleep = async (ms) => { seen.push(["sleep", fs.existsSync(w.stop)]); return sleep(ms); };
+    ctx.rerunFailed = async () => { w.reruns++; seen.push(["rerun", fs.existsSync(w.stop)]); };
+  };
+  // the scenarios pass after running for a few looks, the install takes a while
+  const a = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, { result: "running", run: 7 }, { result: "running", run: 7 }, { result: "running", run: 7 }, passed], extra: { serverDelayMs: 30 } });
+  watch(a.w, a.ctx);
+  assert.equal((await A.autoStage(a.ctx)).outcome, "ready");
+  // a failed first run and the one rerun of its failed jobs
+  const b = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, { result: "running", run: 7 }, failed, failed, failed], extra: { serverDelayMs: 30 } });
+  watch(b.w, b.ctx);
+  assert.equal((await A.autoStage(b.ctx)).outcome, "failed-tests");
+  for (const x of [a, b]) {
+    assert.ok(x.w.dispatches === 1 && x.w.stopSeenDuring.length >= 4, "the whole run was observed, from the freeze to the check: " + JSON.stringify(x.w.stopSeenDuring));
+    assert.ok(x.w.stopSeenDuring.every(([, there]) => there === false), JSON.stringify(x.w.stopSeenDuring));
+    assert.equal(fs.existsSync(x.w.stop), false);
+    assert.ok(!x.w.log.some((l) => /STOP file|factory is paused|factory.s STOP/.test(l)), x.w.log.join(" / "));
+  }
+  for (const x of [a, b]) assert.ok(x.w.stopSeenDuring.some(([n]) => n === "scenarios"), "every read of the scenarios was observed");
+  assert.ok(seen.length >= 2 && seen.some(([n]) => n === "sleep") && seen.some(([n]) => n === "rerun"), JSON.stringify(seen));
+  assert.ok(seen.every(([, there]) => there === false), "nor while the step sleeps between two reads of the scenarios, nor when it reruns the failed jobs: " + JSON.stringify(seen));
 });
 
-test("issue #155: a failed first run lets the factory go while the install still runs, and the one rerun of its failed jobs pauses it again", async () => {
+test("item 7: the install still runs beside the scenarios and a failed first run still gets its one rerun, with the factory running throughout", async () => {
   const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, failed, failed, failed], extra: { serverDelayMs: 30 } });
   ctx.rerunFailed = async () => { w.reruns++; w.stopSeenDuring.push(["rerun", fs.existsSync(w.stop)]); };
   const r = await A.autoStage(ctx);
   assert.equal(r.outcome, "failed-tests");
-  const at = (re) => w.log.findIndex((l) => re.test(l));
-  const firstRemoved = at(/^The factory's STOP file was removed\.$/);
-  assert.ok(firstRemoved >= 0 && at(/is on the server\.$/) > firstRemoved, w.log.join(" / "));
-  assert.ok(at(/paused again while the failed jobs run once more/) > at(/is on the server\.$/));
-  assert.deepEqual(w.stopSeenDuring.filter(([n]) => n === "rerun").map(([, s]) => s), [true], "paused while the rerun runs");
-  assert.equal(w.log.filter((l) => l === "The factory's STOP file was removed.").length, 2, "once after the run, once after its rerun");
+  assert.deepEqual([w.dispatches, w.reruns], [1, 1]);
+  const order = w.stopSeenDuring.map(([n]) => n).filter((n) => ["dispatch", "stage-server.mjs", "rerun"].includes(n));
+  assert.deepEqual(order, ["dispatch", "stage-server.mjs", "rerun"], "the install starts beside the scenarios, after they were started and before the failed jobs are run again");
+  assert.ok(w.log.some((l) => /is on the server\.$/.test(l)));
   assert.equal(fs.existsSync(w.stop), false);
 });
 
@@ -1572,7 +1693,6 @@ test("issue #155: when GitHub can name the failed jobs neither from the jobs nor
   const next = { ...ctx, state: A.loadState(ctx.stateFile), failedChecks: async () => [JOB, "the verdict"] };
   const r2 = await A.autoStage(next);
   assert.equal(r2.outcome, "failed-tests");
-  assert.ok(w.log.includes("Nothing is running, so the factory is not paused."));
   assert.deepEqual(w.filed.map((i) => i.title), [`Nightly scenario failed: ${JOB}`]);
   assert.equal(w.notices.length, 1);
   assert.deepEqual([w.dispatches, w.reruns], [1, 1], "one run, one rerun, never more");
@@ -1628,30 +1748,26 @@ test("issue #155: the stage's read of the public stage file goes through the sam
   assert.equal(wrapped.length, 2, "both the API and the raw reads are wrapped");
 });
 
-test("issue #155: a STOP of the step relabelled \"stage\" is still the step's own: taken over with this look's process number and removed when the scenarios end", async () => {
-  const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, { result: "running", run: 7 }, passed] });
-  fs.writeFileSync(w.stop, "stage 2639648 2026-11-24T12:47:44.892Z\nThe release step pauses the factory while the scenarios run (the driver's stage step).\n");
-  let during = null;
-  ctx.dispatch = async () => { w.dispatches++; during = fs.readFileSync(w.stop, "utf8"); };
-  const r = await A.autoStage(ctx);
-  assert.equal(r.outcome, "ready");
-  assert.match(during, new RegExp(`^auto-stage ${process.pid} `), "written again with the process that runs");
-  assert.equal(fs.existsSync(w.stop), false);
-  fs.writeFileSync(w.stop, "Operator stopped new factory launches.\n");
-  assert.deepEqual([A.stopIsMine(w.stop), A.takeStop(w.stop, ctx.now()), fs.readFileSync(w.stop, "utf8")], [false, false, "Operator stopped new factory launches.\n"], "the operator's STOP is never taken");
-});
-
-test("issue #155: a look that finds the scenarios ended removes a STOP an earlier look of the step left behind; somebody else's stays", async () => {
-  for (const [text, gone] of [["auto-stage 2639648 2026-11-24T12:47:44.892Z\n", true], ["stage 2639648 2026-11-24T12:47:44.892Z\n", true], ["Operator stopped new factory launches.\n", false]]) {
+test("item 7: a STOP anyone made, or an older release step left, is never touched by a look, whether the scenarios run or have ended: not taken over, not removed", async () => {
+  const texts = ["auto-stage 2639648 2026-11-24T12:47:44.892Z\n", "stage 2639648 2026-11-24T12:47:44.892Z\n", "Operator stopped new factory launches.\n"];
+  for (const text of texts) {
+    // the scenarios start, run and end during this look
+    const a = world({ issues: closedBoth, scenarioSeq: [{ result: "none" }, { result: "running", run: 7 }, passed] });
+    fs.writeFileSync(a.w.stop, text);
+    let during = null;
+    a.ctx.dispatch = async () => { a.w.dispatches++; during = fs.readFileSync(a.w.stop, "utf8"); };
+    assert.equal((await A.autoStage(a.ctx)).outcome, "ready");
+    assert.equal(during, text, text);
+    assert.equal(fs.readFileSync(a.w.stop, "utf8"), text, text);
+    // a look that finds the scenarios ended already
     const { w, ctx } = world({ issues: closedBoth, scenarioSeq: [failed], staging: { version: "2.0.0-beta.25", productCommit: "8".repeat(40), status: "installed", installedAt: "2026-11-14T09:30:00Z", healthAfter: { ok: true, version: "2.0.0-beta.25" } } });
     w.tag = "1".repeat(40);
     const at = new Date(ctx.now() - 3600 * 1000).toISOString();
     Object.assign(A.releaseState(ctx.state, w.id), { started: at, freezeStartedAt: at, frozen: at, dispatchedAt: at, rerunAt: at, rerunFromAttempt: 1 });
     fs.writeFileSync(w.stop, text);
-    const r = await A.autoStage(ctx);
-    assert.equal(r.outcome, "failed-tests");
-    assert.equal(fs.existsSync(w.stop), !gone, text);
-    assert.equal(w.log.some((l) => /left behind was removed/.test(l)), gone, text);
+    assert.equal((await A.autoStage(ctx)).outcome, "failed-tests");
+    assert.equal(fs.readFileSync(w.stop, "utf8"), text, text);
+    assert.ok(!w.log.some((l) => /STOP file|left behind/.test(l)), w.log.join(" / "));
   }
 });
 

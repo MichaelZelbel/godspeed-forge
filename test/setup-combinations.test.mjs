@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { setupRepository, UNEXPECTED_MESSAGE } from '../lib/setup.mjs';
 import { credentialPath, defaults, projectStatePath } from '../lib/config.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
+import './home.mjs';
 import { testCase } from './cases.mjs';
 
 const root = await mkdtemp(join(tmpdir(), 'forge-combinations-'));

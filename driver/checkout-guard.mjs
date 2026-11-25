@@ -12,7 +12,7 @@
 //     in a shell command line, is refused unless it is wrapped (runuser -u <factory user> --): enforceCheckoutGuard() puts that
 //     check in front of child_process, the one runner every step's git goes through, and gitAs() / gitInDir() are the ways to
 //     run git there as the factory user;
-//   - in the same processes, a file root makes in the factory user's home (the stage step's STOP in a checkout's .factory folder)
+//   - in the same processes, a file root makes in the factory user's home (a step's file in a checkout's folder)
 //     is given at once to the owner of the folder it is in, so nothing the driver writes there stays root's;
 //   - an acting run and a dead-man's repair run (an AI with a root shell) have the factory's checkouts read-only in their unit
 //     (onduty.mjs controlPlane, deadman.mjs launchRepair), and their briefs say where they work instead;
@@ -240,7 +240,7 @@ export function enforceCheckoutGuard(account = factoryAccount(), { root = isRoot
 // ---------------------------------------------------------------- the files root makes there
 // A file or folder the process makes in the factory user's home (writeFileSync, appendFileSync, copyFileSync, renameSync,
 // symlinkSync, openSync that creates, mkdirSync) is given at once to the owner of the folder it is in, when it came out root's:
-// the stage step's STOP in a checkout's .factory folder (also when it is written again through a renamed temporary file), a
+// a step's file in a checkout's folder (also when it is written again through a renamed temporary file), a
 // helper's file in its work folder. A folder of root's keeps root's files (someone made it so on purpose). Never through a link:
 // lchown changes a link itself. If giving it back fails, the file stays as it is and housekeeping gives it back in its round.
 const MAKERS = [["writeFileSync", 0], ["appendFileSync", 0], ["copyFileSync", 1], ["renameSync", 1], ["symlinkSync", 1], ["openSync", 0], ["mkdirSync", 0]];

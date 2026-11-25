@@ -203,7 +203,7 @@ test("the unreadable cases all go to rung 1 at once: a journal that cannot be re
   assert.ok(poison.some(x => x.id.startsWith("unclassified:")), "an entry that cannot be read is unclassified, and the round goes on");
 });
 
-test("waiting only while it is visibly running: scenarios, a pull request's run, auto-stage's STOP show as moving, never escalate, and the ceiling applies again when they end", () => {
+test("waiting only while it is visibly running: scenarios and a pull request's run show as moving, never escalate (a STOP file does not: nobody makes one any more, the Forge 0.3.3, item 7), and the ceiling applies again when they end", () => {
   const w = mkWorld();
   const run = { headBranch: "candidate/2.0.0-beta.29", headSha: "x", createdAt: new Date(NOW - 20 * 60000).toISOString(), name: "scenarios" };
   const base = inv(w, [], {}, 80);
@@ -217,11 +217,11 @@ test("waiting only while it is visibly running: scenarios, a pull request's run,
   // the ceiling is paused, never reset: once the run is over, the same entry escalates at once
   const after = advance(inv(w, [], { activity: { runs: [], stop: null } }, 80), a.chain, NOW + 4 * H);
   assert.equal(after.rows.find(r => r.entry.id === `ceiling:${REL}:installed`).rung, 1);
-  // auto-stage's STOP: moving while younger than 2 hours, not when older
+  // a STOP file, young or old, is no activity
   const stopNew = advance(inv(w, [], { activity: { runs: [], stop: { at: new Date(NOW - 30 * 60000).toISOString() } } }, 80), {}, NOW);
-  assert.ok(stopNew.rows.find(r => r.entry.id === `ceiling:${REL}:installed`).moving);
+  assert.ok(!stopNew.rows.find(r => r.entry.id === `ceiling:${REL}:installed`).moving, "a young STOP holds nothing");
   const stopOld = advance(inv(w, [], { activity: { runs: [], stop: { at: new Date(NOW - 3 * H).toISOString() } } }, 80), {}, NOW);
-  assert.ok(!stopOld.rows.find(r => r.entry.id === `ceiling:${REL}:installed`).moving, "a STOP older than 2 hours is a stall");
+  assert.ok(!stopOld.rows.find(r => r.entry.id === `ceiling:${REL}:installed`).moving, "an old STOP holds nothing");
   // a ticket whose pull request head has a run in progress
   const w2 = mkWorld(); w2.items[12] = { state: "open", labels: [], comments: [], prs: [{ number: 9, state: "open", headSha: "abc", requiredState: "none" }] };
   const t2 = advance(inv(w2, [], { activity: { runs: [{ headBranch: "feature", headSha: "abc", createdAt: new Date(NOW - H).toISOString() }], stop: null } }, 80), {}, NOW);
@@ -312,8 +312,8 @@ test("activity is scoped to its release and bounded by its own start: another re
   assert.ok(!ceilOf({ runs: [other], stop: null }).moving, "a run of another release's candidate branch does not hide this release");
   assert.ok(ceilOf({ runs: [{ ...other, headBranch: "candidate/2.0.0-beta.29" }], stop: null }).moving, "its own candidate branch does");
   assert.ok(!ceilOf({ runs: [], stop: null, procs: [{ startedAt: NOW - 4 * H, args: "auto-stage" }], at: NOW }).moving, "a program running for 4 hours is hung, not working");
-  assert.ok(!ceilOf({ runs: [], stop: { at: new Date(NOW - 30 * 60000).toISOString() } }, { stage: { id: "godspeed-2.0.0-beta.30-x", reason: "r", result: "waiting" } }).moving, "a STOP of the release auto-stage is staging, which is another one");
-  assert.ok(ceilOf({ runs: [], stop: { at: new Date(NOW - 30 * 60000).toISOString() } }, { stage: { id: REL, reason: "r", result: "waiting" }, stageSince: { since: NOW - H } }).moving);
+  assert.ok(!ceilOf({ runs: [], stop: { at: new Date(NOW - 30 * 60000).toISOString() } }, { stage: { id: "godspeed-2.0.0-beta.30-x", reason: "r", result: "waiting" } }).moving, "a STOP of another release holds nothing");
+  assert.ok(!ceilOf({ runs: [], stop: { at: new Date(NOW - 30 * 60000).toISOString() } }, { stage: { id: REL, reason: "r", result: "waiting" }, stageSince: { since: NOW - H } }).moving, "nor does a STOP of this release");
 });
 
 test("a reminder entry that an older version left on rung 1 still reaches Michael: a reminder never sits on a rung that nobody works", () => {

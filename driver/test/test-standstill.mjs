@@ -44,10 +44,10 @@ test("checkable work holds the clock only while it runs and inside its own limit
     { headBranch: "main", createdAt: new Date(now - 5 * MIN).toISOString(), name: "required" },
     { headBranch: "candidate/2.0.0-beta.30", createdAt: new Date(now - 5 * MIN).toISOString(), name: "scenarios" },
     { headBranch: "release/version-2.0.0-beta.31", headSha: "abc", createdAt: new Date(now - 5 * MIN).toISOString(), name: "required" },
-  ], stop: { at: new Date(now - 30 * MIN).toISOString() }, procs: [{ startedAt: now - 10 * MIN, args: "node /x/release/auto-stage.mjs" }, { startedAt: now - 10 * MIN, args: "node /x/release/freeze.mjs o/r 2.0.0-beta.31 --commit abc" }, { startedAt: now - 10 * MIN, args: "node /x/release/stage-server.mjs o/r 2.0.0-beta.30 --release godspeed-2.0.0-beta.30-y" }] };
+  ], stop: { at: new Date(now - 30 * MIN).toISOString() }, /* an old reader's field: nothing counts it any more */ procs: [{ startedAt: now - 10 * MIN, args: "node /x/release/auto-stage.mjs" }, { startedAt: now - 10 * MIN, args: "node /x/release/freeze.mjs o/r 2.0.0-beta.31 --commit abc" }, { startedAt: now - 10 * MIN, args: "node /x/release/stage-server.mjs o/r 2.0.0-beta.30 --release godspeed-2.0.0-beta.30-y" }] };
   const w = workFor({ id: ID, activity, autoStage: { bump: { branch: "release/version-2.0.0-beta.31", head: "abc", pr: 1094 } }, about: true, now, repo: "o/r" });
-  assert.deepEqual(w.map(x => x.what), ["a GitHub run (scenarios) on candidate/2.0.0-beta.31", "a GitHub run (required) on release/version-2.0.0-beta.31", "auto-stage's STOP file (the scenarios run)", "the release step's freeze program"]);
-  assert.deepEqual(workFor({ id: ID, activity: { ...activity, runs: [activity.runs[0]] }, about: false, now, repo: "o/r" }).map(x => x.what), ["a GitHub run (scenarios) on candidate/2.0.0-beta.31", "the release step's freeze program"], "a STOP belongs to the release the stage step looks at; a program to the release whose version it names (beta.30's install is not this one's)");
+  assert.deepEqual(w.map(x => x.what), ["a GitHub run (scenarios) on candidate/2.0.0-beta.31", "a GitHub run (required) on release/version-2.0.0-beta.31", "the release step's freeze program"], "a STOP file holds nothing, though it is young");
+  assert.deepEqual(workFor({ id: ID, activity: { ...activity, runs: [activity.runs[0]] }, about: false, now, repo: "o/r" }).map(x => x.what), ["a GitHub run (scenarios) on candidate/2.0.0-beta.31", "the release step's freeze program"], "a program belongs to the release whose version it names (beta.30's install is not this one's)");
   assert.deepEqual(workFor({ id: ID, activity: { runs: [{ headBranch: "candidate/2.0.0-beta.31", createdAt: new Date(now - 4 * 60 * MIN).toISOString() }] }, about: true, now }), [], "a run past its own limit holds nothing");
   assert.deepEqual(workFor({ id: ID, activity: null, about: true, named: [{ what: "the GitHub run 9", answeredAt: now - 61 * MIN }], now }), [], "what a helper named holds at most an hour after its answer");
 });
@@ -118,23 +118,17 @@ test("a clock the state file lost is rebuilt from the journal: when the state be
   assert.equal(Math.round(tick(null, { fp, work: [], now: T0 + 45 * MIN, lastRoundAt: T0 + 40 * MIN, journal: { fp: "another", since: T0, steps: [] } }).clock.stillMs / MIN), 5, "the journal's clock of another state is not this one's");
 });
 
-test("auto-stage's STOP counts only from the main project, which is the only one auto-stage stops", async () => {
+test("the Forge 0.3.3, item 7: no STOP file is activity, whoever wrote it and however young it is; the round's read does not report one", async () => {
   const { readActivity } = await import("../duties.mjs");
   const now = T0, at = new Date(now - 10 * MIN).toISOString();
   const run = () => ({ status: 0, stdout: "" });
-  assert.equal(readActivity({ REPO: "o/r" }, { factories: [{ primary: false, stop: { writer: "auto-stage", at } }] }, run, now).stop, null, "another project's STOP holds nothing");
-  assert.deepEqual(readActivity({ REPO: "o/r" }, { factories: [{ primary: true, stop: { writer: "auto-stage", at } }] }, run, now).stop, { at });
-});
-
-test("issue #155: the stage step's STOP holds the release clock only while its writer runs, under either label; one left behind holds nothing", async () => {
-  const { readActivity } = await import("../duties.mjs");
-  const now = T0, at = new Date(now - 10 * MIN).toISOString();
-  const run = () => ({ status: 0, stdout: "" });
-  const stop = o => readActivity({ REPO: "o/r" }, { factories: [{ primary: true, stop: { at, ...o } }] }, run, now).stop;
-  assert.deepEqual(stop({ writer: "auto-stage", line: "auto-stage 9 x", writerAlive: true }), { at });
-  assert.deepEqual(stop({ writer: "stage", line: "stage 9 x", writerAlive: true }), { at }, "relabelled by a helper, still the step's");
-  assert.equal(stop({ writer: "auto-stage", line: "auto-stage 9 x", writerAlive: false }), null, "its writer has ended: a leftover for housekeeping, no work");
-  assert.equal(stop({ writer: "Operator", line: "Operator stopped new factory launches.", writerAlive: false }), null);
+  for (const primary of [true, false]) {
+    for (const o of [{ writer: "auto-stage", line: "auto-stage 9 x", writerAlive: true }, { writer: "stage", line: "stage 9 x", writerAlive: true }, { writer: "auto-stage", line: "auto-stage 9 x", writerAlive: false }, { writer: "Operator", line: "Operator stopped new factory launches.", writerAlive: false }]) {
+      const a = readActivity({ REPO: "o/r" }, { factories: [{ primary, stop: { at, ...o } }] }, run, now);
+      assert.equal(a.stop, undefined, JSON.stringify(o));
+      assert.deepEqual(workFor({ id: ID, activity: a, about: true, now, repo: "o/r" }), [], "and it holds the release clock no more");
+    }
+  }
 });
 
 test("a round that starts a few seconds early still takes its step: never a round late", () => {
