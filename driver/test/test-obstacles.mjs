@@ -167,7 +167,7 @@ test("factory-stopped: every STOP is one, whoever wrote it, however young, wheth
   assert.deepEqual(kinds(findObstacles(stop({ writerAlive: null }), ledger(), NOW)), ["factory-stopped"], "whether its writer lives is not known: still one");
   assert.deepEqual(kinds(findObstacles(stop({ writer: "Operator", line: "Operator stopped new factory launches.", pid: null, writerAlive: false }), ledger(), NOW)), ["factory-stopped"], "a STOP somebody made by hand");
   const both = world({}, { factories: [factory({ pause: { file: "/home/godspeed-forge/godspeed-mission-control/.factory/PAUSE", kind: "PAUSE", line: "consumer.py 4242 2026-11-21T23:33:00Z", writer: "consumer.py", pid: 4242, at: H(2), writerAlive: false }, stop: { file: "/home/godspeed-forge/godspeed-mission-control/.factory/STOP", kind: "STOP", line: "Operator stopped new factory launches.", writer: "Operator", pid: null, at: H(1), writerAlive: false } })] });
-  assert.deepEqual(kinds(findObstacles(both, ledger(), NOW)), ["factory-stopped"], "a PAUSE file beside it does not hide a STOP");
+  assert.deepEqual(kinds(findObstacles(both, ledger(), NOW)), ["factory-stopped", "factory-stopped"], "a PAUSE file beside it does not hide a STOP, and the PAUSE is one too");
   const o = findObstacles(stop({ writerAlive: false }), ledger(), NOW)[0];
   assert.equal(o.project, "godspeed-mission-control");
   assert.equal(o.since, H(1));
@@ -205,8 +205,13 @@ test("tools-missing: a hidden check without a tool that runs is one obstacle nam
   assert.deepEqual(findObstacles(world({}, { tools: null }), ledger(), NOW), [], "no reading: nothing concluded (the unreadable part says so itself)");
 });
 
-test("a PAUSE never raises factory-stopped (the pause entry covers it); a STOP still does", () => {
-  const mk = kind => world({}, { factories: [factory({ stop: { file: `/home/godspeed-forge/godspeed-mission-control/.factory/${kind}`, kind, line: "consumer.py 4242 2026-11-21T23:33:00Z", writer: "consumer.py", pid: 4242, at: "2026-11-21T23:33:00.000Z", writerAlive: false, scenariosRunning: false }, activeRuns: [] })] });
-  assert.equal(findObstacles(mk("PAUSE"), {}, Date.parse("2026-11-22T10:00:00Z")).filter(o => o.kind === "factory-stopped").length, 0);
-  assert.equal(findObstacles(mk("STOP"), {}, Date.parse("2026-11-22T10:00:00Z")).filter(o => o.kind === "factory-stopped").length, 1);
+test("item 7: a hand-made PAUSE raises factory-stopped in its first round, like a STOP; the owner's own recorded pause does not", () => {
+  const mk = kind => world({}, { factories: [factory({ stop: { file: `/home/godspeed-forge/godspeed-mission-control/.factory/${kind}`, kind, line: "consumer.py 4242 2026-11-21T23:33:00Z", writer: "consumer.py", pid: 4242, at: "2026-11-21T23:33:00.000Z", writerAlive: false }, pause: kind === "PAUSE" ? { file: "/home/godspeed-forge/godspeed-mission-control/.factory/PAUSE", kind: "PAUSE", line: "consumer.py 4242 2026-11-21T23:33:00Z", writer: "consumer.py", pid: 4242, at: "2026-11-21T23:33:00.000Z", writerAlive: false } : null })] });
+  const at = Date.parse("2026-11-22T10:00:00Z");
+  const pa = findObstacles(mk("PAUSE"), {}, at).filter(o => o.kind === "factory-stopped");
+  assert.deepEqual(pa.map(o => o.stop.kind), ["PAUSE"], "one obstacle for one file");
+  assert.equal(pa[0].stop.kind, "PAUSE");
+  assert.deepEqual(findObstacles(mk("STOP"), {}, at).filter(o => o.kind === "factory-stopped").map(o => o.stop.kind), ["STOP"]);
+  assert.deepEqual(findObstacles(mk("PAUSE"), {}, at, { ownerPauses: ["PAUSE:godspeed-mission-control"] }).filter(o => o.kind === "factory-stopped"), [], "his own recorded pause is his");
+  assert.equal(findObstacles(mk("STOP"), {}, at, { ownerPauses: ["PAUSE:godspeed-mission-control"] }).filter(o => o.kind === "factory-stopped").length, 1, "a record for the PAUSE does not cover a STOP");
 });

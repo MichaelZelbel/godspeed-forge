@@ -30,6 +30,10 @@ What was tried before, newest last (do something different from it):
    of parallel laps instead of killing work.
 3. Prove it: run the check that showed the problem again and quote its new output.
 
+A `.factory/STOP` or `.factory/PAUSE` file: no program of the Forge makes one (the factory always runs), so someone did, by hand or
+with an old version. Read its first line and the driver's `pauses.json`. When `pauses.json` holds the owner's own record for it, leave
+it and say so. Otherwise remove that one file and prove a lap can start again (the timer, the next launch).
+
 ## Never
 
 - Never touch the owner's own services on this server: {{NEVER_TOUCH}}.

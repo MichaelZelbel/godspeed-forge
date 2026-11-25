@@ -100,12 +100,17 @@ export function findObstacles(world, ledger = {}, now = Date.now(), cfg0 = {}) {
       if (((cfg.timerRounds || {})[unit] || 0) < 2) continue;
       add("factory-stopped", `timer:${unit}`, { ...where, timer: unit }, [`${unit} of the factory user is ${state} for ${(cfg.timerRounds || {})[unit]} rounds, and the network guard is not running`]);
     }
-    const st = f.stop;
-    // a PAUSE is a pause (the inventory's pause entry covers it): it is never a fault of the factory. Every STOP is one, also while a
-    // PAUSE file exists beside it: no program
-    // makes the factory's STOP any more (the Forge 0.3.3, item 7), so each one is somebody's and the ops helper decides
-    if (st && st.kind !== "PAUSE" && !/\/\.factory\/PAUSE$/.test(String(st.file || ""))) {
-      add("factory-stopped", `stop:${f.project}`, { since: st.at, ...where, stop: { file: st.file, line: st.line, writer: st.writer, pid: st.pid } },
+    // No program of the Forge makes the factory's STOP or PAUSE (the Forge 0.3.3, item 7), so every one is somebody's and goes to the ops
+    // helper in the round that finds it, also while the other file exists beside it. The exception is the owner's own recorded pause
+    // (pauses.json with his Telegram message): that one is his, the inventory reminds him of it, and nothing lifts it.
+    const owned = (cfg.ownerPauses || []).map(String);
+    const seen = new Set();
+    for (const st of [f.stop, f.pause]) {
+      if (!st || seen.has(st.file)) continue;
+      seen.add(st.file);
+      const kind = st.kind === "PAUSE" || /\/\.factory\/PAUSE$/.test(String(st.file || "")) ? "PAUSE" : "STOP";
+      if (owned.includes(`${kind}:${f.project}`)) continue;
+      add("factory-stopped", `${kind.toLowerCase()}:${f.project}`, { since: st.at, ...where, stop: { file: st.file, kind, line: st.line, writer: st.writer, pid: st.pid } },
         [`${st.file} is there since ${st.at}: "${st.line}"`, `its writer ${st.writerAlive ? "is still running" : "is not running"}`]);
     }
   }

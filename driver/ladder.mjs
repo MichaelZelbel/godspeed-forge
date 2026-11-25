@@ -128,8 +128,8 @@ export function nextStep(obstacle, history = [], ctx = {}) {
   // sent; it stays on the record for an hour after the last refusal, and only refusals that go on for longer reach the chain
   if (obstacle.kind === "as-owner") return { do: "wait-external", approachNote: "The guard refused the call, so nothing was posted or pushed under the owner's account; the run signs in only as the Apps." };
   if (machineLike(obstacle.kind)) {
-    // a STOP file is nobody's to remove but a person's or the ops helper's (housekeeping removes none since the Forge 0.3.3, item 7): it goes
-    // straight to the ops helper, so it is looked at in the round that finds it
+    // a STOP or PAUSE file is nobody's to remove but a person's or the ops helper's (housekeeping removes none since the Forge 0.3.3,
+    // item 7): it goes straight to the ops helper, so it is looked at in the round that finds it
     const aStop = obstacle.kind === "factory-stopped" && !!obstacle.stop;
     if (!aStop && !history.some(h => h.helper === "housekeeping")) return { do: "housekeeping", approachNote: "" };
     // the ops helper traced it to our own checking setup (a missing hidden-check tool, the test machine):

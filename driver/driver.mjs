@@ -317,7 +317,7 @@ export async function round(env, deps = {}) {
     const down = {};
     for (const f of world.factories || []) for (const [u, s] of Object.entries(f.timers || {})) if (!/^(active|activating|reloading)$/.test(s)) down[u] = (state.timerRounds[u] || 0) + 1;
     state.timerRounds = down;
-    const fcfg = { firstSeen: state.firstSeen, noAi: state.noAi, timerRounds: down };
+    const fcfg = { firstSeen: state.firstSeen, noAi: state.noAi, timerRounds: down, ownerPauses: ownerPauseTargets(env) };
     // an acting run that could not sign in is a login obstacle of the driver's (housekeeping links the sign-in again and checks it)
     world.actLogins = { ...(state.actLogin || {}) };
     let obstacles;
@@ -878,17 +878,23 @@ const when = s => { const t = Date.parse(s); return Number.isFinite(t) ? t : NaN
 // Every pause that is in force: the keeper's HOLD file, a project's PAUSE or STOP file written by a person (no
 // program makes a STOP any more), and a deliberately parked project (its units in a paused-<date> folder).
 // An expiry written in it ("until <iso time>") is its deadline.
-export function readPauses(env, now, world = {}) {
-  const out = readPauseFiles(env, now, world);
-  // a pause record counts as his only with his Telegram user id and the message it came from (9.6), re-checked each round
+// The pause records that are the owner's own: his Telegram user id and the message it came from, re-checked each round (9.6).
+function ownerRecords(env) {
   const recs = (() => { try { return JSON.parse(fs.readFileSync(path.join(env.STATE_DIR, "pauses.json"), "utf8")); } catch { return []; } })();
   const allowed = String(process.env.FD_ALLOWED_USERS || readEnvFile(env.TG_ENV || "").TELEGRAM_ALLOWED_USERS || "").split(",").map(s => s.trim()).filter(Boolean);
+  return (Array.isArray(recs) ? recs : []).filter(x => x && x.target && x.messageId && x.telegramUser && allowed.includes(String(x.telegramUser)));
+}
+export const ownerPauseTargets = env => { try { return ownerRecords(env).map(r => String(r.target)); } catch { return []; } };
+export function readPauses(env, now, world = {}) {
+  const out = readPauseFiles(env, now, world);
+  const mine = ownerRecords(env);
   for (const p of out) {
-    const rec = (Array.isArray(recs) ? recs : []).find(x => x && x.target === p.id);
-    if (rec && rec.messageId && rec.telegramUser && allowed.includes(String(rec.telegramUser))) { p.ownerRef = `Telegram message ${rec.messageId}`; if (rec.until) p.expiresAt = Date.parse(rec.until); }
-    else p.maxHours = /^STOP/.test(p.id) ? 2 : 2; // a pause nobody dated expires at its maximum
+    const rec = mine.find(x => x.target === p.id);
+    if (rec) { p.ownerRef = `Telegram message ${rec.messageId}`; if (rec.until) p.expiresAt = Date.parse(rec.until); }
+    else p.maxHours = 2; // a pause nobody dated expires at its maximum
   }
-  return out;
+  // a PAUSE or STOP file without the owner's record is an obstacle (factory-stopped, obstacles.mjs), not a reminder
+  return out.filter(p => !(/^(PAUSE|STOP):/.test(String(p.id)) && !p.ownerRef));
 }
 function readPauseFiles(env, now, world = {}) {
   const out = [];
