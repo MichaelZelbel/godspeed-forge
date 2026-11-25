@@ -111,16 +111,36 @@ function readPr(env, deps, n, unreadable) {
   } catch (e) { unreadable.push({ part, error: e.message }); return null; }
 }
 
+// The loop's claims on a work item (a comment starting "Loop claim: run <id>"; a run that ends edits it to "released" or
+// "withdrawn", so the ones that still start that way are the live ones). The first 50 comments and the newest 30 are read, and a
+// comment in both is counted once. -> [{run, at}], newest last
+export const CLAIM_PREFIX = /^Loop claim: run (\S+)/;
+// Only a claim written by one of the accounts that may decide (the owner and the two Apps, FD_TRUSTED_LOGINS; the loop's claims come from
+// the builder App) counts: anyone can write "Loop claim" on a public repository. With no list configured every claim counts.
+export function loopClaimsOf(comments, trusted = String(process.env.FD_TRUSTED_LOGINS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean)) {
+  const seen = new Set(), out = [];
+  for (const c of comments || []) {
+    const m = CLAIM_PREFIX.exec(String(c.body || ""));
+    if (!m || !c.at) continue;
+    if (trusted.length && !trusted.includes(String(c.author || "").toLowerCase())) continue;
+    const k = `${m[1]}@${c.at}`;
+    if (seen.has(k)) continue;
+    seen.add(k); out.push({ run: m[1], at: c.at });
+  }
+  return out.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
 function readItem(env, deps, n, unreadable) {
   let issue;
   try { issue = deps.gh([`repos/${env.REPO}/issues/${n}`]); } catch (e) { unreadable.push({ part: `issue#${n}`, error: e.message }); return null; }
   const item = { number: n, mergedRefs: [], state: String(issue.state || "").toLowerCase(), stateReason: issue.state_reason ? String(issue.state_reason).toLowerCase() : null, labels: labelNames(issue), closedAt: iso(issue.closed_at), prs: [], comments: [], partial: false };
   try { item.comments = comments(deps.gh([`repos/${env.REPO}/issues/${n}/comments?per_page=50`])); }
   catch (e) { unreadable.push({ part: `issue#${n}/comments`, error: e.message }); item.partial = true; }
+  item.loopClaims = loopClaimsOf(item.comments);
   let nums = [], appComments;
   try {
     // the issue's newest 30 comments with their authors' type: the same window and shape the release step reads (auto-stage.mjs)
-    const q = `query { repository(owner: ${JSON.stringify(env.REPO.split("/")[0])}, name: ${JSON.stringify(env.REPO.split("/")[1])}) { issue(number: ${n}) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number } } timelineItems(last: 40, itemTypes: [CONNECTED_EVENT]) { nodes { ... on ConnectedEvent { subject { __typename ... on PullRequest { number } } } } } refs: timelineItems(last: 60, itemTypes: [CROSS_REFERENCED_EVENT]) { nodes { ... on CrossReferencedEvent { source { __typename ... on PullRequest { number merged mergedAt baseRefName mergeCommit { oid } repository { nameWithOwner } } } } } } comments(last: 30) { nodes { body author { __typename login } } } } } }`;
+    const q = `query { repository(owner: ${JSON.stringify(env.REPO.split("/")[0])}, name: ${JSON.stringify(env.REPO.split("/")[1])}) { issue(number: ${n}) { closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number } } timelineItems(last: 40, itemTypes: [CONNECTED_EVENT]) { nodes { ... on ConnectedEvent { subject { __typename ... on PullRequest { number } } } } } refs: timelineItems(last: 60, itemTypes: [CROSS_REFERENCED_EVENT]) { nodes { ... on CrossReferencedEvent { source { __typename ... on PullRequest { number merged mergedAt baseRefName mergeCommit { oid } repository { nameWithOwner } } } } } } comments(last: 30) { nodes { body createdAt author { __typename login } } } } } }`;
     const d = deps.gh(["graphql", "-f", `query=${q}`]);
     const i = d.data.repository.issue;
     nums = [...new Set([...i.closedByPullRequestsReferences.nodes.map(x => x.number), ...i.timelineItems.nodes.filter(e => e && e.subject && e.subject.number).map(e => e.subject.number)])];
@@ -134,6 +154,7 @@ function readItem(env, deps, n, unreadable) {
     // their merges into main, newest first: rung 0 writes the ticket's done line from one, so the release step counts it done too
     item.mergedRefMerges = refs.filter(p => p.mergeCommit && p.mergeCommit.oid && p.baseRefName === "main" && p.repository).map(p => ({ number: p.number, commit: p.mergeCommit.oid, mergedAt: p.mergedAt })).sort((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt));
     appComments = i.comments && Array.isArray(i.comments.nodes) ? i.comments.nodes : undefined;
+    item.loopClaims = loopClaimsOf([...item.comments.map(c => ({ body: c.body, at: c.at, author: c.author })), ...(appComments || []).map(c => ({ body: c.body, at: iso(c.createdAt), author: c.author && c.author.login }))]);
   } catch (e) { unreadable.push({ part: `issue#${n}/prs`, error: e.message }); item.partial = true; }
   for (const pn of nums) { const p = readPr(env, deps, pn, unreadable); if (p) item.prs.push(p); else item.partial = true; }
   readDelivery(env, deps, item, appComments, unreadable);
@@ -359,6 +380,27 @@ function readFactory(env, deps, project, primary, world, unreadable) {
 }
 
 // ------------------------------------------------------------ the world
+// The questions that reached the owner and still wait for his answer: an entry of a state file's `told` with a page that has a
+// receipt (Telegram, email or the urgent issue), not answered and not closed. Only money, publishing and deleting page him.
+// -> [{key, heading}]
+export function readDeliveredPages(env, deps, unreadable = []) {
+  let names = [];
+  try { names = (deps.readDir || (d => fs.readdirSync(d)))(env.QUESTIONS_DIR).filter(n => /^state(-[a-z0-9_.-]+)?\.json$/i.test(n)); } catch { return []; }
+  const out = [];
+  for (const n of names.sort()) {
+    let s;
+    try { s = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, n))); } catch (e) { if (e instanceof SyntaxError) unreadable.push({ part: `questions ${n}`, error: e.message }); continue; }
+    const m = /^state-(.+?)__(.+)\.json$/i.exec(n);
+    const repo = m ? `${m[1]}/${m[2]}` : env.REPO; // state.json is the main project's; state-<owner>__<repo>.json is that repository's
+    for (const [key, t] of Object.entries((s && s.told) || {})) {
+      const stages = (t && t.page && t.page.stages) || [];
+      const reached = stages.some(st => Object.values((st && st.channels) || {}).some(c => c && c.receipt));
+      if (t && !t.answered && t.page && !t.page.closed && reached) out.push({ key, heading: String(t.heading || ""), repo });
+    }
+  }
+  return out;
+}
+
 // The factory questions the questions step handed to the driver (2026-11-24): `routed` entries marked `mc` in its state
 // files (state.json and state-<owner>__<repo>.json), each a question with nothing to pick from that the decide helper
 // settles. The step takes an entry off once the decision is on GitHub. -> [{repo, key, heading, ...}]
@@ -430,6 +472,7 @@ export async function readWorld(env0 = {}, deps0 = {}) {
   try { world.answeredElsewhere = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, "answered-elsewhere.json"))) || {}; } catch (e) { if (e instanceof SyntaxError) unreadable.push({ part: "answered-elsewhere", error: e.message }); }
   try { world.toMichael = JSON.parse(deps.readFile(path.join(env.QUESTIONS_DIR, env.TO_OWNER_FILE || process.env.FD_TO_OWNER_FILE || "to-owner.json"))) || {}; } catch (e) { world.toMichael = {}; if (e instanceof SyntaxError) unreadable.push({ part: "to-michael", error: e.message }); }
   world.routedQuestions = readRoutedQuestions(env, deps, unreadable);
+  world.deliveredPages = readDeliveredPages(env, deps, unreadable);
   // every open pull request labelled needs-owner in the repositories whose factory runs (parked ones have no factory)
   world.openPrs = [];
   for (const repo of [...new Set([env.REPO, ...world.factories.map(f => f.repo).filter(Boolean)])]) {

@@ -28,11 +28,11 @@ at one pinned revision, the way his README asks a coding agent to, and everythin
 
 The Forge installs Cole Medin's AI software factory with his installer. The Archon code it runs comes from
 [a public copy of his](https://github.com/MichaelZelbel/Archon), under his MIT license with his name: his
-version `1cfb8fc5` plus four changes. Building runs on the medium tier. A comment headed `Manager decision
+version `1cfb8fc5` plus five changes. Building runs on the medium tier. A comment headed `Manager decision
 (Mission Control, not Michael)` carries the owner's authority for technical matters only, and one headed `Manager
 decision (Mission Control, on Michael's standing instruction` settles product, scope, look and feel and behaviour too. What the loop finds
-beyond its own job goes as one `Found:` comment onto a `found-list` issue instead of a new issue each. See the
-[difference](https://github.com/MichaelZelbel/Archon/compare/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb...31f1dd6cff1d6304e34c50bb0bdb71c4b3df0930).
+beyond its own job goes as one `Found:` comment onto a `found-list` issue instead of a new issue each. The tickets of an approved release (labelled `priority`) are worked first, and the next item is chosen in code, not by an AI reading a prompt. See the
+[difference](https://github.com/MichaelZelbel/Archon/compare/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb...ddc9835236f9aa1b04daa45ac3ea812d63484723).
 
 ## Status
 

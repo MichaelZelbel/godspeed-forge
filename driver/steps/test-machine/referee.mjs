@@ -199,13 +199,16 @@ export function copyEvidence(env, cands, dest, { maxFile = 2 * 1024 * 1024, maxT
   }
   return out;
 }
-// What the repair run must leave as it was, however it might reach it (a script's side effects are not
-// in its command lines): the live tools, the holdout scenarios, the factory's checkout.
+// What the repair run must leave as it was, however it might reach it (a script's side effects are not in its command lines): the
+// live tools and the holdout scenarios, by their CONTENT. Not the factory's checkout: the factory moves main and makes worktrees in
+// it all the time (on 2026-11-23 a lap made .git/worktrees/pr-895-repair in the middle of a repair run), and the audit of the run's
+// own commands (auditRepair) already guards the checkout. Not the files the verifier itself makes and removes while it runs (its
+// logs, temporary files, pid and lock files, its caches and its run and result folders): that was the false alarm of 2026-11-22,
+// which kept repairs off for two days.
+export const TRANSIENT = /(^|\/)(tmp|temp|runs?|logs?|\.cache|cache|node_modules|results?|out|output)(\/|$)|\.(log|tmp|pid|lock|out|swp|swo)$|~$/i;
 export function fingerprint(env) {
   const h = crypto.createHash("sha256");
-  for (const dir of [env.TOOLS_DIR, env.HOLDOUTS_DIR].filter(Boolean)) for (const p of walk(dir).sort()) { h.update(p); try { h.update(fs.readFileSync(path.join(dir, p))); } catch { h.update("?"); } }
-  const st = asForge(env, `git -C "${env.SOURCE_CHECKOUT}" status --porcelain 2>/dev/null; git -C "${env.SOURCE_CHECKOUT}" rev-parse HEAD 2>/dev/null`, { timeout: 60000 });
-  h.update(String(st.stdout || ""));
+  for (const dir of [env.TOOLS_DIR, env.HOLDOUTS_DIR].filter(Boolean)) for (const p of walk(dir).sort()) { if (TRANSIENT.test(p)) continue; h.update(p); try { h.update(fs.readFileSync(path.join(dir, p))); } catch { h.update("?"); } }
   return h.digest("hex");
 }
 export function smoke(env, toolsDir, target) {
@@ -284,7 +287,7 @@ export async function repairLook(env, deps, world, state, now, ctx) {
   fs.writeFileSync(path.join(rec, "brief.md"), brief);
   const printBefore = (deps.fingerprint || fingerprint)(env);
   const res = deps.ai ? await deps.ai({ brief, work, rec }) : await runCodex(env, { brief, work, rec });
-  if ((deps.fingerprint || fingerprint)(env) !== printBefore) return finish("breach", { breaches: [{ why: "changed the live verifier tools, the holdout scenarios or the factory's checkout", what: "a file outside its folder changed during the run" }] });
+  if ((deps.fingerprint || fingerprint)(env) !== printBefore) return finish("breach", { breaches: [{ why: "changed the live verifier tools or the holdout scenarios", what: "a tool or holdout file changed during the run" }] });
   fs.writeFileSync(path.join(rec, "report.json"), JSON.stringify(res.report, null, 2) + "\n");
   const breaches = auditRepair(res.events, { runDir: work, live, holdouts: env.HOLDOUTS_DIR, home: env.FORGE_HOME, checkouts: env.CHECKOUTS || [], settingsDir: env.SETTINGS_DIR });
   if (breaches.length) { fs.writeFileSync(path.join(rec, "audit.json"), JSON.stringify(breaches, null, 2)); return finish("breach", { breaches }); }

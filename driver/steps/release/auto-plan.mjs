@@ -1051,7 +1051,7 @@ async function file(ctx, key, t) {
     if (!t.labelled[n]) {
       if (dry) log(`Would label #${n} ${label} and take ${PARK_LABEL} off it.`);
       else {
-        ctx.gh("POST", `/repos/${cfg.repo}/issues/${n}/labels`, { labels: [label] });
+        ctx.gh("POST", `/repos/${cfg.repo}/issues/${n}/labels`, { labels: [label, "priority"] }); // priority: the factory builds an approved release's tickets before everything else (the Forge 0.3.3); nothing takes it off by hand
         ctx.gh("DELETE", `/repos/${cfg.repo}/issues/${n}/labels/${encodeURIComponent(PARK_LABEL)}`, null, { missingOk: true });
         t.labelled[n] = true;
         save();
