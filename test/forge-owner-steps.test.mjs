@@ -551,7 +551,7 @@ testCase('a profile with build, extra checks and a staging command runs them at 
   const { co: c, project, issue } = await plannedProject('ownsteps', { unit: 'true' }, {
     build: { commands: ['mkdir -p dist && echo built > dist/app.txt'], produces: ['dist'] },
     checks: [{ name: 'links', run: 'test -f dist/app.txt' }],
-    staging: 'echo "$FORGE_VERSION"; cat "$FORGE_BUILD_DIR/dist/app.txt"; echo "disk is full" >&2; exit 4'
+    deploy: 'echo "$FORGE_VERSION"; cat "$FORGE_BUILD_DIR/dist/app.txt"; echo "disk is full" >&2; exit 4'
   });
   gh.merge('acme/ownsteps', issue, c.commit({ unit: 'true' }, 'owned change'));
   const n = bridge.sent.length;

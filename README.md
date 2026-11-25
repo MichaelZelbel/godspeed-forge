@@ -210,7 +210,7 @@ settings folder (`/etc/godspeed-forge`, or `~/.config/godspeed-forge`): `project
 "profile": {
   "build": { "commands": ["npm ci", "npm run build"], "produces": ["dist"] },
   "checks": ["npm run lint-links", { "name": "pages", "run": "npm run check-pages" }],
-  "staging": "./deploy-staging.sh",
+  "deploy": "./deploy-staging.sh",
   "staging_url": "https://staging.example.com",
   "health": "curl -s https://staging.example.com/version",
   "public": "./publish.sh",
@@ -224,9 +224,9 @@ Each step is a command whose non-zero exit is a failed step; what it printed las
 - `build` runs on the candidate, in its temporary copy, before its other checks. What it `produces` (paths inside the
   project) is kept in the release's private folder on this server, named by `FORGE_BUILD_DIR` for the later steps.
 - `checks` run on the candidate after the project's own tests; a failing one stops the release before staging.
-- `staging` (also written `deploy`, which still works) puts the candidate on your staging copy after the branch `staging`
+- `deploy` puts the candidate on your staging copy after the branch `staging`
   moved; `health` must then succeed and print the candidate's commit; `staging_url` is the link you get. A failing
-  `staging` command stops staging and its output is in the message.
+  `deploy` command stops staging and its output is in the message.
 - `public` runs when you say go, before anything is made public on GitHub; if it fails nothing is made public, the release
   stays on staging and you can say go again. `undo` does the same on take-back. Because a GitHub refusal after the
   command makes the next go or take-back run it again, both must be safe to run twice.

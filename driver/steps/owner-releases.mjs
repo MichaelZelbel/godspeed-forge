@@ -33,7 +33,7 @@ import { stageWords, releaseNotes } from "./owner/words.mjs";
 import { ownerBranchMove } from "./owner/owner-gh.mjs";
 import { runAs, shellAs } from "./owner/run.mjs";
 import { tokenFor, missingRecords, forgeState, forgeCommand } from "./owner/access.mjs";
-import { resolveProfile, runStep } from "./owner/profile.mjs";
+import { resolveProfile, runStep, stepEnv } from "./owner/profile.mjs";
 import { TITLE as QUESTIONS_TITLE } from "./owner/questions.mjs";
 
 // forOwner: what the owner reads when this step is not working (never its internal name)
@@ -45,9 +45,8 @@ export const SETTINGS = [
   { key: "steps.owner-releases.check_minutes", required: false, default: 25, meaning: "how long one of the project's checks may run on a candidate" },
   { key: "steps.owner-releases.work_dir", required: false, default: "<server.work_root>/candidates", meaning: "where the temporary worktree of a candidate is made (the factory's account must be able to write there)" },
   { key: "projects[].profile.staging_url", required: false, default: "none: the pre-release's page", meaning: "per project: the address of the staging copy, sent as the link to try" },
-  { key: "projects[].profile.deploy", required: false, default: "none", meaning: "per project: a command that puts the candidate on the staging copy once the branch staging moved" },
+  { key: "projects[].profile.deploy", required: false, default: "none", meaning: "per project: a command that puts the candidate on the staging copy once the branch staging moved; a failing command stops staging and its output is told to the owner" },
   { key: "projects[].profile.health", required: false, default: "none", meaning: "per project: a command that succeeds and prints the running commit once the staging copy is up" },
-  { key: "projects[].profile.staging", required: false, default: "projects[].profile.deploy", meaning: "per project: the command that puts the candidate on the staging copy (the same step as deploy, which stays valid); a failing command stops staging and its output is told to the owner" },
   { key: "projects[].profile.build", required: false, default: "none", meaning: "per project: { commands: [...], produces: [paths inside the project] } run on the candidate before its checks; what it produces is kept in the release's private folder and named by FORGE_BUILD_DIR" },
   { key: "projects[].profile.checks", required: false, default: "none", meaning: "per project: more checks (a command, or { name, run }) run on the candidate after the project's own tests" },
   { key: "projects[].profile.public", required: false, default: "none", meaning: "per project: the command that makes the release public, run on the owner's go before anything is made public on GitHub; it must be safe to run again" },
@@ -93,14 +92,14 @@ const countOf = (text, pattern) => {
   return null;
 };
 
-// Where what the profile's build made is kept: the release's own private folder, never the project.
-const buildFolder = (ctx, project, record) => path.join(forgePaths(forgeState(ctx.settings || {})).releaseDir(project.repository, record.version), "build");
+const stepEnvOf = (ctx, project, record, commit = record.candidate.commit) =>
+  stepEnv({ state: forgeState(ctx.settings || {}), repository: project.repository, version: record.version, commit });
 
 // The profile's build, run in the candidate's worktree; what it says it produces is copied out before the worktree goes.
 function buildCandidate(ctx, project, record, tree, build, minutes) {
   const settings = ctx.settings || {};
-  const out = buildFolder(ctx, project, record);
-  const env = { FORGE_CANDIDATE_COMMIT: record.candidate.commit, FORGE_VERSION: record.version, FORGE_BUILD_DIR: out };
+  const env = stepEnvOf(ctx, project, record);
+  const out = env.FORGE_BUILD_DIR;
   for (const line of build.commands) {
     const r = runStep(settings, line, { cwd: tree, minutes, env });
     if (!r.ok) return { name: "build", ok: false, sentence: stageWords.check.build(r.cause) };
@@ -151,7 +150,7 @@ export async function runChecks(ctx, project, record) {
       results.push({ name, ok: false, sentence });
     }
     for (const check of own.checks || []) {
-      const r = runStep(settings, check.run, { cwd: tree, minutes: ownMinutes, env: { FORGE_CANDIDATE_COMMIT: record.candidate.commit, FORGE_VERSION: record.version, FORGE_BUILD_DIR: buildFolder(ctx, project, record) } });
+      const r = runStep(settings, check.run, { cwd: tree, minutes: ownMinutes, env: stepEnvOf(ctx, project, record) });
       results.push(r.ok ? { name: check.name, ok: true } : { name: check.name, ok: false, sentence: stageWords.check.own(check.name, r.cause) });
     }
     return results;
@@ -359,12 +358,12 @@ async function putUp(ctx, gs, state, project, r, { rp, now, releaser }) {
   await save();
   const resolved = resolveProfile(project);
   const profile = resolved.profile || {};
-  if (profile.staging || profile.health) {
+  if (profile.deploy || profile.health) {
     const minutes = profile.timeout_minutes || Number(dig(settings, "steps.owner-releases.check_minutes") || 25);
-    const env = { FORGE_CANDIDATE_COMMIT: commit, FORGE_VERSION: r.version, FORGE_BUILD_DIR: buildFolder(ctx, project, r) };
+    const env = stepEnvOf(ctx, project, r, commit);
     let cause = null;
-    if (profile.staging) {
-      const d = runStep(settings, profile.staging, { cwd: project.checkout, minutes, env });
+    if (profile.deploy) {
+      const d = runStep(settings, profile.deploy, { cwd: project.checkout, minutes, env });
       if (!d.ok) cause = d.cause;
     }
     if (cause === null && profile.health) {

@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { shellAs } from "./run.mjs";
 import { defaultSettingsDir } from "../../settings.mjs";
+import { forgePaths } from "./records.mjs";
 
 const isLine = v => typeof v === "string" && v.trim().length > 0;
 const safeRelative = p => isLine(p) && !path.isAbsolute(p) && !p.split(/[\\/]/).includes("..");
@@ -40,8 +41,8 @@ export function resolveProfile(project) {
     try { raw = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return { problem: "the profile file the settings name could not be read" }; }
   }
   const merged = { ...(project || {}), ...(raw && typeof raw === "object" ? raw : {}) };
-  const profile = { staging_url: merged.staging_url, health: merged.health, staging: merged.staging || merged.deploy, public: merged.public, undo: merged.undo };
-  for (const key of ["staging", "health", "public", "undo"]) {
+  const profile = { staging_url: merged.staging_url, health: merged.health, deploy: merged.deploy, public: merged.public, undo: merged.undo };
+  for (const key of ["deploy", "health", "public", "undo"]) {
     if (profile[key] !== undefined && !isLine(profile[key])) return { problem: `the ${key} step in its profile must be a line of text` };
   }
   if (merged.build !== undefined) {
@@ -68,6 +69,11 @@ export function causeOf(r, minutes) {
   if (r.error || r.status === 127) return "It could not start.";
   const text = `${r.stdout}\n${r.stderr}`.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").split("\n").map(l => l.trimEnd()).filter(Boolean).slice(-15).join("\n");
   return text.length > 1500 ? text.slice(-1500) : text;
+}
+
+// The variables every profile step sees; the build's output is kept in the release's own private folder, never the project.
+export function stepEnv({ state, repository, version, commit }) {
+  return { FORGE_VERSION: version, FORGE_CANDIDATE_COMMIT: commit || "", FORGE_BUILD_DIR: path.join(forgePaths(state).releaseDir(repository, version), "build") };
 }
 
 // Runs one command of the profile -> { ok, cause, stdout }
