@@ -1,13 +1,14 @@
 // The sweep of temporaries left beside private saves, and the removal of a failed save's own temporary (#100):
 // the sweep must take only the temporaries of saves whose process is gone and that it can read, and never the
 // saved file itself, a temporary of a live save, or a file it cannot look up or read.
-// test cases: 3
+// test cases: 5
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { files } from '../lib/files.mjs';
-import { removeStaleTemporaries, writePrivateJson } from '../lib/config.mjs';
+import { createApps } from '../lib/github-apps.mjs';
+import { abandonSaves, removeStaleTemporaries, writePrivateJson } from '../lib/config.mjs';
 import { testCase } from './cases.mjs';
 
 // A pid no process can have, so `process.kill(pid, 0)` answers ESRCH: the writer is gone.
@@ -84,5 +85,57 @@ testCase('the sweep takes a temporary a real save wrote');
   assert.deepEqual((await readdir(folder)).filter(name => name.endsWith('.tmp')), [],
     'the sweep left the temporary a real save wrote behind');
   await rm(folder, { recursive: true, force: true });
+}
+
+testCase('a stopped run abandons its saves except those marked keepOnStop');
+{
+  const folder = await mkdtemp(join(tmpdir(), 'forge-private-saves-'));
+  const rename = files.rename;
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  files.rename = async (from, to) => { await held; return rename(from, to); };
+  try {
+    const kept = writePrivateJson(join(folder, 'builder-app-pending.json'), { code: 'c' }, { keepOnStop: true });
+    const dropped = writePrivateJson(join(folder, 'settings.json'), { a: 1 });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await abandonSaves();
+    release();
+    await kept;
+    await assert.rejects(dropped, { code: 'ENOENT' });
+    assert.deepEqual(JSON.parse(await readFile(join(folder, 'builder-app-pending.json'), 'utf8')), { code: 'c' });
+    assert.deepEqual((await readdir(folder)).sort(), ['builder-app-pending.json']);
+  } finally {
+    files.rename = rename;
+    await rm(folder, { recursive: true, force: true });
+  }
+}
+testCase('a stop landing on any save of an App\'s pending record still lets that save finish, for both roles');
+{
+  const root = await mkdtemp(join(tmpdir(), 'forge-private-saves-'));
+  const [stateDirectory, credentialDirectory, checkout] = ['state', 'credentials', 'checkout'].map(name => join(root, name));
+  for (const folder of [stateDirectory, credentialDirectory, join(checkout, '.git')]) await mkdir(folder, { recursive: true });
+  const rename = files.rename;
+  const finished = [];
+  // The stop arrives while each pending-record save is in flight; a save dropped by it fails its rename.
+  files.rename = async (from, to) => {
+    const pending = to.endsWith('-app-pending.json');
+    if (pending) await abandonSaves();
+    await rename(from, to);
+    if (pending) finished.push(JSON.parse(await readFile(to, 'utf8')));
+  };
+  const keys = { id: 7, slug: 'forge-app', pem: 'PRIVATE KEY' };
+  const github = {
+    begin: async () => ({ url: 'https://github.test/page' }),
+    callback: async () => 'code-1',
+    exchange: async () => keys,
+    install: async () => true
+  };
+  try {
+    await createApps({ repository: 'owner/repo', stateDirectory, credentialDirectory, checkout, github, output: () => {} });
+    assert.deepEqual(finished, ['builder', 'release'].flatMap(() => [{ code: null }, { code: 'code-1' }, { code: 'code-1', credentials: keys }]));
+  } finally {
+    files.rename = rename;
+    await rm(root, { recursive: true, force: true });
+  }
 }
 console.log('private save tests pass');
