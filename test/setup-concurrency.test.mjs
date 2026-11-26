@@ -49,6 +49,7 @@ function standIn(root, { manifests = [], beforeAgent = async () => {}, page = as
       }
     },
     github: {
+      appExists: async () => false,
       begin: async manifest => { manifests.push(manifest.name); return { url: `https://example.test/${manifest.name}` }; },
       callback: async flow => { await page(flow); return 'app-code'; },
       exchange: async () => credentials,

@@ -78,6 +78,13 @@ asks GitHub whether that App is still there and installed, so a deleted App is c
 uninstalled one is installed again instead of being reported as set up. When GitHub cannot be reached or
 refuses either question, setup changes nothing and stops, and the next run asks again.
 
+Setup never reports success while a role has two Apps on GitHub. When the list names one App and this server
+holds the key of another that is also still on GitHub, setup names both in chat and asks which to use: only
+the App whose key this server holds can be used, so the owner confirms it by its short name. Setup deletes
+neither App, and the one not chosen is left for the owner to delete whenever they like. An App already on
+GitHub under the name setup would give a role, which setup did not make, stops setup the same way: it is kept,
+nothing is created, and the owner deletes it before trying again.
+
 After upgrading a server that set up repositories with an earlier release, run setup again for each
 repository. That setup run moves its existing App credentials out of project state and into the private
 credentials subtree.
