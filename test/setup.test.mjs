@@ -1048,7 +1048,7 @@ function standInGithub(options = {}) {
 }
 
 // doctor and init, when given, run before the stand-in final check or build tools install and fail it by throwing.
-async function setupAttempt(repository, stateDirectory, github, { doctor, init, choose } = {}) {
+async function setupAttempt(repository, stateDirectory, github, { doctor, init, choose, closed } = {}) {
   const attemptMessages = [];
   const prompts = [];
   const asked = [];
@@ -1062,7 +1062,7 @@ async function setupAttempt(repository, stateDirectory, github, { doctor, init, 
     await setupRepository(repository, {
       config: { ...defaults(root), projectsRoot }, paths: { state: stateDirectory }, commands: { run: retryRun }, github,
       prompt: async question => {
-        if (question.startsWith('Two ')) { asked.push(question); return choose ?? ''; }
+        if (question.startsWith('Two ')) { asked.push(question); if (closed) throw new InputClosed(); return choose ?? ''; }
         return ['Purpose.', 'Users.'][prompts.push(question) - 1];
       }, output: value => attemptMessages.push(value)
     });
@@ -2060,6 +2060,9 @@ for (const finished of [false, true]) {
   assertStopped(stopped, TWO_APPS_STOP(project.repository), project.retryState);
   assert.deepEqual(stopped.asked, [TWO_APPS_QUESTION(project.repository)]);
   assert(!stopped.messages.some(completedFor(project.repository)));
+  const closed = await project.attempt({ closed: true });
+  assertStopped(closed, TWO_APPS_STOP(project.repository), project.retryState);
+  assert.deepEqual(project.standIn.live, { builder: 2, release: 1 });
   const wrong = await project.attempt({ choose: 'code-builder-2' });
   assertStopped(wrong, TWO_APPS_STOP(project.repository), project.retryState);
   assert.deepEqual(project.standIn.live, { builder: 2, release: 1 });
