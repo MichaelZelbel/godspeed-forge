@@ -83,6 +83,9 @@ Never write anything else under `.godspeed/forge/`, and never change the files t
   | the Forge's settings | `settings` |
   | the project's mission file | `mission` |
   | setup's list of GitHub Apps | `app-list` |
+  | the answers setup saved on this server | `answers` |
+  | the record that setup finished | `progress` |
+  | the record of the download setup replaces | `download` |
   | the builder App's saved details | `builder-app` |
   | the release App's saved details | `release-app` |
   | the saved details of both Apps | `both-apps` |

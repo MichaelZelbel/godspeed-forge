@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { PassThrough } from 'node:stream';
 import {
-  answersFrom, InputClosed, loadSettings, ReportedSetupError, SetupStop, setupCommand, setupRepository, prepareCheckout,
+  AFRESH_PARTS, answersFrom, InputClosed, loadSettings, ReportedSetupError, SetupStop, setupCommand, setupRepository, prepareCheckout,
   repositoryFromRemote, UNEXPECTED_MESSAGE
 } from '../lib/setup.mjs';
 import { files } from '../lib/files.mjs';
@@ -21,7 +21,7 @@ import { ARCHON_REVISION, ARCHON_SOURCE, FACTORY_REPOSITORY, FACTORY_REVISION } 
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { BROWSER_PASSED } from './home.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 210
+// test cases: 206
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -1842,10 +1842,10 @@ testCase('damaged builder details with its keys still in the pending record fini
   assert(completedFor(project.repository)(next.messages.at(-1)));
   assert(!next.messages.some(line => line.includes('delete')), next.messages.join('\n'));
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
-  assert.equal(await readFile(detailsPath, 'utf8'), '{"id": 1');
-  assert.deepEqual(JSON.parse(await readFile(join(project.credentialDirectory, 'builder-app-pending.json'), 'utf8')).credentials, saved);
+  // The cut-short details are saved again from the keys in the pending record, never left behind as complete.
+  assert.deepEqual(JSON.parse(await readFile(detailsPath, 'utf8')), saved);
   const again = await project.attempt();
-  assert(completedFor(project.repository)(again.messages.at(-1)));
+  assert(completedFor(project.repository)(again.messages.at(-1)) || again.messages.at(-1) === `The Forge is already set up for ${project.repository}.`);
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
 }
 
@@ -2797,17 +2797,17 @@ for (const [name, prepare, undo] of [
   const fingerprint = async () => { const entry = await lstat(path); return [entry.mode, entry.isDirectory(), entry.size]; };
   const before = await fingerprint();
   try {
+    // Setup stops once, before any page or question, naming the file and leaving it as it is.
     const first = await setupAttempt(repository, stateRoot, standInGithub().github);
-    assert.equal(first.error, undefined);
-    assert.deepEqual(first.prompts, ['What is this software for?', 'Who uses it?']);
-    assert.deepEqual(first.messages.slice(2, 4), appPages);
-    assert(completedFor(repository)(first.messages.at(-1)));
+    assert.equal(first.error?.message, 'unreadable-saved-file');
+    assert.deepEqual(first.prompts, []);
+    assert(first.messages.at(-1).includes('start the answers setup saved on this server afresh'));
     assert.deepEqual(await fingerprint(), before);
-    const second = await setupAttempt(repository, stateRoot, standInGithub().github);
+    // Started afresh, setup asks the questions and finishes.
+    const second = await setupAttempt(repository, stateRoot, standInGithub().github, { startAfresh: 'answers' });
     assert.equal(second.error, undefined);
-    assert.deepEqual(second.prompts, []);
+    assert.deepEqual(second.prompts, ['What is this software for?', 'Who uses it?']);
     assert(completedFor(repository)(second.messages.at(-1)));
-    assert.deepEqual(await fingerprint(), before);
   } finally {
     await undo(path);
   }
@@ -2967,7 +2967,7 @@ for (const [file, stopAt, text] of [
   ['mission.json', 'after-mission', ''],
   ['registration.json', undefined, '']
 ]) {
-  testCase(`a${text ? ' damaged' : 'n empty'} ${file} is recovered without changing it, and setup finishes`);
+  testCase(`a${text ? ' damaged' : 'n empty'} ${file} stops setup once, naming it, and started afresh setup finishes`);
   const repository = `owner/${text ? 'damaged' : 'empty'}-${file.replace('.json', '')}`;
   const project = await retryProject(repository);
   const retryState = join(root, 'retry-state');
@@ -2981,57 +2981,27 @@ for (const [file, stopAt, text] of [
   assert.equal(project.record.begins, 2);
   const path = join(retryState, 'projects', repository, file);
   await writeFile(path, text);
-  for (const run of [1, 2]) {
-    project.reset();
-    assert.equal((await setupRepository(repository, project.options())).completed, true, `run ${run}`);
-    assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
-    assert(!project.record.messages.some(message => message.includes('already set up') || message.startsWith('Setup stopped')));
-    for (const message of project.record.messages) assertNoInternalText(message, root);
-    assert.equal(project.record.begins, 0);
-    assert.deepEqual(project.record.prompts, []);
-    assert.equal(await readFile(path, 'utf8'), text);
-    assert.equal(await project.missionSections(), 1);
-  }
+  const part = file === 'mission.json' ? 'answers' : 'progress';
+  project.reset();
+  await assert.rejects(setupRepository(repository, project.options()),
+    error => error instanceof ReportedSetupError && error.message === 'unreadable-saved-file');
+  assert(project.record.messages.at(-1).startsWith('Setup stopped because'));
+  assert(project.record.messages.at(-1).includes(`${AFRESH_PARTS[part].words} afresh`));
+  assert(!project.record.messages.some(message => message.includes('already set up')));
+  for (const message of project.record.messages) assertNoInternalText(message, root);
+  assert.equal(project.record.begins, 0);
+  assert.equal(await readFile(path, 'utf8'), text);
+  project.reset();
+  assert.equal((await setupRepository(repository, project.options({ startAfresh: part }))).completed, true);
+  assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
+  assert.equal(project.record.begins, 0);
+  assert.equal(await project.missionSections(), 1);
 }
 
 // An empty saved mission answers file (#80, #91) cannot be read. Setup never writes over it: it takes the answers
 // it finds in the mission section it generated in the project, asks only what it could not find there, and keeps
 // the answers in the project's mission, where the next run finds them again without asking, with the same two
 // Apps.
-for (const { name, mission, prompts, final } of [
-  { name: 'both answers in the mission', mission: text => text, prompts: [], final: ['First purpose.', 'First users.'] },
-  { name: 'no mission section', mission: () => '# Mission\n\nFactory template.\n',
-    prompts: ['What is this software for?', 'Who uses it?'], final: ['Second purpose.', 'Second users.'] },
-  { name: 'only what it is for in the mission', mission: text => text.replace(/\nWho uses it: .*\n$/, '\n'),
-    prompts: ['Who uses it?'], final: ['First purpose.', 'Second purpose.'] },
-  { name: 'only who uses it in the mission', mission: text => text.replace(/\nWhat this software is for: .*\n/, ''),
-    prompts: ['What is this software for?'], final: ['Second purpose.', 'First users.'] }
-]) {
-  testCase(`an empty mission.json is never written over, and setup asks only what the mission lacks (${name})`);
-  const repository = `owner/empty-mission-${name.replaceAll(' ', '-')}`;
-  const project = await retryProject(repository);
-  const answersPath = join(root, 'retry-state', 'projects', repository, 'mission.json');
-  await assert.rejects(setupRepository(repository, project.options({ failAt: 'after-mission' })),
-    error => error instanceof ReportedSetupError && error.message === 'after-mission');
-  assert.equal(project.record.begins, 2);
-  await writeFile(answersPath, '');
-  await writeFile(project.missionPath, mission(await readFile(project.missionPath, 'utf8')));
-  const [purpose, users] = final;
-  for (const asked of [prompts, []]) {
-    project.reset();
-    const result = await setupRepository(repository, project.options({ answers: ['Second purpose.', 'Second users.'] }));
-    assert.equal(result.completed, true);
-    assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
-    for (const message of project.record.messages) assertNoInternalText(message, root);
-    assert.deepEqual(project.record.prompts, asked);
-    assert.equal(project.record.begins, 0);
-    assert.equal(await readFile(answersPath, 'utf8'), '');
-    assert.equal(await project.missionSections(), 1);
-    assert(
-      (await readFile(project.missionPath, 'utf8')).endsWith(`\n## Project mission\n\nWhat this software is for: ${purpose}\n\nWho uses it: ${users}\n`));
-  }
-}
-
 // An App details file emptied after setup stopped at the final check, with both Apps installed: setup stops on
 // it and leaves it as it is, and once the owner has setup start it afresh the run does what it does when that
 // file is deleted. It stops with the missing-details sentence instead of ending in "Setup is complete", and after

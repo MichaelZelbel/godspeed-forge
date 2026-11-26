@@ -146,7 +146,9 @@ async function combination(name, finished, roles) {
     for (const kind of KINDS) {
       const unreadable = ['empty', 'broken link', 'damaged'].includes(roles[kind].state.details);
       const replaced = startedAfresh.has(`${kind}-app`) || startedAfresh.has('both-apps');
-      if (unreadable && !replaced && await details(kind) !== before[kind]) {
+      // Cut-short or empty details with the keys still in the pending record are saved again from those keys.
+      const repairable = roles[kind].state.pending && ['empty', 'damaged'].includes(roles[kind].state.details);
+      if (unreadable && !replaced && !repairable && await details(kind) !== before[kind]) {
         problems.push(`setup changed the ${kind} details file it could not read`);
       }
     }

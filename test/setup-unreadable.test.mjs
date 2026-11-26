@@ -101,7 +101,10 @@ const AFRESH = {
   'App list': ['app-list'],
   'builder details': ['builder-app', 'both-apps'],
   'release details in the earlier place': ['release-app', 'both-apps'],
-  'builder connection': ['builder-connection']
+  'builder connection': ['builder-connection'],
+  'mission answers': ['answers'],
+  'download marker': ['download'],
+  'finished record': ['progress']
 };
 
 // One run of `godspeed-forge setup`. at: 'connecting' fails the builder App's address, 'question' closes the
@@ -286,22 +289,23 @@ for (const file of FILES) {
 
 testCase('the four cases #96 started from');
 {
-  // #88: an empty answers file is found before any App page, and setup carries on.
+  // #88: an empty answers file is found before any App page and setup stops once, naming it; started afresh, setup goes on.
   const emptyAnswers = await unreadableCase({ name: 'answers-at-question', point: 'question', file: 'mission answers', kind: 'empty',
     prepare: p => mkdir(p.projectState, { recursive: true }).then(() => writeFile(p.files['mission answers'], '', { flag: 'wx' }).catch(() => {})) });
   assert.deepEqual(emptyAnswers.problems, []);
   assert.equal(emptyAnswers.runs[0].pages, 0);
-  assert(emptyAnswers.runs[0].output.at(-1).startsWith('Setup is complete for '));
+  assert(emptyAnswers.runs[0].output.at(-1).startsWith('Setup stopped because'));
+  assert(emptyAnswers.runs.at(-1).output.at(-1).startsWith('Setup is complete for '));
   // #91: an empty answers file and an empty mission file are never written over.
   for (const file of ['mission answers', 'mission file']) {
     const result = await unreadableCase({ name: `empty-${file.replace(' ', '-')}`, point: 'after mission', file, kind: 'empty' });
     assert.deepEqual(result.problems, []);
   }
-  // #87: a finished setup whose answers cannot be read is set up again, not called already set up.
+  // #87: a finished setup whose answers cannot be read stops once (never called already set up), then is set up again.
   const finishedAnswers = await unreadableCase({ name: 'finished-answers', point: 'finished', file: 'mission answers', kind: 'damaged' });
   assert.deepEqual(finishedAnswers.problems, []);
-  assert.equal(finishedAnswers.runs.length, 1);
-  assert(finishedAnswers.runs[0].output.at(-1).startsWith('Setup is complete for '));
+  assert.equal(finishedAnswers.runs.length, 2);
+  assert(finishedAnswers.runs[1].output.at(-1).startsWith('Setup is complete for '));
   // An empty install record is not taken as a confirmed install: GitHub says the App is not installed, so setup
   // asks for it to be installed, and leaves the record empty.
   const emptyInstall = await unreadableCase({ name: 'empty-install', point: 'finished', file: 'builder install record', kind: 'empty',
