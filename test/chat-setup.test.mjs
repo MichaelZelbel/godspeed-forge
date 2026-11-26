@@ -53,6 +53,7 @@ function world({ claude = true, factory = null, appStatus = async () => 'install
   const base = {
     exists: async file => { try { fs.accessSync(file); return true; } catch { return false; } },
     exchange: async code => { S.exchanged = [...(S.exchanged ?? []), code]; return { id: 7, slug: `forge-${S.exchanged.length}`, pem: KEY, client_secret: 'CS', webhook_secret: 'WS' }; },
+    appExists: async () => false,
     appStatus: (...args) => appStatus(...args)
   };
   const files = chatSetupFiles({ state }, REPO);
