@@ -720,6 +720,30 @@ assert.deepEqual(githubFailureMessages.at(-1), 'Setup stopped because it could n
 assert(!githubFailureCalls.some(call => call.args.includes('schedule')));
 await assert.rejects(stat(join(state, 'projects/owner/failing-github/registration.json')));
 
+testCase('a GitHub install that fails after an App was created still says the page was shown');
+const installFailureMessages = [];
+await assert.rejects(setupRepository('owner/failing-install', {
+  config: { projectsRoot, costMessage: 'Cost notice.' }, paths: { state }, commands: {
+    run: async (command, args, options = {}) => {
+      if (command === 'claude') return { stdout: 'signed in' };
+      if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+      if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+      if (command === 'python3' && args[1] === 'init') {
+        await mkdir(join(options.cwd, 'factory'), { recursive: true });
+        await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
+      }
+      return { stdout: '' };
+    }
+  },
+  github: {
+    appExists: async () => false, begin: async () => ({ url: 'https://example.test/create' }), callback: async () => 'code',
+    exchange: async () => ({ id: 1, pem: 'K', slug: 's' }), install: async () => { throw new Error('private GitHub detail'); }
+  },
+  prompt: async () => { throw new Error('must not prompt'); },
+  output: value => installFailureMessages.push(value)
+}), error => error instanceof ReportedSetupError && error.message === 'github');
+assert.equal(installFailureMessages.at(-1), 'Setup stopped because the GitHub connection was not completed. Complete the GitHub page before trying setup again.');
+
 testCase('leaving the builder App page unfinished stops plainly');
 // The two GitHub App stops with their own cause: the owner leaves the App page unfinished (the real
 // adapter receives an address without GitHub's code), and setup cannot save the App GitHub handed over.
