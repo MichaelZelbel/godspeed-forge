@@ -744,6 +744,33 @@ await assert.rejects(setupRepository('owner/failing-install', {
 }), error => error instanceof ReportedSetupError && error.message === 'github');
 assert.equal(installFailureMessages.at(-1), 'Setup stopped because the GitHub connection was not completed. Complete the GitHub page before trying setup again.');
 
+testCase('a second App whose page cannot be opened says no page was shown, though the first App\'s page was');
+const secondBeginMessages = [];
+let secondBegins = 0;
+await assert.rejects(setupRepository('owner/failing-second-begin', {
+  config: { projectsRoot, costMessage: 'Cost notice.' }, paths: { state }, commands: {
+    run: async (command, args, options = {}) => {
+      if (command === 'claude') return { stdout: 'signed in' };
+      if (command === 'gh') { await mkdir(join(args.at(-1), '.git'), { recursive: true }); return { stdout: '' }; }
+      if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
+      if (command === 'python3' && args[1] === 'init') {
+        await mkdir(join(options.cwd, 'factory'), { recursive: true });
+        await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
+      }
+      return { stdout: '' };
+    }
+  },
+  github: {
+    appExists: async () => false,
+    begin: async () => { secondBegins += 1; if (secondBegins === 2) throw new Error('private GitHub detail'); return { url: 'https://example.test/create' }; },
+    callback: async () => 'code', exchange: async () => ({ id: 1, pem: 'K', slug: 's' }), install: async () => true, appStatus: async () => 'installed'
+  },
+  prompt: async () => { throw new Error('must not prompt'); },
+  output: value => secondBeginMessages.push(value)
+}), error => error instanceof ReportedSetupError && error.message === 'github');
+assert.equal(secondBegins, 2);
+assert(secondBeginMessages.at(-1).includes('so no GitHub page was shown'));
+
 testCase('leaving the builder App page unfinished stops plainly');
 // The two GitHub App stops with their own cause: the owner leaves the App page unfinished (the real
 // adapter receives an address without GitHub's code), and setup cannot save the App GitHub handed over.
