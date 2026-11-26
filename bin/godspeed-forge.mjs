@@ -10,11 +10,12 @@ import { defaultPaths } from '../lib/config.mjs';
 import { run, start } from '../lib/process.mjs';
 import { signIn } from '../lib/signin.mjs';
 import { createFactorySetup } from '../lib/factory-setup.mjs';
-import { answersFrom } from '../lib/setup.mjs';
+import { answersFrom, START_AFRESH_PARTS } from '../lib/setup.mjs';
 import { createGithubAdapter } from '../lib/github-adapter.mjs';
 import { runDriverCommand, driverAfterSetup } from '../driver/cli.mjs';
 
-const [command, repository] = process.argv.slice(2);
+const [command, repository, ...rest] = process.argv.slice(2);
+const startAfresh = rest[0] === '--start-afresh' && rest.length === 2 ? rest[1] : undefined;
 if (command === '--version') {
   const version = readFileSync(new URL('../VERSION', import.meta.url), 'utf8').trim();
   console.log(`godspeed-forge ${version}`);
@@ -23,8 +24,10 @@ if (command === '--version') {
 if (command === 'driver') process.exit(await runDriverCommand(process.argv.slice(3)));
 if (command === 'inbox') process.exit(await (await import('../lib/inbox.mjs')).runInboxCommand());
 if (command === 'watch') process.exit(await (await import('../lib/watch.mjs')).runWatchCommand(process.argv.slice(3)));
-if (command === 'setup-chat' && repository) process.exit(await (await import('../lib/chat-setup-command.mjs')).runChatSetupCommand(repository));
-if (command !== 'setup' || !repository) {
+if (command === 'setup-chat' && repository && (rest.length === 0 || START_AFRESH_PARTS.includes(startAfresh))) {
+  process.exit(await (await import('../lib/chat-setup-command.mjs')).runChatSetupCommand(repository, startAfresh));
+}
+if (command !== 'setup' || !repository || (rest.length > 0 && !START_AFRESH_PARTS.includes(startAfresh))) {
   console.error('Run godspeed-forge setup owner/repository.');
   process.exit(1);
 }
@@ -34,7 +37,7 @@ runSetupCommand(repository, async () => {
   const input = createInterface({ input: stdin, output: stdout });
   const answers = answersFrom(input);
   return {
-    paths: defaultPaths(), commands: { run }, github: createGithubAdapter({ input: answers }), input, answers,
+    paths: defaultPaths(), commands: { run }, github: createGithubAdapter({ input: answers }), input, answers, startAfresh,
     prompt: question => answers.question(`${question} `),
     promptSecret: question => answers.secretQuestion(`${question} `),
     output: message => console.log(message),

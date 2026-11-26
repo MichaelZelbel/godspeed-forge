@@ -75,6 +75,25 @@ Never write anything else under `.godspeed/forge/`, and never change the files t
   owner pastes a code, do not send it, tell them to type it in the server's terminal. If the Forge says setup needs the
   terminal (Claude Code's own sign-in, or updating the page that gives this chat a way back from GitHub), pass that on.
   The same setup can also be run by the owner in the server's terminal: `godspeed-forge setup owner/repository`.
+  When a setup stop asks the owner to ask you to start a saved file afresh and the owner does, send kind `setup` again
+  for the same project with `afresh` set to the part that phrase names (the owner's words go in `words` as usual):
+
+  | The stop asks to start … afresh | Part |
+  | --- | --- |
+  | the Forge's settings | `settings` |
+  | the project's mission file | `mission` |
+  | setup's list of GitHub Apps | `app-list` |
+  | the answers setup saved on this server | `answers` |
+  | the record that setup finished | `progress` |
+  | the record of the download setup replaces | `download` |
+  | the builder App's saved details | `builder-app` |
+  | the release App's saved details | `release-app` |
+  | the saved details of both Apps | `both-apps` |
+  | connecting the builder App | `builder-connection` |
+  | connecting the release App | `release-connection` |
+
+  Setup then replaces only that file, and only when it still cannot read it. Never set `afresh` unless the owner asked
+  for it after such a stop, and never delete a file on the server instead.
 - **Go** or **make it public**: kind `go`.
 - **Take it back**: kind `take-back`.
 - **Release status**, **where is the release**: kind `status`.

@@ -1,6 +1,6 @@
 // Setup from the chat (lib/owner/setup.mjs, lib/chat-setup.mjs): the owner's `setup` requests against a worker that runs the
 // real setup with stand-in commands and GitHub, in this process. No network, no AI.
-// test cases: 10
+// test cases: 11
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -255,6 +255,19 @@ testCase('an App install check that keeps failing throws what GitHub said, one t
   let calls = 0;
   assert.equal(await install(async () => { if (calls++ === 0) throw new Error('blip'); return 'installed'; }), true);
   assert.equal(await install(async () => 'missing'), false);
+}
+
+testCase('a setup request names the saved file to start afresh only as one of the parts setup knows, and the worker is started with it');
+{
+  const started = [];
+  const record = world({ startWorker: async (repository, afresh) => { started.push([repository, afresh]); } });
+  const fast = { pollMs: 5, maxMs: 30, quietMs: 10 };
+  await setup({ kind: 'setup', project: REPO, words: 'start it afresh', afresh: 'builder-app' }, { ...record.ctx, timing: fast });
+  fs.rmSync(record.files.session, { force: true });
+  await setup({ kind: 'setup', project: REPO, words: 'start it afresh', afresh: 'everything' }, { ...record.ctx, timing: fast });
+  fs.rmSync(record.files.session, { force: true });
+  await setup({ kind: 'setup', project: REPO, words: 'set up' }, { ...record.ctx, timing: fast });
+  assert.deepEqual(started, [[REPO, 'builder-app'], [REPO, undefined], [REPO, undefined]]);
 }
 
 testCase('a worker that cannot start, never opens a session, or dies while the owner waits on it is answered with the terminal command');

@@ -78,6 +78,17 @@ asks GitHub whether that App is still there and installed, so a deleted App is c
 uninstalled one is installed again instead of being reported as set up. When GitHub cannot be reached or
 refuses either question, setup changes nothing and stops, and the next run asks again.
 
+Setup reads every file it saved for a repository, and the project's `MISSION.md`, once at the start of
+each run, before it opens a GitHub page or asks a question. It never writes over, empties, moves or
+deletes a saved file it cannot read (empty, damaged, a link to nothing, a folder, or not readable). When it
+can recover what that file held, it goes on without it: the mission answers from the project's mission,
+an App's keys from its unfinished connection, whether an App is installed from GitHub, and whether setup
+finished by running the whole setup again. Otherwise it stops and asks the owner to have it start that
+file afresh; the assistant then runs `godspeed-forge setup owner/repository --start-afresh <part>` (in the
+chat, a setup request with `afresh` set to that part), which replaces only that file. A file the server's
+permissions or a read failure keep setup from reading is never treated as damaged: setup stops, replaces
+nothing, and asks the owner to let it read the file. A finished setup with a file setup cannot read is never reported as already set
+up.
 Setup never reports success while a role has two Apps on GitHub. When the list names one App and this server
 holds the key of another that is also still on GitHub, setup names both in chat and asks which to use: only
 the App whose key this server holds can be used, so the owner confirms it by its short name. Setup deletes

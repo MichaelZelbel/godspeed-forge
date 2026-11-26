@@ -5,7 +5,7 @@
 // code (as real network failures do), and GitHub calls and questions as if the input closed. Every place in lib/ that reads or writes a file, runs a command, calls GitHub, asks a question
 // or takes that hold must be made to fail by some scenario here, so a new step that no scenario reaches fails
 // this test.
-// test cases: 21
+// test cases: 24
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -18,12 +18,15 @@ import { signIn, AGENT_QUESTION, CODE_QUESTION } from '../lib/signin.mjs';
 import { createFactorySetup, CONFIRM_QUESTION, STRIKE_QUESTION } from '../lib/factory-setup.mjs';
 import { defaults } from '../lib/config.mjs';
 import { ARCHON_REVISION, FACTORY_REVISION } from '../lib/constants.mjs';
+import { afreshPart } from './afresh.mjs';
 import './home.mjs';
 import { testCase } from './cases.mjs';
 
 Error.stackTraceLimit = 100;
 const lib = fileURLToPath(new URL('../lib/', import.meta.url));
 const root = await mkdtemp(join(tmpdir(), 'forge-faults-'));
+// The default settings setup writes put the projects folder in the home folder: here, the test's own folder.
+process.env.HOME = root;
 const repository = 'owner/faults';
 const paths = { state: join(root, 'state'), config: join(root, 'config.json') };
 const projectsRoot = join(root, 'projects');
@@ -278,9 +281,10 @@ function standInCommands(behaviour, world = {}) {
   };
 }
 
-// One run of `godspeed-forge setup`, watched when faults is given.
-async function setup(world, { behaviour = {}, faults } = {}) {
-  await writeFile(paths.config, JSON.stringify({ ...defaults(root), projectsRoot, ...world.config }));
+// One run of `godspeed-forge setup`, watched when faults is given. startAfresh is the file the owner asked
+// setup to start afresh.
+async function setup(world, { behaviour = {}, faults, startAfresh = behaviour.startAfresh } = {}) {
+  await writeFile(paths.config, behaviour.settings ?? JSON.stringify({ ...defaults(root), projectsRoot, ...world.config }));
   world.noCallback = behaviour.noCallback ?? null;
   const output = [];
   const watched = faults ? { events: [], faults, fired: [] } : null;
@@ -291,7 +295,7 @@ async function setup(world, { behaviour = {}, faults } = {}) {
   let code;
   try {
     code = await setupCommand(repository, {
-      paths, github, output: line => output.push(line),
+      paths, github, startAfresh, output: line => output.push(line),
       commands: { run: point('command', 'run', standInCommands(behaviour, world)) },
       prompt: point('prompt', 'prompt', async question => answers[question]),
       signIn: context => signIn({ ...context, start }),
@@ -339,7 +343,8 @@ const SCENARIOS = [
   } },
   { name: 'refused doctor', finish: 'complete', behaviour: { doctor: 'refuse' } },
   { name: 'marked download', finish: 'complete', arrange: world => setup(world, { behaviour: { doctor: 'refuse' } }) },
-  { name: 'damaged App on finished setup', finish: 'complete', arrange: async world => {
+  // The owner has setup start the damaged details afresh, so this run goes on to what deleted details need.
+  { name: 'damaged App on finished setup', finish: 'complete', behaviour: { startAfresh: 'release-app' }, arrange: async world => {
     await setup(world);
     await writeJson(join(credentialFolder, 'release-app.json'), '{"id": 1, "pem": "PRIV');
   } },
@@ -354,6 +359,16 @@ const SCENARIOS = [
   { name: 'empty mission answers', finish: 'complete', arrange: async world => {
     await setup(world, { behaviour: { doctor: 'fail' } });
     await writeJson(join(projectState, 'mission.json'), '');
+  } },
+  // #96: the owner asks setup to start afresh a file it could not read: the project's mission, and the
+  // record of connecting an App.
+  { name: 'mission started afresh', finish: 'complete', behaviour: { startAfresh: 'mission' }, arrange: async world => {
+    await setup(world, { behaviour: { doctor: 'fail' } });
+    await writeFile(join(projectsRoot, repository, 'MISSION.md'), '');
+  } },
+  { name: 'settings started afresh', finish: 'complete', behaviour: { startAfresh: 'settings', settings: '[]' } },
+  { name: 'connection started afresh', finish: 'complete', behaviour: { startAfresh: 'builder-connection' }, arrange: async () => {
+    await writeJson(join(credentialFolder, 'builder-app-pending.json'), '{"code": "code-buil');
   } },
   // Neither GitHub nor a coding assistant signed in: setup runs both sign-ins.
   { name: 'signed out', finish: 'complete', behaviour: { signedOut: true } },
@@ -461,18 +476,21 @@ async function checkRun(label, run) {
   if (expected) assert.equal(run.output.at(-2), expected, `${label}: the kept-Apps line is not just before the stop`);
 }
 
-// Retrying, doing what each stop says about deleting an App, finishes setup with one App per role.
+// Retrying, doing what each stop says about starting a file afresh or deleting an App, finishes setup with one App
+// per role. A run asked to start a file afresh runs the whole setup, so it ends complete, not already set up.
 async function checkRetry(label, scenario, world, run) {
   let last = run;
+  let startAfresh;
   for (let attempt = 0; last.code !== 0 && attempt < 3; attempt += 1) {
     const stop = last.output.at(-1);
-    const kind = /delete/i.test(stop) ? stop.match(/\b(builder|release) App\b/)?.[1] : undefined;
+    startAfresh = afreshPart(stop);
+    const kind = !startAfresh && /delete/i.test(stop) ? stop.match(/\b(builder|release) App\b/)?.[1] : undefined;
     if (kind && world.live[kind] > 0) world.live[kind] -= 1;
-    last = await setup(world);
+    last = await setup(world, { startAfresh });
   }
   assert.equal(last.code, 0, `${label}: retrying did not finish setup: ${last.output.join(' | ')}`);
   if (run.code !== 0) {
-    const expected = finished[scenario.finish];
+    const expected = finished[startAfresh ? 'complete' : scenario.finish];
     assert(last.output.at(-1).startsWith(expected), `${label}: retry ended with ${last.output.at(-1)}`);
   }
   assert.deepEqual(world.live, { builder: 1, release: 1 }, `${label}: retrying left the wrong Apps on GitHub`);

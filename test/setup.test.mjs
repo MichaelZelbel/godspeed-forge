@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { PassThrough } from 'node:stream';
 import {
-  answersFrom, InputClosed, loadSettings, ReportedSetupError, SetupStop, setupCommand, setupRepository, prepareCheckout,
+  AFRESH_PARTS, answersFrom, InputClosed, loadSettings, ReportedSetupError, SetupStop, setupCommand, setupRepository, prepareCheckout,
   repositoryFromRemote, UNEXPECTED_MESSAGE
 } from '../lib/setup.mjs';
 import { files } from '../lib/files.mjs';
@@ -21,7 +21,7 @@ import { ARCHON_REVISION, ARCHON_SOURCE, FACTORY_REPOSITORY, FACTORY_REVISION } 
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { BROWSER_PASSED } from './home.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 208
+// test cases: 206
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -948,7 +948,7 @@ await assert.rejects(createApps({ checkout: join(root, 'direct-checkouts', '4'),
 }), /Install the builder App/);
 await assert.rejects(stat(join(duplicateState, 'builder-app.json')));
 
-testCase('damaged earlier App keys stop as damaged and are removed');
+testCase('damaged earlier App keys stop as unreadable and stay as they are');
 const malformedState = join(root, 'malformed-state');
 const malformedCredentials = join(root, 'malformed-credentials');
 await writePrivateJson(join(malformedState, 'builder-app.json'), { id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' });
@@ -956,8 +956,8 @@ await assert.rejects(createApps({ checkout: join(root, 'direct-checkouts', '5'),
   repository: 'owner/repo', stateDirectory: malformedState,
   credentialDirectory: malformedCredentials, output: () => {},
   github: { install: async () => { throw new Error('must not install malformed credentials'); }, appStatus: async () => 'installed' }
-}), error => error instanceof AppSetupStop && error.reason === 'damaged' && error.kind === 'builder');
-await assert.rejects(stat(join(malformedState, 'builder-app.json')));
+}), error => error instanceof AppSetupStop && error.reason === 'details-unreadable' && error.kind === 'builder');
+assert.deepEqual(JSON.parse(await readFile(join(malformedState, 'builder-app.json'), 'utf8')), { id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' });
 await assert.rejects(stat(join(malformedCredentials, 'builder-app.json')));
 
 testCase('App keys setup cannot read are not created again');
@@ -978,7 +978,8 @@ try {
       install: async () => { throw new Error('must not install inaccessible credentials'); },
       appStatus: async () => 'installed'
     }
-  }), error => error.code === 'EACCES');
+  // The whole folder is closed to setup, so it cannot read the details of either App.
+  }), error => error instanceof AppSetupStop && error.reason === 'details-unreadable' && error.kind === undefined);
 } finally {
   await chmod(inaccessibleCredentials, 0o700);
 }
@@ -1048,7 +1049,8 @@ function standInGithub(options = {}) {
 }
 
 // doctor and init, when given, run before the stand-in final check or build tools install and fail it by throwing.
-async function setupAttempt(repository, stateDirectory, github, { doctor, init, choose, closed } = {}) {
+// startAfresh, when given, is the file the owner asked setup to start afresh.
+async function setupAttempt(repository, stateDirectory, github, { doctor, init, startAfresh, choose, closed } = {}) {
   const attemptMessages = [];
   const prompts = [];
   const asked = [];
@@ -1060,7 +1062,7 @@ async function setupAttempt(repository, stateDirectory, github, { doctor, init, 
   };
   try {
     await setupRepository(repository, {
-      config: { ...defaults(root), projectsRoot }, paths: { state: stateDirectory }, commands: { run: retryRun }, github,
+      config: { ...defaults(root), projectsRoot }, paths: { state: stateDirectory }, commands: { run: retryRun }, github, startAfresh,
       prompt: async question => {
         if (question.startsWith('Two ')) { asked.push(question); if (closed) throw new InputClosed(); return choose ?? ''; }
         return ['Purpose.', 'Users.'][prompts.push(question) - 1];
@@ -1073,8 +1075,16 @@ async function setupAttempt(repository, stateDirectory, github, { doctor, init, 
 }
 
 const REOPENED = (kind, repository) => `If you finished the GitHub page for the ${kind} App during an earlier setup, delete the ${kind} App it made for ${repository} in your GitHub App settings before you create it again.`;
+// The stops for an App file setup cannot read and cannot do without.
+const DETAILS_UNREADABLE = (kind, repository) => `Setup stopped because the saved details of the ${kind} App for ${repository} on this server cannot be read. Ask me to start the ${kind} App's saved details afresh, and setup replaces only that file and then says what else the ${kind} App needs.`;
+const BOTH_DETAILS_UNREADABLE = repository => `Setup stopped because the saved details of the builder and release Apps for ${repository} on this server cannot be read. Ask me to start the saved details of both Apps afresh, and setup replaces only those two files and then says what else the Apps need.`;
+const CONNECTION_UNREADABLE = (kind, repository) => `Setup stopped because setup's record of connecting the ${kind} App for ${repository} on this server cannot be read. Ask me to start connecting the ${kind} App afresh, and setup replaces only that record and opens the GitHub page for that App again.`;
+const SETTINGS_UNREADABLE = 'Setup stopped because the Forge\'s settings file on this server cannot be read. Ask me to start the Forge\'s settings afresh, and setup replaces only that file with the default settings.';
+const LIST_UNREADABLE = repository => `Setup stopped because the list of GitHub Apps that setup keeps in the project folder for ${repository} on this server cannot be read. If your GitHub App settings list a builder or release App for ${repository} that setup is not using, delete it, then ask me to start setup's list of GitHub Apps afresh, and setup replaces only that list.`;
 // name: the App's name when setup's list knows it (the default is the stand-in's name for it).
 const UNUSABLE = (kind, repository, reason, name = null) => `Setup stopped because the saved details of the ${kind} App${name ? ` "${name}"` : ''} on this server are ${reason}, so setup can no longer use that App; delete ${name ? `"${name}"` : `the ${kind} App for ${repository}`} in your GitHub App settings, then try setup again, which creates a new ${kind} App.`;
+// The stop for a saved file the file system will not let setup read.
+const DENIED = repository => `Setup stopped because this server would not let setup read one of the files it keeps for ${repository}. Let setup read the files in the folder where the Forge keeps its settings and in the project folder for ${repository}, then try setup again.`;
 // The stops for a 401 on GET /app: one GitHub sent because this server's clock is off, and any other.
 const CLOCK_STOP = (kind, repository) => [`Setup stopped because GitHub did not accept the sign-in of the ${kind} App for ${repository}, as this server's clock is off. Correct this server's clock, then try setup again.`, 'app-clock'];
 const KEY_REJECTED_STOP = (kind, repository) => [`Setup stopped because GitHub no longer accepts the saved key of the ${kind} App for ${repository}. If your GitHub App settings still list a ${kind} App for ${repository}, delete it, then try setup again, which creates it again.`, 'app-key-rejected'];
@@ -1400,8 +1410,9 @@ testCase('a leftover pending record without a code opens the App page again');
   assert.deepEqual(await pendingFiles(noCallbackCredentials), []);
 }
 
-// A stop on damaged App files (#52) names no file or internal detail, carries at most one link, and the
-// next run asks for the GitHub page of that App again instead of stopping the same way.
+// A stop on an App file setup cannot read (#52, #96) names no file or internal detail, carries at most one link,
+// and leaves the file as it is; once the owner asks setup to start that file afresh, the next run replaces only
+// that file and asks for the GitHub page of that App again.
 function assertNoInternalText(message, serverRoot) {
   assert(!/\.json|pending|credentials|Errno|SyntaxError|JSON/i.test(message), message);
   assert(!message.includes(serverRoot), message);
@@ -1414,7 +1425,7 @@ for (const [kind, damage] of [
   ['builder', { file: 'legacy', text: JSON.stringify({ id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' }), name: 'old-keys' }],
   ['release', { file: 'stored', text: '{"id": 12345, "pem": "PRIV', name: 'cut-keys' }]
 ]) {
-  testCase(`a damaged ${kind} App file (${damage.name}) stops plainly, then the App page opens again`);
+  testCase(`a damaged ${kind} App file (${damage.name}) stops plainly and stays, then starting it afresh opens the App page again`);
   const repository = `owner/${kind}-${damage.name}`;
   const retryState = join(root, `retry-damaged-${kind}-${damage.file}`);
   const credentialDirectory = credentialPath(retryState, repository);
@@ -1428,42 +1439,50 @@ for (const [kind, damage] of [
   const standIn = standInGithub();
   const first = await setupAttempt(repository, retryState, standIn.github);
   const expected = damage.file === 'pending'
-    ? [`Setup stopped because it could not finish connecting the ${kind} App. If GitHub created a ${kind} App for ${repository}, delete it in your GitHub App settings, then try setup again.`, 'leftover-app']
-    : [UNUSABLE(kind, repository, 'damaged', null), 'damaged-app'];
+    ? [CONNECTION_UNREADABLE(kind, repository), 'unreadable-app-connection', `${kind}-connection`]
+    : [DETAILS_UNREADABLE(kind, repository), 'unreadable-app-details', `${kind}-app`];
   assert(first.error instanceof ReportedSetupError && first.error.message === expected[1], `${kind} ${damage.file}`);
-  assert.equal(first.messages.at(-1), expected[0]);
-  assert(!first.messages.some(message => message.includes('Complete the GitHub page')));
+  assert.deepEqual(first.messages, [expected[0]]);
   assertNoInternalText(first.messages.at(-1), retryState);
-  assert(!(await isPresent(damagedPath)));
+  assert.equal(await readFile(damagedPath, 'utf8'), damage.text);
   assert.equal(standIn.counts[kind], 0);
-  const second = await setupAttempt(repository, retryState, standIn.github);
+  const again = await setupAttempt(repository, retryState, standIn.github);
+  assert.deepEqual(again.messages, first.messages);
+  assert.equal(await readFile(damagedPath, 'utf8'), damage.text);
+  const second = await setupAttempt(repository, retryState, standIn.github, { startAfresh: expected[2] });
   assert.equal(second.error, undefined);
-  assert(!second.messages.includes(first.messages.at(-1)));
+  assert.equal(second.messages.includes(REOPENED(kind, repository)), damage.file === 'pending');
   assert(second.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
   assert(completedFor(repository)(second.messages.at(-1)));
   assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
 }
 
 // Stored App details damaged after that App was installed: on a finished setup, and on one that stopped
-// later. The next run still creates and installs that App again instead of skipping it.
+// later. Setup stops without touching them; once the owner has it start them afresh, it asks for that App to be
+// deleted, and the next run creates and installs that App again instead of skipping it.
 for (const [kind, finished] of [['builder', false], ['release', true]]) {
-  testCase(`${kind} App details damaged after install${finished ? ' on a finished setup' : ''} are created and installed again`);
+  testCase(`${kind} App details damaged after install${finished ? ' on a finished setup' : ''} are created and installed again once started afresh`);
   const repository = `owner/${kind}-damaged-${finished ? 'finished' : 'unfinished'}`;
   const retryState = join(root, `retry-damaged-installed-${kind}`);
   const stateDirectory = projectStatePath(retryState, repository);
+  const detailsPath = join(credentialPath(retryState, repository), `${kind}-app.json`);
   const standIn = standInGithub();
   assert.equal((await setupAttempt(repository, retryState, standIn.github)).error, undefined);
   if (!finished) await rm(join(stateDirectory, 'registration.json'));
-  await writeFile(join(credentialPath(retryState, repository), `${kind}-app.json`), '{"id": 12345, "pem": "PRIV');
+  await writeFile(detailsPath, '{"id": 12345, "pem": "PRIV');
   const first = await setupAttempt(repository, retryState, standIn.github);
-  assert(first.error instanceof ReportedSetupError && first.error.message === 'damaged-app', `${kind} ${finished}`);
-  assert.equal(first.messages.at(-1), UNUSABLE(kind, repository, 'damaged', finished ? `Forge ${kind}` : null));
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'unreadable-app-details', `${kind} ${finished}`);
+  assert.equal(first.messages.at(-1), DETAILS_UNREADABLE(kind, repository));
   assertNoInternalText(first.messages.at(-1), retryState);
+  assert.equal(await readFile(detailsPath, 'utf8'), '{"id": 12345, "pem": "PRIV');
+  assert(await isPresent(join(stateDirectory, `${kind}-installation.json`)));
+  const afresh = await setupAttempt(repository, retryState, standIn.github, { startAfresh: `${kind}-app` });
+  assert(afresh.error instanceof ReportedSetupError && afresh.error.message === 'missing-app-details', `${kind} ${finished}`);
+  assert.equal(afresh.messages.at(-1), UNUSABLE(kind, repository, 'missing'));
   assert(!(await isPresent(join(stateDirectory, `${kind}-installation.json`))));
   standIn.live[kind] -= 1;
   const second = await setupAttempt(repository, retryState, standIn.github);
   assert.equal(second.error, undefined);
-  assert(!second.messages.includes(first.messages.at(-1)));
   assert(second.messages.includes(`Create the ${kind} App in your browser: https://example.test/Forge ${kind}`));
   assert(completedFor(repository)(second.messages.at(-1)));
   assert.equal(standIn.counts[kind], 2);
@@ -1472,43 +1491,54 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   assert.deepEqual(third.messages, [`The Forge is already set up for ${repository}.`]);
 }
 
-// An empty App details file is nothing saved: setup does exactly what it does when that file is missing,
-// on a fresh setup and after a finished one, and never calls it damaged.
-for (const [n, prepare] of [
-  [1, async (retryState, repository, empty) => {
+// An empty App details file is unreadable (#96): setup stops and leaves it as it is, and once the owner has
+// setup start it afresh, setup does exactly what it does when that file is missing, on a fresh setup and after
+// a finished one.
+for (const [n, kind, prepare] of [
+  [1, 'builder', async (retryState, repository, empty) => {
     if (!empty) return;
     await mkdir(credentialPath(retryState, repository), { recursive: true, mode: 0o700 });
     await writeFile(join(credentialPath(retryState, repository), 'builder-app.json'), '', { mode: 0o600 });
   }],
-  [2, async (retryState, repository, empty, github) => {
+  [2, 'release', async (retryState, repository, empty, github) => {
     assert.equal((await setupAttempt(repository, retryState, github)).error, undefined);
     const path = join(credentialPath(retryState, repository), 'release-app.json');
-    if (empty) await writeFile(path, ''); else await rm(path);
+    if (empty) await writeFile(path, '');
+    // Started afresh, setup runs its whole pass; so does a run after the record of finishing is gone.
+    else { await rm(path); await rm(join(retryState, 'projects', ...repository.split('/'), 'registration.json')); }
   }]
 ]) {
-  testCase(`an empty App details file reads as missing (case ${n})`);
+  testCase(`an empty App details file stops and stays, and started afresh reads as missing (case ${n})`);
   const repository = `owner/empty-app-${n}`;
   const runs = [];
   for (const empty of [true, false]) {
     const retryState = join(root, `${empty ? 'empty' : 'deleted'}-app-${n}`);
     const standIn = standInGithub();
     await prepare(retryState, repository, empty, standIn.github);
-    runs.push({ ...(await setupAttempt(repository, retryState, standIn.github)), counts: standIn.counts });
+    if (empty) {
+      const stopped = await setupAttempt(repository, retryState, standIn.github);
+      assert.deepEqual(stopped.messages, [...(n === 2 ? [builderKept('Forge builder')] : []), DETAILS_UNREADABLE(kind, repository)]);
+      assert.equal(await readFile(join(credentialPath(retryState, repository), `${kind}-app.json`), 'utf8'), '');
+    }
+    const startAfresh = empty ? `${kind}-app` : undefined;
+    runs.push({ ...(await setupAttempt(repository, retryState, standIn.github, { startAfresh })), counts: standIn.counts });
   }
   const [emptied, deleted] = runs;
-  assert.deepEqual(emptied.messages, deleted.messages);
+  // Asked to start a file afresh, setup runs its whole pass, so it says which agent it uses first.
+  const said = run => run.messages.filter(line => !line.startsWith('Using Claude Code'));
+  assert.deepEqual(said(emptied), said(deleted));
   assert.equal(emptied.error?.message, deleted.error?.message);
   assert.deepEqual(emptied.counts, deleted.counts);
-  assert(!emptied.messages.some(message => message.includes('damaged')), JSON.stringify(emptied.messages));
   if (n === 1) {
     assert(completedFor(repository)(emptied.messages.at(-1)));
     assert.deepEqual(emptied.counts, { builder: 1, release: 1 });
   }
 }
 
-testCase('a damaged file setup cannot remove stops as an unwritable private folder');
+testCase('a damaged file setup cannot replace when asked to start it afresh stops as an unwritable private folder');
 {
-  // A damaged file setup cannot remove gives the existing stop for an unwritable private folder.
+  // A damaged file setup cannot remove when the owner asks to start it afresh gives the existing stop for an
+  // unwritable private folder.
   const repository = 'owner/damaged-locked';
   const retryState = join(root, 'retry-damaged-locked');
   const credentialDirectory = credentialPath(retryState, repository);
@@ -1517,25 +1547,26 @@ testCase('a damaged file setup cannot remove stops as an unwritable private fold
   await chmod(credentialDirectory, 0o500);
   let first;
   try {
-    first = await setupAttempt(repository, retryState, standInGithub().github);
+    first = await setupAttempt(repository, retryState, standInGithub().github, { startAfresh: 'builder-app' });
   } finally {
     await chmod(credentialDirectory, 0o700);
   }
   assert(first.error instanceof ReportedSetupError && first.error.message === 'credential-location');
+  assert.equal(await readFile(join(credentialDirectory, 'builder-app.json'), 'utf8'), '{');
   assert.equal(first.messages.at(-1), 'Setup stopped because this server would not let it save the GitHub App keys in its private folder. Allow setup to write to that folder before trying setup again.');
 }
 
-testCase('a pending record with incomplete keys is a leftover');
+testCase('a pending record with incomplete keys is unreadable and stays');
 {
-  // A pending record whose saved keys lack a field is damaged too: GitHub created the App, so the owner deletes it.
+  // A pending record whose saved keys lack a field is damaged too: setup cannot finish that App from it.
   const credentialDirectory = join(root, 'retry-damaged-pending-keys', 'credentials');
   const pendingPath = join(credentialDirectory, 'builder-app-pending.json');
   await writePrivateJson(pendingPath, { code: 'code-builder-1', credentials: { id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' } });
   await assert.rejects(createApps({ checkout: join(root, 'direct-checkouts', '9'),
     repository: 'owner/repo', stateDirectory: join(root, 'retry-damaged-pending-keys'),
     credentialDirectory, github: standInGithub().github, output: () => {}
-  }), error => error instanceof AppSetupStop && error.reason === 'leftover' && error.kind === 'builder');
-  assert(!(await isPresent(pendingPath)));
+  }), error => error instanceof AppSetupStop && error.reason === 'pending-unreadable' && error.kind === 'builder');
+  assert.deepEqual(JSON.parse(await readFile(pendingPath, 'utf8')).credentials, { id: 12345, pem: 'PRIVATE KEY WITHOUT SLUG' });
 }
 
 testCase('a stored and installed builder App is not created again');
@@ -1606,12 +1637,12 @@ function assertStopped(attempt, [message, reason], serverRoot) {
   }
 }
 
-// Stored App details that are a link whose target is gone read as missing, exactly as a deleted file does:
-// the run stops with the missing-details sentence instead of reporting setup as done or calling the details
-// damaged, and leaves the link in place for the owner to repair. Once the owner deletes that App on GitHub,
-// the next run creates it again, leaving one App per role.
+// Stored App details that are a link whose target is gone cannot be read (#96): the run stops with the
+// unreadable-details sentence instead of reporting setup as done, and leaves the link in place. Once the owner has
+// setup start those details afresh, setup does what it does for deleted details: it asks for that App to be
+// deleted on GitHub, and the next run creates it again, leaving one App per role.
 for (const [kind, finished] of [['builder', false], ['release', true]]) {
-  testCase(`a ${kind} App details link whose target is gone reads as missing and stays in place`);
+  testCase(`a ${kind} App details link whose target is gone stops and stays in place until started afresh`);
   const repository = `owner/${kind}-broken-link-${finished ? 'finished' : 'unfinished'}`;
   const retryState = join(root, `retry-broken-link-${kind}`);
   const stateDirectory = projectStatePath(retryState, repository);
@@ -1622,9 +1653,12 @@ for (const [kind, finished] of [['builder', false], ['release', true]]) {
   await rm(linkPath);
   await symlink(join(retryState, 'gone', 'target.json'), linkPath);
   const first = await setupAttempt(repository, retryState, standIn.github);
-  assertStopped(first, appGoneStops.missing(kind, repository, finished ? `Forge ${kind}` : null), retryState);
-  assert(!first.messages.some(message => message.startsWith('Setup is complete') || message.includes('damaged')), JSON.stringify(first.messages));
+  assertStopped(first, [DETAILS_UNREADABLE(kind, repository), 'unreadable-app-details'], retryState);
+  assert(!first.messages.some(message => message.startsWith('Setup is complete')), JSON.stringify(first.messages));
   assert((await lstat(linkPath)).isSymbolicLink(), `${kind} link left in place`);
+  assert(await isPresent(join(stateDirectory, `${kind}-installation.json`)));
+  const afresh = await setupAttempt(repository, retryState, standIn.github, { startAfresh: `${kind}-app` });
+  assertStopped(afresh, appGoneStops.missing(kind, repository), retryState);
   assert(!(await isPresent(join(stateDirectory, `${kind}-installation.json`))));
   standIn.live[kind] -= 1;
   const second = await setupAttempt(repository, retryState, standIn.github);
@@ -1791,9 +1825,10 @@ testCase('a finished setup whose two App keys GitHub no longer accepts names bot
   assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
 }
 
-// Saved App details that setup can no longer read (#61). With the keys still in the pending record the App is
-// finished from them; without them one stop says the next run creates a new App, and following it gives one
-// App per role on GitHub.
+// Saved App details that setup can no longer read (#61, #96). With the keys still in the pending record the App
+// is finished from them, and both files stay as they are; without them setup stops until the owner has it start
+// those details afresh, then says the next run creates a new App, and following it gives one App per role on
+// GitHub.
 testCase('damaged builder details with its keys still in the pending record finish without a new App');
 {
   const project = await finishedSetup('damaged-keys-kept');
@@ -1807,19 +1842,24 @@ testCase('damaged builder details with its keys still in the pending record fini
   assert(completedFor(project.repository)(next.messages.at(-1)));
   assert(!next.messages.some(line => line.includes('delete')), next.messages.join('\n'));
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  // The cut-short details are saved again from the keys in the pending record, never left behind as complete.
   assert.deepEqual(JSON.parse(await readFile(detailsPath, 'utf8')), saved);
-  assert.deepEqual(await pendingFiles(project.credentialDirectory), []);
+  const again = await project.attempt();
+  assert(completedFor(project.repository)(again.messages.at(-1)) || again.messages.at(-1) === `The Forge is already set up for ${project.repository}.`);
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
 }
 
-// An empty details file holds nothing saved, so it reads as missing, as a deleted one does (#62).
-for (const [name, slug, damage, reason] of [
-  ['an empty builder details file', 'empty', path => writeFile(path, ''), 'missing'],
-  ['a builder details file that links to a removed file', 'missing', async path => { await rm(path); await symlink(`${path}.removed`, path); }, 'missing']
+// An empty details file, or one that links to a removed file, cannot be read (#62, #96): setup stops until the
+// owner has it start that file afresh, then does what it does for a deleted one.
+for (const [name, slug, damage] of [
+  ['an empty builder details file', 'empty', path => writeFile(path, '')],
+  ['a builder details file that links to a removed file', 'missing', async path => { await rm(path); await symlink(`${path}.removed`, path); }]
 ]) {
-  testCase(`${name} stops with one sentence and the retry completes`);
+  testCase(`${name} stops with one sentence, and started afresh the retry completes`);
   const project = await finishedSetup(`unusable-${slug}`);
   await damage(join(project.credentialDirectory, 'builder-app.json'));
-  assertStopped(await project.attempt(), [UNUSABLE('builder', project.repository, reason, 'Forge builder'), reason === 'damaged' ? 'damaged-app' : 'missing-app-details'], project.retryState);
+  assertStopped(await project.attempt(), [DETAILS_UNREADABLE('builder', project.repository), 'unreadable-app-details'], project.retryState);
+  assertStopped(await project.attempt({ startAfresh: 'builder-app' }), [UNUSABLE('builder', project.repository, 'missing'), 'missing-app-details'], project.retryState);
   project.standIn.live.builder -= 1;
   const next = await project.attempt();
   assert.equal(next.error, undefined);
@@ -1828,25 +1868,31 @@ for (const [name, slug, damage, reason] of [
 }
 
 // Both Apps unusable at once: one run names both, and after the owner deletes them the next run completes.
-for (const [name, slug, finished, breakApps, clause] of [
+// Details setup cannot read stop first, naming both Apps when it cannot read either, until the owner has setup
+// start them afresh.
+for (const [name, slug, finished, breakApps, afresh, clause] of [
   ['a finished setup with both details files damaged', 'both-damaged', true,
     project => Promise.all(['builder', 'release'].map(kind => writeFile(join(project.credentialDirectory, `${kind}-app.json`), '{'))),
-    () => 'the saved details of the builder App "Forge builder" and the release App "Forge release" on this server are damaged'],
+    'both-apps', () => 'the saved details of the builder and release Apps on this server are missing'],
   ['an unfinished setup with both details files deleted', 'both-missing', false,
     project => Promise.all(['builder', 'release'].map(kind => rm(join(project.credentialDirectory, `${kind}-app.json`)))),
-    () => 'the saved details of the builder and release Apps on this server are missing'],
+    undefined, () => 'the saved details of the builder and release Apps on this server are missing'],
   ['a finished setup with the builder App gone and release details damaged', 'gone-and-damaged', true,
     async project => {
       project.standIn.onGithub.deleted.add('builder');
       await writeFile(join(project.credentialDirectory, 'release-app.json'), '{');
     },
-    repository => `the builder App for ${repository} is no longer on your GitHub account and the saved details of the release App "Forge release" on this server are damaged`]
+    'release-app', repository => `the builder App for ${repository} is no longer on your GitHub account and the saved details of the release App on this server are missing`]
 ]) {
   testCase(`${name} names both Apps in one stop, then the retry completes`);
   const project = await finishedSetup(slug);
   if (!finished) await rm(join(project.stateDirectory, 'registration.json'));
   await breakApps(project);
-  assertStopped(await project.attempt(), [BOTH_UNUSABLE(clause(project.repository), project.repository, finished && slug === 'both-damaged'), 'apps-unusable'], project.retryState);
+  if (afresh) {
+    const unreadable = afresh === 'both-apps' ? BOTH_DETAILS_UNREADABLE(project.repository) : DETAILS_UNREADABLE('release', project.repository);
+    assertStopped(await project.attempt(), [unreadable, 'unreadable-app-details'], project.retryState);
+  }
+  assertStopped(await project.attempt({ startAfresh: afresh }), [BOTH_UNUSABLE(clause(project.repository), project.repository), 'apps-unusable'], project.retryState);
   project.standIn.onGithub.deleted.clear();
   project.standIn.live.builder -= 1;
   project.standIn.live.release -= 1;
@@ -1876,16 +1922,20 @@ testCase('setup\'s list of the Apps it made holds each App\'s role, name, slug a
   assert.equal((await stat(appRecordPath(project))).mode & 0o777, 0o600);
 }
 
-for (const [how, slug, lose] of [
+// A link to a removed file cannot be read: setup stops on it until the owner has setup start it afresh.
+for (const [how, slug, lose, startAfresh] of [
   ['deleted', 'deleted', path => rm(path)],
-  ['a link to a removed file', 'link', async path => { await rm(path); await symlink(`${path}.removed`, path); }]
+  ['a link to a removed file', 'link', async path => { await rm(path); await symlink(`${path}.removed`, path); }, 'builder-app']
 ]) {
   testCase(`builder details ${how} with no install record on an unfinished setup name the App to delete, then it is made once`);
   const project = await finishedSetup(`lost-builder-${slug}`);
   await rm(join(project.stateDirectory, 'registration.json'));
   await rm(join(project.stateDirectory, 'builder-installation.json'));
   await lose(join(project.credentialDirectory, 'builder-app.json'));
-  assertStopped(await project.attempt(), RECORDED_STOP('builder', project.repository), project.retryState);
+  if (startAfresh) {
+    assertStopped(await project.attempt(), [DETAILS_UNREADABLE('builder', project.repository), 'unreadable-app-details'], project.retryState);
+  }
+  assertStopped(await project.attempt({ startAfresh }), RECORDED_STOP('builder', project.repository), project.retryState);
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
   project.standIn.live.builder -= 1;
   const next = await project.attempt();
@@ -1986,20 +2036,39 @@ testCase('state restored from an older copy whose App is no longer installed ask
   assert.deepEqual(project.standIn.installs, { builder: 2, release: 1 });
 }
 
-testCase('a damaged list of setup\'s Apps stops setup, which creates nothing, until the owner deletes it');
+testCase('a damaged list of setup\'s Apps is left as it is while this server holds both Apps');
 {
   const project = await finishedSetup('record-damaged');
   await rm(join(project.stateDirectory, 'registration.json'));
   await writeFile(appRecordPath(project), '{');
-  const stopped = await project.attempt();
-  assert(stopped.error instanceof ReportedSetupError && stopped.error.message === 'damaged-app-record');
-  assert.equal(stopped.messages.at(-1), `Setup stopped because the list of GitHub Apps that setup keeps in the project folder for ${project.repository} on this server is damaged. Delete the file .git/godspeed-forge-apps.json in that project folder before trying setup again.`);
-  assert.equal(await readFile(appRecordPath(project), 'utf8'), '{');
-  await rm(appRecordPath(project));
   const next = await project.attempt();
   assert(completedFor(project.repository)(next.messages.at(-1)));
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  assert.equal(await readFile(appRecordPath(project), 'utf8'), '{');
+  // Started afresh, the list is replaced with one naming the Apps setup uses, and setup runs to the end again.
+  const afresh = await project.attempt({ startAfresh: 'app-list' });
+  assert(completedFor(project.repository)(afresh.messages.at(-1)));
   assert.equal(JSON.parse(await readFile(appRecordPath(project), 'utf8')).builder.slug, 'code-builder-1');
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+}
+
+testCase('a damaged list of setup\'s Apps stops setup, which creates nothing, until the owner starts it afresh');
+{
+  const project = await finishedSetup('record-damaged-app-lost');
+  await rm(join(project.stateDirectory, 'registration.json'));
+  await rm(join(project.stateDirectory, 'release-installation.json'));
+  await rm(join(project.credentialDirectory, 'release-app.json'));
+  await writeFile(appRecordPath(project), '{');
+  const stopped = await project.attempt();
+  assertStopped(stopped, [LIST_UNREADABLE(project.repository), 'unreadable-app-list'], project.retryState);
+  assert.equal(await readFile(appRecordPath(project), 'utf8'), '{');
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
+  project.standIn.live.release -= 1;
+  const next = await project.attempt({ startAfresh: 'app-list' });
+  assert(completedFor(project.repository)(next.messages.at(-1)));
+  assert.deepEqual(project.standIn.counts, { builder: 1, release: 2 });
+  assert.deepEqual(project.standIn.live, { builder: 1, release: 1 });
+  assert.equal(JSON.parse(await readFile(appRecordPath(project), 'utf8')).release.slug, 'code-release-2');
 }
 
 testCase('a list of setup\'s Apps that cannot be saved stops setup before it creates anything');
@@ -2114,20 +2183,28 @@ testCase('an older App whose saved details setup holds, which GitHub cannot be a
   assert.deepEqual(project.standIn.counts, { builder: 1, release: 1 });
 }
 
-// The release details cannot be read for another reason after setup already removed the damaged builder
-// details: the builder's stop still comes first, so following it never leaves a second builder App.
+// Damaged builder details and release details that are a folder: one stop names both and setup changes neither.
+// When the owner puts the release details back by hand, the stop names only the builder's, which setup replaces
+// once the owner asks it to start them afresh; following each stop never leaves a second builder App.
 for (const finished of [true, false]) {
-  testCase(`damaged builder details with unreadable release details${finished ? ' on a finished setup' : ''} still ask for the builder App's deletion`);
+  testCase(`damaged builder details with unreadable release details${finished ? ' on a finished setup' : ''} change neither, then ask for the builder App's deletion`);
   const project = await finishedSetup(`damaged-then-unreadable-${finished ? 'finished' : 'unfinished'}`);
   if (!finished) await rm(join(project.stateDirectory, 'registration.json'));
+  const builderPath = join(project.credentialDirectory, 'builder-app.json');
   const releasePath = join(project.credentialDirectory, 'release-app.json');
   const releaseDetails = await readFile(releasePath, 'utf8');
-  await writeFile(join(project.credentialDirectory, 'builder-app.json'), '{');
+  await writeFile(builderPath, '{');
   await rm(releasePath);
   await mkdir(releasePath);
-  assertStopped(await project.attempt(), [UNUSABLE('builder', project.repository, 'damaged', finished ? 'Forge builder' : null), 'damaged-app'], project.retryState);
+  assertStopped(await project.attempt(), [BOTH_DETAILS_UNREADABLE(project.repository), 'unreadable-app-details'], project.retryState);
+  assert.equal(await readFile(builderPath, 'utf8'), '{');
+  assert((await stat(releasePath)).isDirectory());
   await rm(releasePath, { recursive: true });
   await writeFile(releasePath, releaseDetails, { mode: 0o600 });
+  assertStopped(await project.attempt(), [DETAILS_UNREADABLE('builder', project.repository), 'unreadable-app-details'], project.retryState);
+  assert.equal(await readFile(builderPath, 'utf8'), '{');
+  assertStopped(await project.attempt({ startAfresh: 'builder-app' }), [UNUSABLE('builder', project.repository, 'missing'), 'missing-app-details'], project.retryState);
+  assert(!(await isPresent(builderPath)));
   project.standIn.live.builder -= 1;
   const next = await project.attempt();
   assert.equal(next.error, undefined);
@@ -2403,8 +2480,8 @@ async function retryProject(repository) {
   // deleted: the owner has deleted every App setup made for repository on GitHub.
   const record = { prompts: [], begins: 0, calls: [], messages: [], deleted: false };
   const retryState = join(root, 'retry-state');
-  const options = ({ failAt, answers = ['First purpose.', 'First users.'] } = {}) => ({
-    config: { ...defaults(root), projectsRoot: join(root, 'retry-projects') }, paths: { state: retryState },
+  const options = ({ failAt, answers = ['First purpose.', 'First users.'], startAfresh } = {}) => ({
+    config: { ...defaults(root), projectsRoot: join(root, 'retry-projects') }, paths: { state: retryState }, startAfresh,
     commands: {
       run: async (command, args, runOptions = {}) => {
         record.calls.push({ command, args });
@@ -2702,32 +2779,63 @@ testCase('a read-only state folder after an earlier run kept the Apps: the kept-
   assert.deepEqual(result.standIn.counts, { builder: 1, release: 1 });
 }
 
-// mission.json lives in the project state folder: failing to read or save it is the same settings stop.
-// The Apps exist by then, so the stop first says they are kept.
+// mission.json lives in the project state folder. One setup cannot read (#96) is never written over: setup asks
+// what the project's mission does not already hold, keeps the answers there, and the next run finds them there.
 const missionPath = (state, name) => join(state, 'projects', 'owner', name, 'mission.json');
 const appPages = [
   'Create the builder App in your browser: https://example.test/Forge builder',
   'Create the release App in your browser: https://example.test/Forge release'
 ];
-for (const [name, mission] of [
-  ['unreadable-mission', {
-    prepare: async ({ state }) => {
-      await writePrivateJson(missionPath(state, 'unreadable-mission'), { purpose: 'Purpose.', users: 'Users.' });
-      await chmod(missionPath(state, 'unreadable-mission'), 0o000);
-    },
-    undo: async ({ state }) => chmod(missionPath(state, 'unreadable-mission'), 0o600)
-  }],
-  ['mission-directory', {
-    prepare: async ({ state }) => mkdir(missionPath(state, 'mission-directory'), { recursive: true }),
-    undo: async ({ state }) => rm(missionPath(state, 'mission-directory'), { recursive: true })
-  }]
+for (const [name, prepare, undo] of [
+  ['mission-directory', path => mkdir(path, { recursive: true }), () => {}]
 ]) {
-  await stopThenRetry(name, {
-    ...mission,
-    reason: 'settings',
-    before: [BROWSER_PASSED, ...appPages, FORGE_APPS_KEPT],
-    message: 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.'
-  });
+  testCase(`mission answers setup cannot read (${name}) are asked once and never written over`);
+  const repository = `owner/${name}`;
+  const stateRoot = join(root, 'stops', name);
+  const path = missionPath(stateRoot, name);
+  await prepare(path);
+  const fingerprint = async () => { const entry = await lstat(path); return [entry.mode, entry.isDirectory(), entry.size]; };
+  const before = await fingerprint();
+  try {
+    // Setup stops once, before any page or question, naming the file and leaving it as it is.
+    const first = await setupAttempt(repository, stateRoot, standInGithub().github);
+    assert.equal(first.error?.message, 'unreadable-saved-file');
+    assert.deepEqual(first.prompts, []);
+    assert(first.messages.at(-1).includes('start the answers setup saved on this server afresh'));
+    assert.deepEqual(await fingerprint(), before);
+    // Started afresh, setup asks the questions and finishes.
+    const second = await setupAttempt(repository, stateRoot, standInGithub().github, { startAfresh: 'answers' });
+    assert.equal(second.error, undefined);
+    assert.deepEqual(second.prompts, ['What is this software for?', 'Who uses it?']);
+    assert(completedFor(repository)(second.messages.at(-1)));
+  } finally {
+    await undo(path);
+  }
+}
+
+// A saved file the file system will not let setup read may hold what setup needs, so setup is never taken on
+// without it: one stop before any page or question, the file left as it was, and once the owner lets setup read
+// it the next run finishes.
+testCase('mission answers the file system will not let setup read stop setup before any page, and are read once allowed');
+{
+  const name = 'denied-mission';
+  const repository = `owner/${name}`;
+  const stateRoot = join(root, 'stops', name);
+  const path = missionPath(stateRoot, name);
+  await writePrivateJson(path, { purpose: 'Purpose.', users: 'Users.' });
+  await chmod(path, 0o000);
+  try {
+    const first = await setupAttempt(repository, stateRoot, standInGithub().github);
+    assertStopped(first, [`Setup stopped because this server would not let setup read one of the files it keeps for ${repository}. Let setup read the files in the folder where the Forge keeps its settings and in the project folder for ${repository}, then try setup again.`, 'unreadable-denied'], stateRoot);
+    assert.deepEqual(first.prompts, []);
+    assert.equal((await lstat(path)).mode & 0o777, 0o000);
+  } finally {
+    await chmod(path, 0o600);
+  }
+  const second = await setupAttempt(repository, stateRoot, standInGithub().github);
+  assert.equal(second.error, undefined);
+  assert.deepEqual(second.prompts, []);
+  assert(completedFor(repository)(second.messages.at(-1)));
 }
 
 // Answers that cannot be saved are lost: the stop says so and that setup asks them again.
@@ -2835,28 +2943,32 @@ for (const [name, answers] of [['empty-purpose', ['', 'Users.']], ['empty-users'
 // MISSION.md in the project folder cannot be written, or cannot be read, after the Apps exist: each stop says in
 // plain words what setup could not do there, with no file name, path or raw error text.
 const missionFile = (projectsRoot, name) => join(projectsRoot, 'owner', name, 'MISSION.md');
-for (const [name, mode, message] of [
-  ['unwritable-mission-file', 0o444, 'Setup stopped because it could not save your answers to the mission questions in the project folder for owner/unwritable-mission-file on this server. Let setup read and write the files in that project folder, then try setup again.'],
-  ['unreadable-mission-file', 0o000, 'Setup stopped because it could not read the project\'s mission in the project folder for owner/unreadable-mission-file on this server, so it could not add your answers to the mission questions there. Let setup read and write the files in that project folder, then try setup again.']
+for (const [name, mode, reason, message] of [
+  ['unwritable-mission-file', 0o444, 'mission-file', 'Setup stopped because it could not save your answers to the mission questions in the project folder for owner/unwritable-mission-file on this server. Let setup read and write the files in that project folder, then try setup again.'],
+  ['unreadable-mission-file', 0o000, 'unreadable-mission-file', 'Setup stopped because the project\'s mission file in the project folder for owner/unreadable-mission-file on this server cannot be read. Ask me to start the project\'s mission file afresh, and setup replaces only that file with a new one holding your answers to the mission questions.']
 ]) {
   assert(!/MISSION\.md|\.md\b|EACCES|permission denied/.test(message), message);
   await stopThenRetry(name, {
     onPrompt: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), mode),
     undo: async ({ projectsRoot }) => chmod(missionFile(projectsRoot, name), 0o644),
-    reason: 'mission-file',
+    reason,
     before: [BROWSER_PASSED, ...appPages, FORGE_APPS_KEPT],
     message
   });
 }
 
-// A saved file that is there but damaged stops setup before it changes anything, with one plain message
-// naming the file to delete. Deleting it, as the message says, lets setup run again without creating new Apps.
-for (const [file, stopAt, damagedMessage] of [
-  ['mission.json', 'after-mission', repository => `Setup stopped because the Forge's saved settings for ${repository} on this server are damaged: its saved answers to the mission questions cannot be read. Delete the file projects/${repository}/mission.json in the Forge's private state folder before trying setup again, and setup asks those questions again.`],
-  ['registration.json', undefined, repository => `Setup stopped because the Forge's saved settings for ${repository} on this server are damaged: its record of whether setup finished cannot be read. Delete the file projects/${repository}/registration.json in the Forge's private state folder before trying setup again.`]
+// A saved mission.json or registration.json that is there but cannot be read (damaged, or empty) is never
+// written over (#96). Setup recovers what it held: the answers from the mission section it generated in the
+// project, and whether setup finished by running the whole setup again. It opens no GitHub page, asks nothing,
+// never says the project is already set up, and leaves the file exactly as it was, on every later run too.
+for (const [file, stopAt, text] of [
+  ['mission.json', 'after-mission', '{ damaged'],
+  ['registration.json', undefined, '{ damaged'],
+  ['mission.json', 'after-mission', ''],
+  ['registration.json', undefined, '']
 ]) {
-  testCase(`a damaged ${file} stops before changing anything, and deleting it lets setup finish`);
-  const repository = `owner/damaged-${file.replace('.json', '')}`;
+  testCase(`a${text ? ' damaged' : 'n empty'} ${file} stops setup once, naming it, and started afresh setup finishes`);
+  const repository = `owner/${text ? 'damaged' : 'empty'}-${file.replace('.json', '')}`;
   const project = await retryProject(repository);
   const retryState = join(root, 'retry-state');
   // An earlier run records both Apps and the saved file: it stops at the final check, or completes.
@@ -2867,111 +2979,35 @@ for (const [file, stopAt, damagedMessage] of [
     assert.equal((await setupRepository(repository, project.options())).completed, true);
   }
   assert.equal(project.record.begins, 2);
-  await writeFile(join(retryState, 'projects', repository, file), '{ damaged');
-  const before = await readTree(retryState);
+  const path = join(retryState, 'projects', repository, file);
+  await writeFile(path, text);
+  const part = file === 'mission.json' ? 'answers' : 'progress';
   project.reset();
   await assert.rejects(setupRepository(repository, project.options()),
-    error => error instanceof ReportedSetupError && error.message === 'damaged-settings');
-  // Both Apps exist from the earlier run, so the stop says they are kept (issue #56).
-  assert.deepEqual(project.record.messages, ['Using Claude Code to set up the Forge.', FORGE_APPS_KEPT, damagedMessage(repository)]);
-  for (const message of project.record.messages) {
-    assert(!/JSON|position|line \d+ column|SyntaxError|Expected property|\bat \w/.test(message), message);
-    assert(!message.includes(root), message);
-  }
+    error => error instanceof ReportedSetupError && error.message === 'unreadable-saved-file');
+  assert(project.record.messages.at(-1).startsWith('Setup stopped because'));
+  assert(project.record.messages.at(-1).includes(`${AFRESH_PARTS[part].words} afresh`));
+  assert(!project.record.messages.some(message => message.includes('already set up')));
+  for (const message of project.record.messages) assertNoInternalText(message, root);
   assert.equal(project.record.begins, 0);
-  assert.deepEqual(project.record.prompts, []);
-  assert(!project.record.calls.some(call => call.command !== 'claude'), JSON.stringify(project.record.calls));
-  assert.deepEqual(await readTree(retryState), before);
-  // The owner deletes the named file, from the Forge's private state folder, and tries setup again.
-  await rm(join(retryState, 'projects', ...damagedMessage(repository).match(/Delete the file projects\/(\S+) in/)[1].split('/')));
+  assert.equal(await readFile(path, 'utf8'), text);
   project.reset();
-  const result = await setupRepository(repository, project.options());
-  assert.equal(result.completed, true);
+  assert.equal((await setupRepository(repository, project.options({ startAfresh: part }))).completed, true);
   assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
   assert.equal(project.record.begins, 0);
-  assert.deepEqual(project.record.prompts, file === 'mission.json' ? ['What is this software for?', 'Who uses it?'] : []);
   assert.equal(await project.missionSections(), 1);
 }
 
-// An empty registration record is nothing saved: setup carries on as if it were missing, without calling it damaged.
-testCase('an empty registration.json reads as nothing saved');
-{
-  const repository = 'owner/empty-registration';
-  const project = await retryProject(repository);
-  assert.equal((await setupRepository(repository, project.options())).completed, true);
-  await writeFile(join(root, 'retry-state', 'projects', repository, 'registration.json'), '');
-  project.reset();
-  assert.equal((await setupRepository(repository, project.options())).completed, true);
-  assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
-  assert(!project.record.messages.some(message => message.includes('damaged')), JSON.stringify(project.record.messages));
-  assert.equal(project.record.begins, 0);
-  assert.deepEqual(project.record.prompts, []);
-  assert.equal(await project.missionSections(), 1);
-}
-
-// An empty saved mission answers file (#80) cannot be read. Setup stops with one plain sentence after saying the
-// Apps are kept, never calls it damaged or names a path, and saves in its place only the answers it finds in the
-// mission section it generated in the project. The next run, started as the sentence says with nothing else
-// changed, carries on with them, asks only what it could not recover, and finishes with the same two Apps.
-const UNREADABLE_START = 'Setup stopped because its saved answers to the two setup questions on this server cannot be read.';
-for (const { name, mission, sentence, recovered, prompts, final } of [
-  { name: 'both answers in the mission', mission: text => text,
-    sentence: `${UNREADABLE_START} It found both answers in the project's mission, so try setup again, and it carries on with them without asking.`,
-    recovered: { purpose: 'First purpose.', users: 'First users.' }, prompts: [], final: ['First purpose.', 'First users.'] },
-  { name: 'no mission section', mission: () => '# Mission\n\nFactory template.\n',
-    sentence: 'Setup stopped because its saved answers to the two setup questions on this server cannot be read, and the project\'s mission does not hold them. Try setup again, and it asks both questions again.',
-    recovered: {}, prompts: ['What is this software for?', 'Who uses it?'], final: ['Second purpose.', 'Second users.'] },
-  { name: 'only what it is for in the mission', mission: text => text.replace(/\nWho uses it: .*\n$/, '\n'),
-    sentence: `${UNREADABLE_START} It found what the software is for in the project's mission, so try setup again, and it carries on with that and asks only who uses it.`,
-    recovered: { purpose: 'First purpose.' }, prompts: ['Who uses it?'], final: ['First purpose.', 'Second purpose.'] },
-  { name: 'only who uses it in the mission', mission: text => text.replace(/\nWhat this software is for: .*\n/, ''),
-    sentence: `${UNREADABLE_START} It found who uses the software in the project's mission, so try setup again, and it carries on with that and asks only what the software is for.`,
-    recovered: { users: 'First users.' }, prompts: ['What is this software for?'], final: ['Second purpose.', 'First users.'] }
-]) {
-  testCase(`an empty mission.json stops setup plainly, and the retry carries on (${name})`);
-  const repository = `owner/empty-mission-${name.replaceAll(' ', '-')}`;
-  const project = await retryProject(repository);
-  const answersPath = join(root, 'retry-state', 'projects', repository, 'mission.json');
-  await assert.rejects(setupRepository(repository, project.options({ failAt: 'after-mission' })),
-    error => error instanceof ReportedSetupError && error.message === 'after-mission');
-  assert.equal(project.record.begins, 2);
-  await writeFile(answersPath, '');
-  await writeFile(project.missionPath, mission(await readFile(project.missionPath, 'utf8')));
-  project.reset();
-  await assert.rejects(setupRepository(repository, project.options({ answers: ['Second purpose.', 'Second users.'] })),
-    error => error instanceof ReportedSetupError && error.message === 'unreadable-mission-answers');
-  assert.deepEqual(project.record.messages.slice(-2), [
-    'Setup kept the details of your two GitHub Apps for this repository, "Forge builder" and "Forge release", on this server. Trying setup again checks whether they are still on your GitHub account and uses each one that is, instead of creating a new one.',
-    sentence
-  ]);
-  assert.equal(project.record.messages.filter(message => message.startsWith('Setup stopped because')).length, 1);
-  for (const message of project.record.messages) {
-    assert(!message.includes('damaged'), message);
-    assertNoInternalText(message, root);
-  }
-  assert.equal(project.record.begins, 0);
-  assert.deepEqual(project.record.prompts, []);
-  // The unreadable file now holds only the recovered answers.
-  assert.deepEqual(JSON.parse(await readFile(answersPath, 'utf8')), recovered);
-  // The retry, exactly as the sentence says.
-  project.reset();
-  const result = await setupRepository(repository, project.options({ answers: ['Second purpose.', 'Second users.'] }));
-  assert.equal(result.completed, true);
-  assert.match(project.record.messages.at(-1), new RegExp(`^Setup is complete for ${repository}\\.`));
-  assert.deepEqual(project.record.prompts, prompts);
-  assert.equal(project.record.begins, 0);
-  const [purpose, users] = final;
-  assert.deepEqual(JSON.parse(await readFile(answersPath, 'utf8')), { purpose, users });
-  assert.equal(await project.missionSections(), 1);
-  assert(
-    (await readFile(project.missionPath, 'utf8')).endsWith(`\n## Project mission\n\nWhat this software is for: ${purpose}\n\nWho uses it: ${users}\n`));
-}
-
-// An App details file emptied after setup stopped at the final check, with both Apps installed: the rerun does
-// what it does when that file is deleted. It stops with the missing-details sentence instead of ending in
-// "Setup is complete", and after the owner deletes that App on GitHub the next run creates it again.
+// An empty saved mission answers file (#80, #91) cannot be read. Setup never writes over it: it takes the answers
+// it finds in the mission section it generated in the project, asks only what it could not find there, and keeps
+// the answers in the project's mission, where the next run finds them again without asking, with the same two
+// Apps.
+// An App details file emptied after setup stopped at the final check, with both Apps installed: setup stops on
+// it and leaves it as it is, and once the owner has setup start it afresh the run does what it does when that
+// file is deleted. It stops with the missing-details sentence instead of ending in "Setup is complete", and after
+// the owner deletes that App on GitHub the next run creates it again.
 for (const kind of ['builder', 'release']) {
-  testCase(`a ${kind} App details file emptied after the final-check stop reads as missing`);
+  testCase(`a ${kind} App details file emptied after the final-check stop stops, and started afresh reads as missing`);
   const runs = [];
   for (const empty of [true, false]) {
     const repository = `owner/final-check-${empty ? 'empty' : 'deleted'}-${kind}-app`;
@@ -2980,13 +3016,20 @@ for (const kind of ['builder', 'release']) {
       error => error instanceof ReportedSetupError && error.message === 'after-mission');
     const path = join(credentialPath(join(root, 'retry-state'), repository), `${kind}-app.json`);
     if (empty) await writeFile(path, ''); else await rm(path);
+    if (empty) {
+      project.reset();
+      await assert.rejects(setupRepository(repository, project.options()),
+        error => error instanceof ReportedSetupError && error.message === 'unreadable-app-details');
+      assert.equal(project.record.messages.at(-1), DETAILS_UNREADABLE(kind, repository));
+      assert.equal(await readFile(path, 'utf8'), '');
+    }
     project.reset();
-    const rerun = await setupRepository(repository, project.options()).then(() => undefined, error => error);
+    const rerun = await setupRepository(repository, project.options({ startAfresh: empty ? `${kind}-app` : undefined }))
+      .then(() => undefined, error => error);
     const [message, reason] = appGoneStops.missing(kind, repository);
     assert(rerun instanceof ReportedSetupError && rerun.message === reason, `${kind} ${empty}: ${rerun?.message}`);
     assert.equal(project.record.messages.at(-1), message);
-    assert(!project.record.messages.some(line => line.startsWith('Setup is complete') || line.includes('damaged')),
-      JSON.stringify(project.record.messages));
+    assert(!project.record.messages.some(line => line.startsWith('Setup is complete')), JSON.stringify(project.record.messages));
     assertNoInternalText(project.record.messages.at(-1), join(root, 'retry-state'));
     runs.push(project.record.messages.map(line => line.replaceAll(repository, 'REPOSITORY')));
     project.reset();
@@ -3149,7 +3192,7 @@ testCase('a damaged build tools folder is replaced and setup finishes');
   });
 }
 
-// Saved App details setup may not read: the stop names reading them, not the GitHub page, and once they can
+// Saved App details setup may not read: the stop says they cannot be read, not the GitHub page, and once they can
 // be read again setup uses that App instead of creating another.
 {
   const repository = 'owner/unreadable-app';
@@ -3161,11 +3204,11 @@ testCase('a damaged build tools folder is replaced and setup finishes');
   project.reset();
   try {
     await assert.rejects(setupRepository(repository, project.options()),
-      error => error instanceof ReportedSetupError && error.message === 'unreadable-app');
+      error => error instanceof ReportedSetupError && error.message === 'unreadable-denied');
   } finally {
     await chmod(builderPath, 0o600);
   }
-  assert.equal(project.record.messages.at(-1), 'Setup stopped because it could not read the saved details of the builder App on this server. Let setup read the credentials folder in the Forge\'s private state folder before trying setup again.');
+  assert.equal(project.record.messages.at(-1), `Setup stopped because this server would not let setup read one of the files it keeps for ${repository}. Let setup read the files in the folder where the Forge keeps its settings and in the project folder for ${repository}, then try setup again.`);
   assert(!project.record.messages.some(message => message.includes('Complete the GitHub page')));
   project.reset();
   assert.equal((await setupRepository(repository, project.options())).completed, true);
@@ -3215,8 +3258,9 @@ async function closedInputSetup(name, start) {
   await assert.rejects(answers.question('Anything? '), error => error instanceof InputClosed);
 }
 
-// A finished setup whose release App details are damaged, where the record that setup finished cannot be
-// removed: nothing is removed, so the next run does not wrongly say the Forge is already set up.
+// A finished setup whose release App details are damaged: setup stops and removes nothing. Once the owner has
+// setup start those details afresh, where the record that setup finished cannot be removed, nothing else is
+// removed either, so the next run does not wrongly say the Forge is already set up.
 {
   const repository = 'owner/damaged-unrecorded';
   const retryState = join(root, 'retry-damaged-unrecorded');
@@ -3225,6 +3269,9 @@ async function closedInputSetup(name, start) {
   assert.equal((await setupAttempt(repository, retryState, standIn.github)).error, undefined);
   const damagedPath = join(credentialDirectory, 'release-app.json');
   await writeFile(damagedPath, '{"id": 12345, "pem": "PRIV');
+  const stopped = await setupAttempt(repository, retryState, standIn.github);
+  assert(stopped.error instanceof ReportedSetupError && stopped.error.message === 'unreadable-app-details');
+  assert.equal(await readFile(damagedPath, 'utf8'), '{"id": 12345, "pem": "PRIV');
   const realRm = files.rm;
   files.rm = async (path, options) => {
     if (path.endsWith('registration.json')) {
@@ -3234,16 +3281,15 @@ async function closedInputSetup(name, start) {
   };
   let first;
   try {
-    first = await setupAttempt(repository, retryState, standIn.github);
+    first = await setupAttempt(repository, retryState, standIn.github, { startAfresh: 'release-app' });
   } finally {
     files.rm = realRm;
   }
   assert(first.error instanceof ReportedSetupError && first.error.message === 'settings');
   assert.equal(first.messages.at(-1), 'Setup stopped because it could not save its settings on this server. Let setup write to the folder where the Forge keeps its settings before trying setup again.');
-  assert(await isPresent(damagedPath));
   assert(await isPresent(join(projectStatePath(retryState, repository), 'release-installation.json')));
   const second = await setupAttempt(repository, retryState, standIn.github);
-  assert(second.error instanceof ReportedSetupError && second.error.message === 'damaged-app');
+  assert(second.error instanceof ReportedSetupError && second.error.message === 'missing-app-details');
   assert(!second.messages.some(message => message.includes('already set up')));
   standIn.live.release -= 1;
   const third = await setupAttempt(repository, retryState, standIn.github);
@@ -3274,7 +3320,9 @@ async function closedInputSetup(name, start) {
   assert.equal(UNEXPECTED_MESSAGE, 'Setup stopped because of a problem on this server that setup could not identify. Try setup again.');
 }
 
-// A repository name setup cannot use, and a settings file that is damaged, empty or holds a secret.
+// A repository name setup cannot use, a settings file that cannot be read (damaged, empty, or valid JSON that is
+// not an object) and is left as it is, and one that holds a secret. Asked to start the settings afresh, setup
+// replaces only that file with the default settings.
 {
   const commandRoot = join(root, 'settings-stops');
   const config = join(commandRoot, 'config.json');
@@ -3290,12 +3338,13 @@ async function closedInputSetup(name, start) {
   assert.deepEqual(await command('owner/bad/name'), { code: 1, printed: [
     'Setup stopped because the repository name is not in the form owner/repository. Try setup again with a name in that form.'
   ] });
-  for (const damaged of ['{ damaged', '', '\n']) {
+  for (const damaged of ['{ damaged', '', '\n', '[]', 'null']) {
     await writeFile(config, damaged);
-    assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
-      'Setup stopped because the Forge\'s settings file on this server is damaged. Delete config.json in the folder where the Forge keeps its settings before trying setup again, and setup writes a fresh one.'
-    ] });
+    assert.deepEqual(await command('owner/repo'), { code: 1, printed: [SETTINGS_UNREADABLE] });
+    assert.equal(await readFile(config, 'utf8'), damaged);
   }
+  assert.deepEqual(await loadSettings(config, () => {}, undefined, 'settings'), defaults());
+  assert.deepEqual(JSON.parse(await readFile(config, 'utf8')), defaults());
   await writeFile(config, JSON.stringify({ commands: { github_token: 'ghs_secret' } }));
   assert.deepEqual(await command('owner/repo'), { code: 1, printed: [
     'Setup stopped because the Forge\'s settings file on this server contains commands.github_token, which must never be kept there. Remove commands.github_token from config.json in the folder where the Forge keeps its settings before trying setup again.'
@@ -3303,7 +3352,7 @@ async function closedInputSetup(name, start) {
 }
 
 // Saved App details in the old place in the project folder, or a half-finished App record, that setup may not
-// read: the stop names the folder they are in, and once they can be read setup uses that App.
+// read: the stop says which cannot be read, and once they can be read setup uses that App.
 for (const [name, place] of [['unreadable-legacy-app', 'legacy'], ['unreadable-pending-app', 'pending']]) {
   const repository = `owner/${name}`;
   const retryState = join(root, 'retry-state');
@@ -3323,12 +3372,11 @@ for (const [name, place] of [['unreadable-legacy-app', 'legacy'], ['unreadable-p
   project.reset();
   try {
     await assert.rejects(setupRepository(repository, project.options()),
-      error => error instanceof ReportedSetupError && error.message === 'unreadable-app');
+      error => error instanceof ReportedSetupError && error.message === 'unreadable-denied');
   } finally {
     await chmod(lockedPath, 0o600);
   }
-  const folder = place === 'legacy' ? `the folder projects/${repository}` : 'the credentials folder';
-  assert.equal(project.record.messages.at(-1), `Setup stopped because it could not read the saved details of the builder App on this server. Let setup read ${folder} in the Forge's private state folder before trying setup again.`);
+  assert.equal(project.record.messages.at(-1), DENIED(repository));
   project.reset();
   assert.equal((await setupRepository(repository, project.options())).completed, true);
   assert.equal(project.record.begins, place === 'legacy' ? 0 : 1);
@@ -3336,8 +3384,9 @@ for (const [name, place] of [['unreadable-legacy-app', 'legacy'], ['unreadable-p
 
 testCase('a pending record setup cannot read is not called a kept App');
 // The builder App is made and the release App's page was shown but never finished, so its pending record
-// holds no App code. When neither the builder details nor that record can be read, the stop says only the
-// builder App is kept: setup cannot know that a release App exists to use again.
+// holds no App code. When neither the builder details nor that record can be read, the stop says no App is
+// kept: the next run cannot use either until it can read them, and setup cannot know that a release App
+// exists to use again.
 {
   const repository = 'owner/unreadable-pending-no-app';
   const retryState = join(root, 'retry-state');
@@ -3357,15 +3406,12 @@ testCase('a pending record setup cannot read is not called a kept App');
   project.reset();
   try {
     await assert.rejects(setupRepository(repository, project.options()),
-      error => error instanceof ReportedSetupError && error.message === 'unreadable-app');
+      error => error instanceof ReportedSetupError && error.message === 'unreadable-denied');
   } finally {
     await chmod(builderPath, 0o600);
     await chmod(pendingPath, 0o600);
   }
-  assert.deepEqual(project.record.messages.slice(-2), [
-    'Setup kept the details of your GitHub App "Forge builder" for this repository on this server. Trying setup again checks whether it is still on your GitHub account and uses it if it is, instead of creating a new one.',
-    'Setup stopped because it could not read the saved details of the builder App on this server. Let setup read the credentials folder in the Forge\'s private state folder before trying setup again.'
-  ]);
+  assert.deepEqual(project.record.messages, [builderKept('Forge builder'), DENIED(repository)]);
   assert(!project.record.messages.some(message => message.includes('"Forge release"')));
   project.reset();
   assert.equal((await setupRepository(repository, project.options())).completed, true);
