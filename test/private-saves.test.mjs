@@ -125,6 +125,7 @@ testCase('a stop landing on any save of an App\'s pending record still lets that
   };
   const keys = { id: 7, slug: 'forge-app', pem: 'PRIVATE KEY' };
   const github = {
+    appExists: async () => false,
     begin: async () => ({ url: 'https://github.test/page' }),
     callback: async () => 'code-1',
     exchange: async () => keys,

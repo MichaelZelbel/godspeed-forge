@@ -46,7 +46,7 @@ async function pipedSetup({ piped = '', end = true, onOutput = () => {} } = {}) 
       `  echo '{"static":"","unit":"","required_checks":"none","protected_paths":"MISSION.md"}' > harness/harness.config.json`,
       'else echo signed in; fi'
     ].join('\n'),
-    gh: 'case "$1 $2" in "api -i") printf "HTTP/2.0 200 OK\\nX-Oauth-Scopes: repo, workflow\\n\\n{}\\n";; "repo clone") mkdir -p "${@: -1}/.git";; api*) echo "{}";; esac',
+    gh: 'case "$1 $2" in "api -i") printf "HTTP/2.0 200 OK\\nX-Oauth-Scopes: repo, workflow\\n\\n{}\\n";; "api --method") echo "gh: Not Found (HTTP 404)" >&2; exit 1;; "repo clone") mkdir -p "${@: -1}/.git";; api*) echo "{}";; esac',
     git: `case "$1" in remote) echo https://github.com/owner/repo.git;; clone) mkdir -p "\${@: -1}/.git";; rev-parse) echo ${FACTORY_REVISION};; symbolic-ref) echo origin/main;; diff) echo MISSION.md;; config) exit 1;; esac`,
     bun: 'true',
     'agent-browser': AGENT_BROWSER_STAND_IN,

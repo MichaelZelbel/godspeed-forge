@@ -62,6 +62,7 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = 
     },
     github: {
       exists: isPresent,
+      appExists: async () => false,
       begin: async manifest => {
         manifests.push(manifest.name);
         await wait(`${manifest.name === 'Forge builder' ? 'builder' : 'release'}-question`);
@@ -450,7 +451,7 @@ if (process.argv[2] === 'command') {
     await mkdir(bin);
     const tools = {
       claude: 'echo signed in',
-      gh: 'mkdir -p "${@: -1}/.git"',
+      gh: 'case "$*" in "api --method GET apps/"*) echo "gh: Not Found (HTTP 404)" >&2; exit 1;; esac; mkdir -p "${@: -1}/.git"',
       git: `case "$1" in remote) echo https://github.com/owner/repo.git;; clone) mkdir -p "\${@: -1}/.git";; rev-parse) echo ${FACTORY_REVISION};; esac`,
       bun: 'true',
       'agent-browser': AGENT_BROWSER_STAND_IN,

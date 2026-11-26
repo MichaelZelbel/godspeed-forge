@@ -85,7 +85,7 @@ async function attempt(repository, folder, github) {
   try {
     await setupRepository(repository, {
       config: { ...defaults(folder), projectsRoot: join(folder, 'projects') }, paths: { state: join(folder, 'state') },
-      commands: { run }, github, prompt: async () => ['Purpose.', 'Users.'][answer++ % 2], output: line => output.push(line)
+      commands: { run }, github, prompt: async question => question.startsWith('Two ') ? question.match(/Answer (\S+) to use/)[1] : ['Purpose.', 'Users.'][answer++ % 2], output: line => output.push(line)
     });
     return { output, completed: true };
   } catch {

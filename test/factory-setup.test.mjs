@@ -391,7 +391,7 @@ testCase('setup runs the final check before the factory\'s mission questions and
   const answers = ['Notes.', 'People.', '', 'yes'];
   await setupRepository(REPO, {
     config: { ...defaults(p.root), projectsRoot: join(p.root, 'projects') }, paths: { state: join(p.root, 'state') }, commands: { run },
-    github: { appStatus: async () => 'installed', begin: async m => ({ url: `https://example.test/${m.name}` }), callback: async () => 'c', exchange: async () => ({ id: 1, pem: 'K', slug: 's' }), install: async () => true },
+    github: { appStatus: async () => 'installed', appExists: async () => false, begin: async m => ({ url: `https://example.test/${m.name}` }), callback: async () => 'c', exchange: async () => ({ id: 1, pem: 'K', slug: 's' }), install: async () => true },
     prompt: async () => answers.shift(), output: line => said.push(line), factorySetup: createFactorySetup({ home: p.home })
   });
   const agentAt = order.indexOf('claude -p');
