@@ -1,0 +1,16 @@
+[Unit]
+Description=Factory driver: keeps the factory and every approved release moving (one round)
+After=network-online.target{{AFTER_UNITS}}
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=/root LANG=C.UTF-8
+{{RECORDS_PULL}}# One round reads, collects, acts and starts what is due; helpers and steps run in their own transient units
+# (factory-helper-*, forge-step-*), so this ends within seconds to minutes and never waits for one.
+# A kernel lock (flock): it dies with the process, so a stale lock cannot exist. A second round stops at once.
+ExecStart=/usr/bin/flock -n /run/factory-driver.flock {{NODE}} {{DRIVER_DIR}}/driver.mjs --settings-dir {{SETTINGS_DIR}}
+{{STATE_DIRECTORY}}# The factory user reaches its own helper folders under the state folder, so it stays walkable (0755).
+StateDirectoryMode=0755
+# A round may take at most 10 minutes (RuntimeMaxSec= has no effect on a oneshot service; this does).
+TimeoutStartSec=600

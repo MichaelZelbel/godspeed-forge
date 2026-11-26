@@ -1,0 +1,12 @@
+[Unit]
+Description=Factory driver keeper: repairs the driver (asked by the outside check)
+# Started only when the outside check's restricted key sends the single word `repair`. Changes nothing while the driver is
+# healthy, or while {{KEEPER_DIR}}/HOLD exists (a person stopped the driver on purpose). Otherwise: the driver's timer, its
+# failed state, a lock no round holds, one round; then at most one ops helper an hour, which this unit waits for (30 minutes).
+
+[Service]
+Type=oneshot
+Environment=HOME=/root LANG=C.UTF-8
+EnvironmentFile={{ENV_FILE}}
+ExecStart={{NODE}} {{KEEPER_DIR}}/keeper.mjs repair
+TimeoutStartSec=3000

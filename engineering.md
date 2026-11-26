@@ -7,8 +7,9 @@ See [factory workflow policy](factory/WORKFLOW_POLICY.md) for factory-specific s
   same command.
 - **No AI money in tests.** A test or scenario that needs a coding agent uses the stand-in agent,
   never a real one, and never needs a key.
-- **Cole Medin's factory and Archon are never in this repository.** The Forge installs them from their
-  own repositories at the pinned revision; nothing here copies or edits their files. The factory files
+- **Cole Medin's factory and Archon are never in this repository.** The Forge installs his factory from his
+  repository and Archon from the Forge's public copy of it, each at a pinned revision; nothing here
+  copies or edits their files. The factory files
   in `factory/`, `harness/` and `.factory/` are what his installer wrote for this repository's own
   development and are not part of what the Forge installs for others.
 - **No one's private settings in files:** no server names, keys, tokens, GitHub App ids or hidden

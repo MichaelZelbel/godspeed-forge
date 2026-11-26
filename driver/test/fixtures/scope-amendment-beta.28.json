@@ -1,0 +1,110 @@
+{
+  "release": "godspeed-2.0.0-beta.28-keeps-watch",
+  "version": "2.0.0-beta.28",
+  "decidedBy": "release-driver",
+  "authority": "plan-rule",
+  "words": "Caps: three attempts or two\nsend-backs per item, then `needs-owner`; an item that reaches a dead end leaves the release, the\nrest ships.",
+  "approvalRef": "releases/godspeed-2.0.0-beta.28-keeps-watch/plan.md: Status: approved by Michael on 2026-11-17 (\"Yes, start it\") Proposed by Mission Control the same day on his \"Plan release Godspeed beta\"; it replaces the withdrawn `godspeed-2.0.0-beta.28-watches-your-contracts`, which he sent to the back burner (\"select another feature\").",
+  "approvedAt": "2026-11-17T00:00:00Z",
+  "decidedAt": "2026-11-18T12:13:07.449Z",
+  "deferredTickets": [
+    "04-one-reminder-for-an-unanswered-question.md",
+    "05-domain-watch.md"
+  ],
+  "reason": "Under the approved plan's rule (an item that reaches a dead end leaves the release, the rest ships), Mission Control's release driver moved these tickets to the next release: 04-one-reminder-for-an-unanswered-question.md (#705: it has waited on a repair of the hidden checks for 12 hours with nothing new); 05-domain-watch.md (#706: it has waited on a repair of the hidden checks for 12 hours with nothing new). Everything else ships as planned.",
+  "reasons": {
+    "04-one-reminder-for-an-unanswered-question.md": {
+      "item": 4,
+      "issue": 705,
+      "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/705",
+      "title": "One reminder for a yes-or-no question left unanswered for six hours, never a second",
+      "rule": "b",
+      "why": "it has waited on a repair of the hidden checks for 12 hours with nothing new",
+      "decidedAt": "2026-11-18T12:13:07.449Z",
+      "evidence": [
+        {
+          "at": "2026-11-17T23:59:45.849Z",
+          "kind": "left",
+          "run": "202611172358-0c33b8",
+          "what": "PR #713’s direct verifier is insufficient because the required H-39 managed surface and real hourly scheduler/app observation are unavailable. This is a verifier-environment repair, not a basis to accept narrower repository evidence.",
+          "routed": "referee-repair",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/705",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/713",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/713#issuecomment-6964384484"
+          ]
+        },
+        {
+          "at": "2026-11-18T00:59:54.298Z",
+          "kind": "left",
+          "run": "202611180058-81f582",
+          "what": "H-39 still lacks the approved managed verifier surface for the real hourly scheduler/app journey. Direct-function coverage is useful but cannot replace that required observation.",
+          "routed": "referee-repair",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/705",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/713"
+          ]
+        },
+        {
+          "at": "2026-11-18T08:45:13.338Z",
+          "kind": "left",
+          "run": "202611180843-3a9d64",
+          "what": "The repository-side verifier does not exercise the managed hourly scheduler/app journey, and the approved H-39 managed verifier surface is absent. Repair that verifier surface and rerun the same observation rather than accepting direct-function evidence.",
+          "routed": "referee-repair",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/705",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/713"
+          ]
+        }
+      ]
+    },
+    "05-domain-watch.md": {
+      "item": 5,
+      "issue": 706,
+      "url": "https://github.com/MichaelZelbel/godspeed-mission-control/issues/706",
+      "title": "Tell the person the moment a web address they want can be registered",
+      "rule": "b",
+      "why": "it has waited on a repair of the hidden checks for 12 hours with nothing new",
+      "decidedAt": "2026-11-18T13:13:09.988Z",
+      "evidence": [
+        {
+          "at": "2026-11-18T00:59:54.298Z",
+          "kind": "left",
+          "run": "202611180058-81f582",
+          "what": "Mandatory H-37, H-38, and H-40 have no runnable verifier commands, so the required observations cannot be substituted or waived. R8’s persisted-unsent delivery suffix and the missing authoritative guide updates remain blocking findings for a later reviewed head.",
+          "routed": "referee-repair",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/706",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/715"
+          ]
+        },
+        {
+          "at": "2026-11-18T08:45:13.338Z",
+          "kind": "left",
+          "run": "202611180843-3a9d64",
+          "what": "H-37, H-38, and H-40 have no runnable managed verifier commands, preventing the required target/base observations. The referee environment must supply those maintained verifier surfaces and repeat the unchanged observations before this delivery can be judged.",
+          "routed": "referee-repair",
+          "links": [
+            "https://github.com/MichaelZelbel/godspeed-mission-control/issues/706",
+            "https://github.com/MichaelZelbel/godspeed-mission-control/pull/715"
+          ]
+        }
+      ]
+    }
+  },
+  "amendments": [
+    {
+      "release": "godspeed-2.0.0-beta.28-keeps-watch",
+      "version": "2.0.0-beta.28",
+      "approvedBy": "Michael",
+      "words": "Screw your test programs. Finish the release now, put it onto the server, then tell me it's done. / I'm waiting. Put the release onto the server now.",
+      "approvalRef": "Michael to Mission Control in Claude Code on X30, 2026-11-18 about 14:07 CET, after hearing that items 2, 3 and 5 were parked on missing hidden-check tools",
+      "approvedAt": "2026-11-18T13:26:27Z",
+      "deferredTickets": [
+        "02-work-is-ready-only-when-checked.md",
+        "03-spend-notice.md"
+      ],
+      "reason": "Michael ordered the release finished and put on his server now. Item 2 (#279, PR #710) fails its required check; item 3 (#704, PR #708) is clean in review but was not merged in time. Both move to the next release. (Re-added: the release driver's 14:13 cut rewrote this file and dropped the first copy of this entry.)"
+    }
+  ]
+}

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { InputClosed, setupCommand } from '../lib/setup.mjs';
+import { InputClosed, SetupStop, setupCommand } from '../lib/setup.mjs';
 import { defaults } from '../lib/config.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { afreshPart } from './afresh.mjs';
@@ -105,7 +105,8 @@ const AFRESH = {
 };
 
 // One run of `godspeed-forge setup`. at: 'connecting' fails the builder App's address, 'question' closes the
-// input at the first question, 'final check' has the final check refuse the downloaded build tools.
+// input at the first question, 'final check' has the final check refuse the downloaded build tools (before any
+// App exists), 'after mission' stops the factory's own setup once the Apps and the mission answers are saved.
 async function setup(p, { at, startAfresh } = {}) {
   const output = [];
   let answer = 0;
@@ -119,7 +120,7 @@ async function setup(p, { at, startAfresh } = {}) {
     }
     if (command === 'git' && args[0] === 'remote') return { stdout: `https://github.com/${p.repository}.git\n` };
     if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-    if (command === 'python3' && args.at(-1) === 'init') {
+    if (command === 'python3' && args[1] === 'init') {
       await mkdir(join(options.cwd, 'factory'), { recursive: true });
       await mkdir(join(options.cwd, '.factory'), { recursive: true });
       await mkdir(p.buildTools, { recursive: true });
@@ -135,6 +136,7 @@ async function setup(p, { at, startAfresh } = {}) {
   const code = await setupCommand(p.repository, {
     paths: { state: p.state, config: p.config }, commands: { run }, github: p.world.github, startAfresh,
     output: line => output.push(line),
+    factorySetup: async () => { if (at === 'after mission') throw new SetupStop('Stopped after the mission.', 'after-mission'); },
     prompt: async () => {
       if (at === 'question') throw new InputClosed();
       return ['Purpose.', 'Users.'][answer++ % 2];
@@ -155,15 +157,17 @@ const POINTS = {
   connecting: p => setup(p, { at: 'connecting' }),
   question: p => setup(p, { at: 'question' }),
   'final check': p => setup(p, { at: 'final check' }),
+  'after mission': p => setup(p, { at: 'after mission' }),
   finished: p => setup(p),
   'finished with keys waiting': withKeysWaiting(),
-  'final check with keys waiting': withKeysWaiting('final check')
+  'after mission with keys waiting': withKeysWaiting('after mission')
 };
 // The files each point leaves.
 const AT = {
   connecting: ['settings', 'mission file', 'builder connection'],
   question: ['settings', 'mission file', 'App list', 'builder details', 'release details in the earlier place', 'builder install record', 'release install record'],
-  'final check': ['settings', 'mission file', 'App list', 'builder details', 'release details in the earlier place', 'builder install record', 'release install record', 'mission answers', 'download marker'],
+  'final check': ['settings', 'mission file', 'download marker'],
+  'after mission': ['settings', 'mission file', 'App list', 'builder details', 'release details in the earlier place', 'builder install record', 'release install record', 'mission answers'],
   finished: ['settings', 'mission file', 'App list', 'builder details', 'release details in the earlier place', 'builder install record', 'release install record', 'mission answers', 'finished record'],
   'finished with keys waiting': ['settings', 'builder connection']
 };
@@ -214,6 +218,7 @@ async function unreadableCase({ name, point, file, kind, prepare }) {
     await rename(join(p.credentials, 'release-app.json'), p.files[file]);
   }
   const path = p.files[file];
+  const original = kind === 'not readable' ? await readFile(path) : null;
   await UNREADABLE[kind](path);
   await prepare?.(p);
   const label = `${file} ${kind} at ${point}`;
@@ -222,7 +227,8 @@ async function unreadableCase({ name, point, file, kind, prepare }) {
   let replaced = false;
   let run = await setup(p);
   const runs = [run];
-  if (run.pages > 0) problems.push(`${label}: a GitHub page was shown before setup recovered or stopped`);
+  // The final check now runs before any App exists, so a run from that point shows the App pages once it has recovered.
+  if (run.pages > 0 && point !== 'final check') problems.push(`${label}: a GitHub page was shown before setup recovered or stopped`);
   for (let next = 0; ; next += 1) {
     problems.push(...checkLines(`${label}, run ${runs.length}`, run));
     if (!replaced && await fingerprint(path) !== before) problems.push(`${label}: run ${runs.length} changed the file it could not read`);
@@ -234,6 +240,12 @@ async function unreadableCase({ name, point, file, kind, prepare }) {
     if (startAfresh) {
       if (!AFRESH[file]?.includes(startAfresh)) problems.push(`${label}: the stop names another file: ${stop}`);
       replaced = true;
+    }
+    // A file the file system would not let setup read is not started afresh: the owner lets setup read it.
+    if (/would not let setup read/.test(stop)) {
+      await chmod(path, 0o600);
+      if (!original?.equals(await readFile(path))) problems.push(`${label}: letting setup read the file changed it`);
+      replaced = true; // readable again: setup may now save to it
     }
     run = await setup(p, { startAfresh });
     runs.push(run);
@@ -282,7 +294,7 @@ testCase('the four cases #96 started from');
   assert(emptyAnswers.runs[0].output.at(-1).startsWith('Setup is complete for '));
   // #91: an empty answers file and an empty mission file are never written over.
   for (const file of ['mission answers', 'mission file']) {
-    const result = await unreadableCase({ name: `empty-${file.replace(' ', '-')}`, point: 'final check', file, kind: 'empty' });
+    const result = await unreadableCase({ name: `empty-${file.replace(' ', '-')}`, point: 'after mission', file, kind: 'empty' });
     assert.deepEqual(result.problems, []);
   }
   // #87: a finished setup whose answers cannot be read is set up again, not called already set up.
@@ -313,7 +325,7 @@ testCase('an App GitHub no longer has or accepts, whose keys setup took from one
     }
   };
   const cases = [];
-  for (const point of ['finished with keys waiting', 'final check with keys waiting']) {
+  for (const point of ['finished with keys waiting', 'after mission with keys waiting']) {
     for (const file of ['builder details', 'builder connection']) {
       for (const kind of ['empty', 'damaged', 'a folder']) {
         for (const [app, prepare] of Object.entries(github)) cases.push({ name: `u${caseNumber++}`, point, file, kind, app, prepare });

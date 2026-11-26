@@ -1,0 +1,90 @@
+{
+  "release": "godspeed-2.0.0-beta.24-never-empty-handed",
+  "repository": "MichaelZelbel/godspeed-mission-control",
+  "version": "2.0.0-beta.24",
+  "tag": "candidate/2.0.0-beta.24",
+  "stageCommit": "104dd6b34dc609e414774bf316af5a27c305e29a",
+  "productCommit": "901a784c639fd462a55ae2b19fecd0b92ae518f3",
+  "machine": "godspeed-archon",
+  "installLog": "/root/godspeed-staging/2.0.0-beta.24/install.log",
+  "healthBefore": {
+    "ok": true,
+    "format": 1,
+    "version": "2.0.0-beta.23",
+    "instance": "d3be7cc8af6f875f61613305",
+    "scheduler_heartbeat": "2026-11-14T13:38:11.141Z",
+    "chat": {
+      "answered": true,
+      "checked_at": "2026-11-14T13:00:09.928Z",
+      "failing_since": null,
+      "problems": [],
+      "delivery_failures": []
+    }
+  },
+  "commitBefore": "690266d10c753ed9fa15586a7e900a88b245c419",
+  "installedAt": "2026-11-14T13:39:45Z",
+  "backup": "/root/godspeed/.godspeed/integrated-runtime/backups/20261114-133917-690266d10c753ed9fa15586a7e900a88b245c419",
+  "healthAfter": {
+    "ok": true,
+    "format": 1,
+    "version": "2.0.0-beta.24",
+    "instance": "d3be7cc8af6f875f61613305",
+    "scheduler_heartbeat": "2026-11-14T13:39:29.921Z",
+    "chat": {
+      "answered": true,
+      "checked_at": "2026-11-14T13:00:09.928Z",
+      "failing_since": null,
+      "problems": [],
+      "delivery_failures": []
+    }
+  },
+  "addonAi": {
+    "at": "2026-11-14T13:39:45Z",
+    "state": "ok",
+    "command": "/root/.hermes/bin/godspeed-model",
+    "provider": "openai-codex",
+    "model": "gpt-5.6-terra",
+    "backup": false,
+    "tries": 1
+  },
+  "status": "installed",
+  "failures": [],
+  "scenarios": {
+    "result": "failed",
+    "conclusion": "failure",
+    "tag": "candidate/2.0.0-beta.24",
+    "tagCommit": "104dd6b34dc609e414774bf316af5a27c305e29a",
+    "run": 43600813210,
+    "url": "https://github.com/MichaelZelbel/godspeed-mission-control/actions/runs/43600813210",
+    "at": "2026-11-14T14:09:45Z",
+    "failedJobs": [
+      "two computers that move the same reminders at once",
+      "the Charm Challenge, start to finish",
+      "the verdict"
+    ],
+    "seenAt": "2026-11-14T14:10:07Z"
+  },
+  "lastCheck": {
+    "at": "2026-11-14T14:10:07Z",
+    "serverClock": "2026-11-14T14:10:00Z",
+    "result": "ready",
+    "checked": [
+      "Your server runs 2.0.0-beta.24 (product commit 901a784), healthy, as instance d3be7cc8af6f875f61613305, the one it was installed as; its scheduler beat 0 minute(s) before the server's clock.",
+      "The add-ons reach the AI: /root/.hermes/bin/godspeed-model names openai-codex gpt-5.6-terra, and a one-word request through it answered."
+    ],
+    "failures": [],
+    "scenarios": "failed",
+    "nonBlocking": [
+      "two computers that move the same reminders at once",
+      "the Charm Challenge, start to finish"
+    ],
+    "addonAi": {
+      "state": "ok",
+      "command": "/root/.hermes/bin/godspeed-model",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-terra",
+      "backup": false,
+      "tries": 1
+    }
+  }
+}

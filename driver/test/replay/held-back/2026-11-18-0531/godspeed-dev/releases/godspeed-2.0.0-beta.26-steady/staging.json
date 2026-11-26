@@ -1,0 +1,84 @@
+{
+  "release": "godspeed-2.0.0-beta.26-steady",
+  "repository": "MichaelZelbel/godspeed-mission-control",
+  "version": "2.0.0-beta.26",
+  "tag": "candidate/2.0.0-beta.26",
+  "stageCommit": "f23e534c1c2a952badbfd28b5e41b33852a5de90",
+  "productCommit": "67467a6eda14ef5529648f5d82a98f1003b78cec",
+  "machine": "godspeed-archon",
+  "installLog": "/root/godspeed-staging/2.0.0-beta.26/install.log",
+  "healthBefore": {
+    "ok": true,
+    "format": 1,
+    "version": "2.0.0-beta.25",
+    "instance": "d3be7cc8af6f875f61613305",
+    "scheduler_heartbeat": "2026-11-17T16:43:11.085Z",
+    "chat": {
+      "answered": true,
+      "checked_at": "2026-11-17T16:15:09.988Z",
+      "failing_since": null,
+      "problems": [],
+      "delivery_failures": []
+    }
+  },
+  "commitBefore": "75b61feaa9a116c4bb1d25ff7bf1eb0bd4004cb8",
+  "installedAt": "2026-11-17T16:44:20Z",
+  "backup": "/root/godspeed/.godspeed/integrated-runtime/backups/20261117-164356-75b61feaa9a116c4bb1d25ff7bf1eb0bd4004cb8",
+  "healthAfter": {
+    "ok": true,
+    "format": 1,
+    "version": "2.0.0-beta.26",
+    "instance": "d3be7cc8af6f875f61613305",
+    "scheduler_heartbeat": "2026-11-17T16:44:10.503Z",
+    "chat": {
+      "answered": true,
+      "checked_at": "2026-11-17T16:15:09.988Z",
+      "failing_since": null,
+      "problems": [],
+      "delivery_failures": []
+    }
+  },
+  "addonAi": {
+    "at": "2026-11-17T16:44:20Z",
+    "state": "ok",
+    "command": "/root/.hermes/bin/godspeed-model",
+    "provider": "openai-codex",
+    "model": "gpt-5.6-luna",
+    "backup": true,
+    "tries": 1
+  },
+  "status": "installed",
+  "failures": [],
+  "scenarios": {
+    "result": "passed",
+    "conclusion": "success",
+    "tag": "candidate/2.0.0-beta.26",
+    "tagCommit": "f23e534c1c2a952badbfd28b5e41b33852a5de90",
+    "run": 44128964028,
+    "url": "https://github.com/MichaelZelbel/godspeed-mission-control/actions/runs/44128964028",
+    "at": "2026-11-17T17:20:39Z",
+    "seenAt": "2026-11-17T17:20:59Z"
+  },
+  "lastCheck": {
+    "at": "2026-11-17T17:20:59Z",
+    "serverClock": "2026-11-17T17:20:54Z",
+    "result": "ready",
+    "checked": [
+      "Your server runs 2.0.0-beta.26 (product commit 67467a6), healthy, as instance d3be7cc8af6f875f61613305, the one it was installed as; its scheduler beat 0 minute(s) before the server's clock.",
+      "The add-ons reach the AI: /root/.hermes/bin/godspeed-model names openai-codex gpt-5.6-luna, and a one-word request through it answered through the backup AI, because the main one did not."
+    ],
+    "failures": [],
+    "scenarios": "passed",
+    "addonAi": {
+      "state": "ok",
+      "command": "/root/.hermes/bin/godspeed-model",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna",
+      "backup": true,
+      "tries": 1
+    }
+  },
+  "told": {
+    "ready": "2026-11-17T17:21:03Z"
+  }
+}

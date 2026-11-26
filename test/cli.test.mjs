@@ -45,10 +45,10 @@ assert.deepEqual([afresh.status, afresh.stdout, afresh.stderr], [1,
   'Setup stopped because the repository name is not in the form owner/repository. Try setup again with a name in that form.\n', '']);
 assert.equal(JSON.parse(await readFile(settings, 'utf8')).projectsRoot, join(home, 'projects'));
 
-testCase('the forge-setup skill maps the words of each stop to every part setup can start afresh, and to no other');
+testCase('the forge skill maps the words of each stop to every part setup can start afresh, and to no other');
 {
-  const skill = await readFile(new URL('../skills/forge-setup/SKILL.md', import.meta.url), 'utf8');
-  const rows = [...skill.matchAll(/^\| (.+) \| `([\w-]+)` \|$/gm)].map(([, words, part]) => [part, words]);
+  const skill = await readFile(new URL('../skills/forge/SKILL.md', import.meta.url), 'utf8');
+  const rows = [...skill.matchAll(/^ *\| (.+) \| `([\w-]+)` \|$/gm)].map(([, words, part]) => [part, words]);
   assert.deepEqual(rows, Object.entries(AFRESH_PARTS).map(([part, { words }]) => [part, words]));
 }
 

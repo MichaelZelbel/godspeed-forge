@@ -19,6 +19,7 @@ import { setupRepository, UNEXPECTED_MESSAGE } from '../lib/setup.mjs';
 import { credentialPath, defaults, projectStatePath } from '../lib/config.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { afreshPart } from './afresh.mjs';
+import './home.mjs';
 import { testCase } from './cases.mjs';
 
 const root = await mkdtemp(join(tmpdir(), 'forge-combinations-'));
@@ -74,7 +75,7 @@ async function attempt(repository, folder, github, startAfresh) {
     }
     if (command === 'git' && args[0] === 'remote') return { stdout: `https://github.com/${repository}.git\n` };
     if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-    if (command === 'python3' && args.at(-1) === 'init') {
+    if (command === 'python3' && args[1] === 'init') {
       await mkdir(join(options.cwd, 'factory'), { recursive: true });
       await mkdir(join(options.cwd, '.factory'), { recursive: true });
       await writeFile(join(options.cwd, 'MISSION.md'), '# Mission\n');
@@ -86,7 +87,7 @@ async function attempt(repository, folder, github, startAfresh) {
   try {
     await setupRepository(repository, {
       config: { ...defaults(folder), projectsRoot: join(folder, 'projects') }, paths: { state: join(folder, 'state') },
-      commands: { run }, github, startAfresh, prompt: async () => ['Purpose.', 'Users.'][answer++ % 2], output: line => output.push(line)
+      commands: { run }, github, startAfresh, prompt: async question => question.startsWith('Two ') ? question.match(/Answer (\S+) to use/)[1] : ['Purpose.', 'Users.'][answer++ % 2], output: line => output.push(line)
     });
     return { output, completed: true };
   } catch {

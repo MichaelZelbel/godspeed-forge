@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { access, chmod, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
@@ -12,8 +12,9 @@ import { runSetupCommand } from '../lib/cli.mjs';
 import { answersFrom, setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults } from '../lib/config.mjs';
+import { AGENT_BROWSER_STAND_IN, BROWSER_PASSED } from './home.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 30
+// test cases: 32
 
 const credentials = {
   id: 12345, slug: 'forge-app', pem: 'PRIVATE KEY', client_secret: 'CLIENT SECRET', webhook_secret: 'WEBHOOK SECRET'
@@ -52,7 +53,7 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = 
         }
         if (command === 'git' && args[0] === 'fetch') await wait('download');
         if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-        if (command === 'python3' && args.at(-1) === 'init') {
+        if (command === 'python3' && args[1] === 'init') {
           await mkdir(join(runOptions.cwd, 'factory'), { recursive: true });
           await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
         }
@@ -61,6 +62,7 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = 
     },
     github: {
       exists: isPresent,
+      appExists: async () => false,
       begin: async manifest => {
         manifests.push(manifest.name);
         await wait(`${manifest.name === 'Forge builder' ? 'builder' : 'release'}-question`);
@@ -76,7 +78,14 @@ function standIn(root, { manifests = [], waitAt, onWait = () => {}, questions = 
         await wait('exchange');
         if (spentCodes.includes(code)) throw Object.assign(new Error('GitHub refused the App code.'), { refused: true });
         // The builder App's details file is then written, and that write waits on its stand-in (see 'command').
-        if (waitAt === 'builder-details') onWait();
+        // The named pipe is made here, not when the command starts: a run sweeps left-behind temporaries
+        // beside its saves before anything else (#100), and it would take this one away first.
+        if (waitAt === `${code.replace('-code', '')}-details`) {
+          const details = join(builderDetails(root), '..', `${waitAt.replace('-details', '')}-app.json`);
+          await mkdir(join(details, '..'), { recursive: true, mode: 0o700 });
+          execFileSync('mkfifo', [`${details}.${process.pid}.tmp`]);
+          onWait();
+        }
         return credentials;
       },
       install: async ({ kind }) => { await wait(`${kind}-install`); return true; },
@@ -104,11 +113,6 @@ if (process.argv[2] === 'command') {
   // With "closes", the question is asked on real input that then closes: no answer ever comes, as when the
   // owner's input ends, and nothing keeps the process alive but setup itself.
   const [, , , root, waitAt, mode, deleted = ''] = process.argv;
-  // A named pipe where the builder App's details file is first written: that write waits until it is killed.
-  if (waitAt === 'builder-details') {
-    await mkdir(join(builderDetails(root), '..'), { recursive: true, mode: 0o700 });
-    execFileSync('mkfifo', [`${builderDetails(root)}.${process.pid}.tmp`]);
-  }
   const terminal = mode === 'terminal';
   const closes = mode === 'closes';
   const stream = new PassThrough();
@@ -194,7 +198,7 @@ if (process.argv[2] === 'command') {
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-question-'));
     const result = await interrupt(root, 'builder-question', 'SIGINT');
     assertStopped(result, { code: 130, sentence: INTERRUPTED, kept: null });
-    assert.deepEqual(result.lines, ['Using Claude Code to set up the Forge.', INTERRUPTED]);
+    assert.deepEqual(result.lines, ['Using Claude Code to set up the Forge.', BROWSER_PASSED, INTERRUPTED]);
     // The next run is not refused as already running. No App page had been shown, so GitHub made no App and
     // the next run simply asks again and creates one App per role.
     const next = await nextSetup(root);
@@ -225,7 +229,7 @@ if (process.argv[2] === 'command') {
     const result = await interrupt(root, 'builder-question', 'terminal');
     assertStopped(result, { code: 130, sentence: INTERRUPTED, kept: null });
     // In a terminal the sentence starts on a line of its own instead of running onto the open question.
-    assert.deepEqual(result.lines, ['Using Claude Code to set up the Forge.', '', INTERRUPTED]);
+    assert.deepEqual(result.lines, ['Using Claude Code to set up the Forge.', BROWSER_PASSED, '', INTERRUPTED]);
   }
 
   // Stopped while waiting for the address from an App's GitHub page, by a signal or by input that closes (#61):
@@ -281,12 +285,14 @@ if (process.argv[2] === 'command') {
     assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
   }
 
-  // Killed, terminated or interrupted after GitHub turned the builder App's code into its keys, while its details
-  // file is written (#61): the keys are already in the pending record, so the next run finishes that App from
-  // them even though GitHub no longer accepts the code, and creates no second App. A terminated or interrupted
-  // run says to try again, after saying the builder App, whose keys this server now holds, is kept, and ends
-  // within a few seconds though that write never finishes (#82): by its signal, which a shell reports as 143 or
-  // 130.
+  // Killed, terminated or interrupted after GitHub turned the builder App's code into its keys, while its
+  // details file is written (#61): the keys are already in the pending record, so the next run finishes that App
+  // from them even though GitHub no longer accepts the code, and creates no second App. A terminated or
+  // interrupted run says to try again, after saying the builder App, whose keys this server now holds, is kept,
+  // and ends within a few seconds though that write never finishes (#82): by its signal, which a shell reports
+  // as 143 or 130. A stopped run leaves no temporary of that save behind, when it can end its requests: right
+  // after SIGTERM or SIGINT there is none, and after SIGKILL there is exactly one, which the next run's sweep
+  // removes (#100). The saved file's content is the credentials either way.
   for (const [signal, sentence] of [['SIGKILL', null], ['SIGTERM', TERMINATED], ['SIGINT', INTERRUPTED]]) {
     testCase(`${signal} while the builder App details are being saved`);
     const root = await mkdtemp(join(tmpdir(), 'forge-signal-details-'));
@@ -301,13 +307,43 @@ if (process.argv[2] === 'command') {
     } else {
       assert(!result.lines.some(line => line.startsWith('Setup stopped because')), result.lines.join('\n'));
     }
-    for (const name of await readdir(credentialDirectory)) if (name.endsWith('.tmp')) await rm(join(credentialDirectory, name));
+    const temporaries = async () => (await readdir(credentialDirectory)).filter(name => name.endsWith('.tmp'));
+    // The App record is saved in the project checkout's `.git` (lib/github-apps.mjs), the one swept folder inside
+    // the owner's own project: a temporary a killed save of it left there is swept by the next run too (#100).
+    const appRecordTemporary = join(root, 'projects', 'owner/repo', '.git', 'godspeed-forge-apps.json.2147483646.tmp');
+    await mkdir(join(appRecordTemporary, '..'), { recursive: true });
+    await writeFile(appRecordTemporary, '{"apps": []}');
+    if (sentence) assert.deepEqual(await temporaries(), [], 'the stopped run left its temporary behind');
+    else assert.equal((await temporaries()).length, 1, 'the killed run left no temporary for the next run to sweep');
     const next = await nextSetup(root, undefined, { spentCodes: ['builder-code'] });
+    assert.deepEqual(await temporaries(), [], 'the next run left the temporary behind');
+    assert(!(await isPresent(appRecordTemporary)), 'the next run left the App record temporary in the project checkout');
     assert.equal(next.error, undefined);
     assert(!next.messages.some(line => line.includes('delete')), next.messages.join('\n'));
     assert(next.messages.at(-1).startsWith('Setup is complete for owner/repo.'));
     assert.deepEqual(next.manifests, ['Forge release']);
     assert.deepEqual(JSON.parse(await readFile(builderDetails(root), 'utf8')), credentials);
+  }
+
+  // The same for the release App, after the builder App is finished: its keys are in the pending record, the
+  // stopped run says both Apps are kept, and the next run finishes the release App without a second one.
+  for (const [signal, sentence] of [['SIGTERM', TERMINATED], ['SIGINT', INTERRUPTED]]) {
+    testCase(`${signal} while the release App details are being saved`);
+    const root = await mkdtemp(join(tmpdir(), 'forge-signal-release-details-'));
+    const credentialDirectory = join(builderDetails(root), '..');
+    const keysSaved = async () => {
+      try { return Boolean(JSON.parse(await readFile(join(credentialDirectory, 'release-app-pending.json'), 'utf8')).credentials); } catch { return false; }
+    };
+    const result = await interrupt(root, 'release-details', signal, { until: keysSaved, endsBySignal: true });
+    assert.equal(result.code, null);
+    assert.equal(result.lines.at(-1), sentence);
+    assert(/^Setup kept the details of your two GitHub Apps /.test(result.lines.at(-2)), result.lines.join('\n'));
+    assert.deepEqual((await readdir(credentialDirectory)).filter(name => name.endsWith('.tmp')), []);
+    const next = await nextSetup(root, undefined, { spentCodes: ['release-code'] });
+    assert.equal(next.error, undefined);
+    assert(!next.messages.some(line => line.includes('delete')), next.messages.join('\n'));
+    assert.deepEqual(next.manifests, []);
+    assert.deepEqual(JSON.parse(await readFile(join(credentialDirectory, 'release-app.json'), 'utf8')), credentials);
   }
 
   // Stopped while GitHub turns the builder App's code into its credentials: the code is saved, so the next run
@@ -418,9 +454,11 @@ if (process.argv[2] === 'command') {
     await mkdir(bin);
     const tools = {
       claude: 'echo signed in',
-      gh: 'mkdir -p "${@: -1}/.git"',
+      gh: 'case "$*" in "api --method GET apps/"*) echo "gh: Not Found (HTTP 404)" >&2; exit 1;; esac; mkdir -p "${@: -1}/.git"',
       git: `case "$1" in remote) echo https://github.com/owner/repo.git;; clone) mkdir -p "\${@: -1}/.git";; rev-parse) echo ${FACTORY_REVISION};; esac`,
-      python3: 'if [ "${@: -1}" = init ]; then mkdir -p factory; echo "# Mission" > MISSION.md; fi'
+      bun: 'true',
+      'agent-browser': AGENT_BROWSER_STAND_IN,
+      python3: 'if [ "$2" = init ]; then mkdir -p factory; echo "# Mission" > MISSION.md; fi'
     };
     for (const [name, body] of Object.entries(tools)) {
       await writeFile(join(bin, name), `#!/bin/bash\n${body}\n`);
@@ -481,7 +519,7 @@ if (process.argv[2] === 'command') {
     const { stdout, stderr, code: exitCode } = await realCommand(root, (printed, child) => {
       if (!stopped && printed.endsWith(ORG_QUESTION)) { stopped = true; stop(child); }
     }, { pty });
-    assert.equal(stdout, `Using Claude Code to set up the Forge.\n${ORG_QUESTION}\n${sentence}\n`);
+    assert.equal(stdout, `Using Claude Code to set up the Forge.\n${BROWSER_PASSED}\n${ORG_QUESTION}\n${sentence}\n`);
     assert.equal(stderr, '');
     assert.equal(exitCode, code);
   }

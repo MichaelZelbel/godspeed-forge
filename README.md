@@ -2,11 +2,13 @@
 
 An add-on for [Godspeed Mission Control](https://github.com/MichaelZelbel/godspeed-mission-control).
 
-Install it on a Godspeed server with:
+Install it on a Godspeed server, as root, with:
 
 ```bash
 curl -fsSL https://github.com/MichaelZelbel/godspeed-forge/raw/main/install.sh | bash
 ```
+
+The line installs the newest Forge release, never the newest code on main; `FORGE_VERSION=v0.2.0` before `bash` picks a specific release. It works with Godspeed in Docker (the server from Godspeed's one-line installer) and with a native install, puts on the server everything the factory needs (git, GitHub's `gh`, Python, Node 22, bun, uv, Claude Code and Codex), gives Godspeed's chat a Forge skill and sets up the page where you watch the factory at work (see [Watching the factory](#watching-the-factory)). Then type `godspeed-forge setup owner/repository` in the same terminal.
 
 The Forge gives anyone who has Godspeed and a GitHub project a whole development process:
 
@@ -24,13 +26,31 @@ license, so his code is not ours to hand out. The Forge installs his factory fro
 at one pinned revision, the way his README asks a coding agent to, and everything the Forge adds
 (planning, the questions, staging, the go and take-back) sits beside it.
 
+The Forge installs Cole Medin's AI software factory with his installer. The Archon code it runs comes from
+[a public copy of his](https://github.com/MichaelZelbel/Archon), under his MIT license with his name: his
+version `1cfb8fc5` plus five changes. Building runs on the medium tier. A comment headed `Manager decision
+(Mission Control, not Michael)` carries the owner's authority for technical matters only, and one headed `Manager
+decision (Mission Control, on Michael's standing instruction` settles product, scope, look and feel and behaviour too. What the loop finds
+beyond its own job goes as one `Found:` comment onto a `found-list` issue instead of a new issue each. The tickets of an approved release (labelled `priority`) are worked first, and the next item is chosen in code, not by an AI reading a prompt. See the
+[difference](https://github.com/MichaelZelbel/Archon/compare/1cfb8fc541580fe5edf15e9a504b572bc9bb45bb...ddc9835236f9aa1b04daa45ac3ea812d63484723).
+
 ## Status
 
-Ask Godspeed to “set up the Forge for `owner/repository`”. Setup uses a signed-in Claude Code or
-Codex account, installs the pinned factory, guides you through creating separate builder and release
+Say "set up the Forge for owner/repository" in Godspeed's chat: the whole setup below happens there, with each link and question as a chat message, a link for each GitHub App (GitHub sends your browser back to the page where you watch the factory, so you paste no address), the project's purpose and users drafted for you to confirm, and a yes before anything is pushed. The one step that stays in the server's terminal is Claude Code's own sign-in (`claude auth login`), because the code it shows must never be typed into a chat; a chat setup also needs the watch page up to date (`godspeed-forge watch`, as root, says so when it is not). Without the chat, type `godspeed-forge setup owner/repository` in the server's terminal, as root; that works as before. Before it downloads anything, setup signs the
+server in to GitHub (with permission to change workflow files) and to Claude Code or Codex when either is
+missing, showing the link and code of each tool's own sign-in, and reuses sign-ins that already work. It installs
+the pinned factory, guides you through creating separate builder and release
 GitHub Apps in the repository owner's personal or organization account, then guides you to install each App only on that repository. Setup asks the two mission
-questions and reports the setup checks. It completes only after both installations are confirmed
-and the checks succeed, and it leaves the schedule off until you explicitly start it. Only one setup
+questions, then finishes the factory's own setup: it sets the factory's AI models for the coding assistant it
+found, has that assistant read the project and propose seven things it must never become (you strike the
+wrong ones by number), writes two to five journeys of what the project does today and the project's checks,
+shows you what it will add and, on your yes, pushes these files to the default branch (or, where the branch takes
+changes only through a pull request, pushes them to a new branch of their own and opens and merges one). The
+assistant may write only the journeys and the checks: every other file of the factory is put back as it was after
+it runs. It reports the setup checks. It completes only after both installations are confirmed
+and the checks succeed, and it leaves automatic work off until you say "plan release" with the project's name,
+then "run one lap" and then "turn on automatic work" in your chat; "pause the factory" stops it starting new work.
+Only one setup
 per repository runs at a time; asking again while one is running says so and changes nothing.
 Asking for setup again after it completed checks that both Apps are still on GitHub and installed on
 the repository, that their saved details are still on this server and that the project's build tools
@@ -45,7 +65,8 @@ Non-root installs use `~/.godspeed/forge/config.json` for defaults and
 0700 and credential files under the private `credentials/` subtree are mode 0600. Project state
 contains only non-secret setup records. The defaults are the projects directory, a plain release-cost estimate,
 and the `git`, `gh`, and `python3` command names. The config and setup output never contain App
-credentials or ids, and the project checkout never contains App credentials.
+credentials, and the project checkout never contains App credentials. Config holds App ids and key-file paths only
+for a project that names its own Apps in `adoptedApps`, never the key itself.
 
 Setup keeps a list of the GitHub Apps it made for a repository, with each App's role, name, slug and id
 and never a key, in that repository's project checkout at `.git/godspeed-forge-apps.json`, which git never
@@ -63,9 +84,17 @@ deletes a saved file it cannot read (empty, damaged, a link to nothing, a folder
 can recover what that file held, it goes on without it: the mission answers from the project's mission,
 an App's keys from its unfinished connection, whether an App is installed from GitHub, and whether setup
 finished by running the whole setup again. Otherwise it stops and asks the owner to have it start that
-file afresh; the assistant then runs `godspeed-forge setup owner/repository --start-afresh <part>`, which
-replaces only that file. A finished setup with a file setup cannot read is never reported as already set
+file afresh; the assistant then runs `godspeed-forge setup owner/repository --start-afresh <part>` (in the
+chat, a setup request with `afresh` set to that part), which replaces only that file. A file the server's
+permissions or a read failure keep setup from reading is never treated as damaged: setup stops, replaces
+nothing, and asks the owner to let it read the file. A finished setup with a file setup cannot read is never reported as already set
 up.
+Setup never reports success while a role has two Apps on GitHub. When the list names one App and this server
+holds the key of another that is also still on GitHub, setup names both in chat and asks which to use: only
+the App whose key this server holds can be used, so the owner confirms it by its short name. Setup deletes
+neither App, and the one not chosen is left for the owner to delete whenever they like. An App already on
+GitHub under the name setup would give a role, which setup did not make, stops setup the same way: it is kept,
+nothing is created, and the owner deletes it before trying again.
 
 After upgrading a server that set up repositories with an earlier release, run setup again for each
 repository. That setup run moves its existing App credentials out of project state and into the private
@@ -74,7 +103,178 @@ credentials subtree.
 The builder App has repository permissions for Contents, Pull requests, Issues, and Actions read/write, plus Checks, Commit statuses, and Metadata read. The release App has repository permissions for Contents and Pull requests read/write, plus Checks, Actions, and Metadata read. Neither App receives organization,
 Administration, Secrets, Members, Workflows, environment-secret, or Deployment permission.
 
+## The factory driver
+
+The factory driver keeps the factory and every approved release moving without you: it notices work that has
+stopped, starts a fixed number of AI helpers to unstick it, and tells you only what truly needs you, once, in plain
+words. A small keeper puts the last good version back when an update goes wrong, and a dead-man watches the driver
+from outside, so each can repair the other. The jobs that used to run on timers of their own (checking who may decide,
+asking you the product questions, watching that the hidden checks can run, keeping main green, planning and staging
+releases) are now steps of the driver.
+
+A release never stands still for an hour. Once its tickets are built, the driver keeps one clock for it, set by the
+release's own state: what the release step says about it, its stage and its staging record. Work it can check (a GitHub
+run on the release, the release step's own programs) pauses the clock while it runs; a helper saying "someone is on it"
+does not, unless it names that work and the driver sees it running. Before 20 minutes pass without a change an AI helper
+starts, before 40 the other AI, and before 60 the repair program, and you get one message saying what was tried. The
+minutes are fixed in the code (each step comes in the driver's last five-minute round before its minute, never late), and `godspeed-forge driver round --dry-run` shows each release's clock and its next step.
+
+Setup installs it when it finishes as root on a Linux server with systemd. You can also install or upgrade it any
+time with `godspeed-forge driver install` (add `--switch` to turn off the older timers it replaces; they are switched
+off, never deleted, and `--watcher` puts the outside watcher into its GitHub repository). `godspeed-forge driver
+round --dry-run` shows what the driver would do and changes nothing, and `godspeed-forge driver status` says how it is.
+
+Its settings are two kinds of file in one folder (root Linux: `/etc/godspeed-forge/`): `driver.json` for the server, and
+one `projects/<owner>--<repository>.json` for each repository. `driver/settings.example.json` shows every setting with
+placeholders. The install checks them and names anything missing before it changes anything. When a server has no
+`driver.json` yet, setup writes one for its new owner: only the steps that work for any owner are on, the driver starts
+no AI runs of its own, and its notices go to the owner's Godspeed. A `driver.json` that is already there is never
+written over.
+
+## Watching the factory
+
+Every server with the Forge gets a page where you watch the factory at work: every project set up with the Forge,
+every run (lap) of each, the steps of a run (picking the next item, building it, checking the app, the review, the
+merge) with what each one did, and which projects are working right now. It is Archon's own web page, the one Cole
+Medin's factory runs on, built from the very Archon the factory runs on your server: the copy and revision your
+projects' factory settings name, when it is one the Forge vouches for (its own pin, or the one Cole Medin's installer
+names); otherwise, and before any project is set up or while projects move to a new one, the copy and revision setup
+installs. A project's settings never make the Forge download anything else.
+
+The install line sets it up, or brings it up to date, and prints its address. Setup ends with the address and the
+sign-in, also when the repository was already set up:
+
+```text
+Watch the factory at https://<your server's name>:48445. Sign in as forge with the password <password>; keep both in your password manager.
+If the page does not open, your hosting company's firewall may be blocking it: let port 48445 in there.
+```
+
+- **The address** is HTTPS on your server's own name, on a port of its own (48445, or the next one no other site
+  uses), through the same web server that gives Godspeed's notebook its address: on a native Godspeed a site file of
+  the Forge's own in Godspeed's add-on folder (`/etc/caddy/godspeed-addons/godspeed-forge.caddy`, checked with
+  `caddy validate` before Caddy takes it and taken out again if Caddy refuses it); on Godspeed's Docker server a Caddy
+  container of the Forge's own (`godspeed-forge-https`) that shares the certificates of Godspeed's. A server with no
+  Godspeed web address gets a Caddy of the Forge's own (`godspeed-forge-https.service`, installed from Caddy's apt
+  source when missing), at the server's tailnet name when it is on a tailnet (turn on HTTPS certificates for the tailnet
+  in Tailscale's admin page; that address opens only from devices on your tailnet, and no firewall line is printed for it),
+  else at its DNS name when that points at the server and port 80 is free. When Godspeed later gets a web address, the
+  Forge's own Caddy goes and the page moves to Godspeed's. The install lets the
+  port in through the server's own firewall when ufw or firewalld is on; a firewall your hosting company runs in front
+  of the server must let it in too.
+- **The sign-in** is the user name `forge` and a password made on your server. Running the install line or setup again
+  keeps both. The password is kept only on the server, readable by root alone (`watch.json` in the Forge's private
+  state folder); the web server holds only its bcrypt hash. `godspeed-forge watch`, typed as root, shows the address and
+  the sign-in again. Asked in the chat ("where can I watch the factory?"), Godspeed gives the address and the user name,
+  never the password.
+- **One path is open without the sign-in:** `/forge-setup/*`, GET only. It exists so GitHub's redirect can reach a setup
+  started from the chat. Each App has its own random address, the listener behind it runs only while that setup waits,
+  and the first code that arrives is the only one taken.
+- **It only shows.** Nothing on the page can start, stop, answer or change a run: after the sign-in only reading
+  requests (GET and HEAD) reach Archon, never its internal or webhook paths, and your sign-in is not passed on to it.
+  Archon's server behind it listens on the server itself only and starts no run of its own. Archon's server also does background work of its own (it resumes a
+  run that waits, for example one stopped by an AI's usage limit, and tidies old work folders), so systemd makes every
+  file on the server read-only to it, the factory's database too, except the database's two side files that SQLite
+  needs for reading, takes every special right from it (even running as root it can neither undo that nor make a new
+  namespace) and lets it reach no address but the server's own: that work fails at its first write and can reach
+  neither GitHub nor an AI. Before each start, a small preparation (`lib/watch-prepare.mjs`) makes what Archon's
+  server would otherwise write first, only when it is missing and with Archon's own code, as the factory's account:
+  the database on a server whose factory has not run yet, Archon's local key and the two side files.
+- **It keeps running.** The service `godspeed-forge-watch` starts with the server and again when it stops, as the
+  account the factory runs as (`server.factory_user` in `driver.json`, root on a server the Forge set up). An hourly
+  check (`godspeed-forge-watch-keep.timer`) puts back a site, container or service that went missing. When the factory
+  moves to another Archon, the next install, setup or hourly check builds the page from it beside the old one, which
+  goes once the new one answers; a new one that does not answer gives way to the old one, which runs again, and only
+  the install line, setup or `godspeed-forge watch` try the new one again. The page's copy of Archon lives in
+  `/opt/godspeed-forge/watch/` (about 2 GB per version).
+- **When it cannot be set up** (no web address from Godspeed, tailnet or DNS name for the server, a Godspeed too old to give add-ons one,
+  a download that failed, or a factory whose Archon keeps its records in a database server through `DATABASE_URL`
+  instead of its database file, since only a file can be kept read-only to the page), the install and setup say why in
+  one sentence and carry on; `godspeed-forge watch` tries again. On Godspeed's Docker server a new web server container
+  that does not start gives way to the one before, with the configuration it had.
+
+## For every owner
+
+Once a repository is set up, you talk to the Forge in your Godspeed chat. Two steps of the driver, `owner-questions`
+and `owner-releases`, run every 15 minutes for each repository set up with the Forge, and your chat hands your words to
+the Forge through files in your Godspeed workspace (`.godspeed/forge/`).
+
+- **Plan:** "plan release my-app" proposes one release in plain words, from what is wrong for the people using it
+  first, then what you found, then features. On your yes the Forge files each item as an issue through the builder App,
+  where Cole Medin's factory picks it up, and keeps the plan and which issue is which item on this server.
+- **Questions:** when the factory needs a decision only you can make, you get it once in your chat, with a short
+  handle (F1, F2, ...), an example, one sentence per choice, what happens if you do not answer, and the words to reply
+  with. Questions of how it is built stay with the factory. Your answer goes back to the factory in your own words.
+- **Staging:** when every item of the release is merged, the Forge freezes it as `candidate/<version>`, pauses the
+  factory while the project's own checks run on it, makes a GitHub pre-release to try, moves the branch `staging` to it
+  and sends you one message: the link and "Shall I make it public? Reply go.", or the checks that failed.
+- **Go:** "go" tags `v<version>` on exactly that candidate, makes it the latest GitHub release with the plan's
+  sentences as its notes, and moves the branch `live` to it. A go for a candidate that changed after it was put up to
+  try is refused.
+- **Take it back:** "take it back" makes the release before it the latest again, moves `live` back, and marks the
+  taken-back release as taken back. Nothing is ever deleted.
+- **Release status:** "release status" answers in one or two sentences: what is being built, what waits for you, what
+  is on staging and what is public.
+
+A hosting service that publishes from a branch can publish a staging copy from `staging` and your public site from
+`live`; `live` then always shows exactly the version you made public. Tags, releases and these two branches are moved
+by the release App. The one exception: GitHub lets an App move a branch over a change to the project's workflow files
+only with the Workflows permission, which neither Forge App has, so that one move is made with this server's own `gh`
+sign-in (setup signs it in with the `workflow` scope).
+
+## Your own steps (the project profile)
+
+None of this needs a setting. A project can name its own steps in a profile, kept in the project's file in the driver's
+settings folder (`/etc/godspeed-forge`, or `~/.config/godspeed-forge`): `projects/<owner>--<repository>.json`, key
+`profile`. Every key is optional; a step that is not named does not run.
+
+```json
+"profile": {
+  "build": { "commands": ["npm ci", "npm run build"], "produces": ["dist"] },
+  "checks": ["npm run lint-links", { "name": "pages", "run": "npm run check-pages" }],
+  "deploy": "./deploy-staging.sh",
+  "staging_url": "https://staging.example.com",
+  "health": "curl -s https://staging.example.com/version",
+  "public": "./publish.sh",
+  "undo": "./unpublish.sh",
+  "timeout_minutes": 25
+}
+```
+
+Each step is a command whose non-zero exit is a failed step; what it printed last is told to you as the cause.
+
+- `build` runs on the candidate, in its temporary copy, before its other checks. What it `produces` (paths inside the
+  project) is kept in the release's private folder on this server, named by `FORGE_BUILD_DIR` for the later steps.
+- `checks` run on the candidate after the project's own tests; a failing one stops the release before staging.
+- `deploy` puts the candidate on your staging copy after the branch `staging`
+  moved; `health` must then succeed and print the candidate's commit; `staging_url` is the link you get. A failing
+  `deploy` command stops staging and its output is in the message.
+- `public` runs when you say go, before anything is made public on GitHub; if it fails nothing is made public, the release
+  stays on staging and you can say go again. `undo` does the same on take-back. Because a GitHub refusal after the
+  command makes the next go or take-back run it again, both must be safe to run twice.
+- Commands run as the account the Forge runs as (the factory's account on a server the Forge set up, else the service's
+  own) and see `FORGE_VERSION`, `FORGE_CANDIDATE_COMMIT` and `FORGE_BUILD_DIR`. `timeout_minutes` defaults to
+  `steps.owner-releases.check_minutes` (25) for build, checks and staging, and to 25 minutes for `public` and `undo`.
+
+`profile` can also be the path of a JSON file with the same keys (absolute, or relative to the project's checkout), for a
+profile kept in the project's own repository. The Forge only reads a file you name there and never looks for one: the
+factory merges changes to the project without anyone watching, so a file in the project can change, and naming it is your
+decision to let whoever can change it run commands on this server. `driver/settings.example.json` shows the keys.
+
+## A project that already runs the factory
+
+Setting up a checkout that already has Cole Medin's factory (its settings file is there, with its program and the project's
+mission, and this Forge never began installing in it) adopts it: setup changes nothing in the project, the factory, its
+schedule or its timers, and does not reinstall it. It tells you what it adopted and, in one sentence, when the build tools
+the factory runs on are not the version this Forge pins; it never changes them. The coding assistant, GitHub sign-in and
+the browser check are the same as for any setup.
+
+To use GitHub Apps you already run in place of new ones, name them in the Forge's `config.json` before setup, one entry per
+repository: `"adoptedApps": { "owner/repository": { "builder": { "slug": "...", "id": 123, "key_file": "/path/key.pem" },
+"release": { "slug": "...", "id": 456, "key_file": "/path/key.pem" } } }`. Setup reads each key file, checks with GitHub that
+the App is installed on exactly that repository, and keeps its details where the Forge's own steps read them; it never
+makes an App you named. A project that names none gets the Forge's two Apps made, as in any setup.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). This covers the Forge's own files only, not Cole Medin's factory or
-Archon, which the Forge downloads from their own repositories.
+Archon, which the Forge downloads from their own repository and from the public copy of Archon linked above.

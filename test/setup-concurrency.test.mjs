@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { ReportedSetupError, setupRepository } from '../lib/setup.mjs';
 import { FACTORY_REVISION } from '../lib/constants.mjs';
 import { credentialPath, defaults } from '../lib/config.mjs';
+import './home.mjs';
 import { testCase } from './cases.mjs';
 // test cases: 4
 
@@ -38,7 +39,7 @@ function standIn(root, { manifests = [], beforeAgent = async () => {}, page = as
           return { stdout: `https://github.com/${relative(options.config.projectsRoot, runOptions.cwd)}.git\n` };
         }
         if (command === 'git' && args[0] === 'rev-parse') return { stdout: `${FACTORY_REVISION}\n` };
-        if (command === 'python3' && args.at(-1) === 'init') {
+        if (command === 'python3' && args[1] === 'init') {
           await mkdir(join(runOptions.cwd, 'factory'), { recursive: true });
           await writeFile(join(runOptions.cwd, 'MISSION.md'), '# Mission\n');
           await mkdir(join(runOptions.cwd, '.factory'), { recursive: true });
@@ -48,6 +49,7 @@ function standIn(root, { manifests = [], beforeAgent = async () => {}, page = as
       }
     },
     github: {
+      appExists: async () => false,
       begin: async manifest => { manifests.push(manifest.name); return { url: `https://example.test/${manifest.name}` }; },
       callback: async flow => { await page(flow); return 'app-code'; },
       exchange: async () => credentials,
