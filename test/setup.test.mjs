@@ -21,7 +21,7 @@ import { ARCHON_REVISION, ARCHON_SOURCE, FACTORY_REPOSITORY, FACTORY_REVISION } 
 import { credentialPath, defaults, projectStatePath, releaseCostMessage, writePrivateJson } from '../lib/config.mjs';
 import { BROWSER_PASSED } from './home.mjs';
 import { testCase } from './cases.mjs';
-// test cases: 206
+// test cases: 207
 
 const root = await mkdtemp(join(tmpdir(), 'forge-setup-'));
 const projectsRoot = join(root, 'projects');
@@ -716,7 +716,7 @@ await assert.rejects(setupRepository('owner/failing-github', {
   prompt: async () => { throw new Error('must not prompt'); },
   output: value => githubFailureMessages.push(value)
 }), error => error instanceof ReportedSetupError && error.message === 'github');
-assert.deepEqual(githubFailureMessages.at(-1), 'Setup stopped because the GitHub connection was not completed. Complete the GitHub page before trying setup again.');
+assert.deepEqual(githubFailureMessages.at(-1), 'Setup stopped because it could not reach GitHub to open the page for creating its Apps, so no GitHub page was shown. Check this server\'s connection to GitHub, then try setup again.');
 assert(!githubFailureCalls.some(call => call.args.includes('schedule')));
 await assert.rejects(stat(join(state, 'projects/owner/failing-github/registration.json')));
 
@@ -1114,6 +1114,27 @@ testCase('an unwritable credential folder stops, and the retry finishes');
   assert.equal(second.error, undefined);
   assert(completedFor('owner/unwritable')(second.messages.at(-1)));
   assert.deepEqual(standIn.counts, { builder: 1, release: 1 });
+}
+
+testCase('a stop at the first App page, and one after a page was shown, each name only what the owner saw');
+{
+  const unreachedState = join(root, 'retry-builder-begin');
+  const unreached = standInGithub({ failBeginOnce: 'builder' });
+  const first = await setupAttempt('owner/builder-begin', unreachedState, unreached.github);
+  assert(first.error instanceof ReportedSetupError && first.error.message === 'github');
+  assert(!first.messages.some(message => message.includes('Complete the GitHub page')));
+  assert(first.messages.at(-1).includes('so no GitHub page was shown') && first.messages.at(-1).endsWith('then try setup again.'));
+  const second = await setupAttempt('owner/builder-begin', unreachedState, unreached.github);
+  assert(completedFor('owner/builder-begin')(second.messages.at(-1)));
+  assert.deepEqual(unreached.counts, { builder: 1, release: 1 });
+
+  const shownState = join(root, 'retry-page-shown');
+  const shown = standInGithub();
+  const failingCallback = { ...shown.github, callback: async () => { throw new Error('private GitHub detail'); } };
+  const third = await setupAttempt('owner/page-shown', shownState, failingCallback);
+  assert(third.error instanceof ReportedSetupError && third.error.message === 'github');
+  assert.equal(third.messages.at(-1), 'Setup stopped because the GitHub connection was not completed. Complete the GitHub page before trying setup again.');
+  assert(!third.messages.some(message => message.includes('private GitHub detail')));
 }
 
 testCase('a lost connection while GitHub hands over the App keys is retried');
@@ -1588,7 +1609,7 @@ testCase('a stop at the release App page finishes on retry');
   const standIn = standInGithub({ failBeginOnce: 'release' });
   const first = await setupAttempt('owner/release-stop', retryState, standIn.github);
   assert(first.error instanceof ReportedSetupError && first.error.message === 'github');
-  assert.equal(first.messages.at(-1), 'Setup stopped because the GitHub connection was not completed. Complete the GitHub page before trying setup again.');
+  assert.equal(first.messages.at(-1), 'Setup stopped because it could not reach GitHub to open the page for creating its Apps, so no GitHub page was shown. Check this server\'s connection to GitHub, then try setup again.');
   assert.deepEqual(await pendingFiles(credentialPath(retryState, 'owner/release-stop')), []);
   const second = await setupAttempt('owner/release-stop', retryState, standIn.github);
   assert(completedFor('owner/release-stop')(second.messages.at(-1)));
